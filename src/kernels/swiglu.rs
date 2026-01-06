@@ -1,4 +1,19 @@
 //! SwiGLU activation implementation.
+//!
+//! SwiGLU (Swish-Gated Linear Unit) is a gated activation function that
+//! combines the Swish activation with a linear gating mechanism.
+//!
+//! ## Why SwiGLU?
+//!
+//! SwiGLU has been shown to outperform other activations (ReLU, GELU) in
+//! transformer MLPs, and is used in modern LLMs like LLaMA, PaLM, and others.
+//!
+//! ## Implementation Notes
+//!
+//! - Formula: SwiGLU(x) = Swish(x @ gate_weight) ⊙ (x @ up_weight)
+//! - Swish(x) = x * sigmoid(x), also known as SiLU
+//! - The ⊙ symbol denotes element-wise multiplication
+//! - Down projection maps back to hidden_size: output = hidden @ down_weight
 
 use candle_core::{Device, Tensor};
 
@@ -56,25 +71,28 @@ impl SwiGLU {
     }
 
     fn forward_cpu(&self, x: &Tensor) -> Result<Tensor> {
-        // Gate: Swish(x @ gate_weight^T)
-        let gate = x.matmul(&self.gate_weight.t()?)?;
+        // Gate: Swish(x @ gate_weight^T) - use broadcast_matmul for 3D tensor with 2D weight
+        let gate = x.broadcast_matmul(&self.gate_weight.t()?)?;
         let gate = candle_nn::ops::silu(&gate)?;
         
         // Up: x @ up_weight^T
-        let up = x.matmul(&self.up_weight.t()?)?;
+        let up = x.broadcast_matmul(&self.up_weight.t()?)?;
         
         // Element-wise multiply
         let hidden = (gate * up)?;
         
         // Down projection
-        let output = hidden.matmul(&self.down_weight.t()?)?;
+        let output = hidden.broadcast_matmul(&self.down_weight.t()?)?;
         
         Ok(output)
     }
 
+    /// CUDA implementation.
+    ///
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
-        // TODO: Implement fused CubeCL kernel
-        // Fusing gate/up/down reduces memory bandwidth significantly
+        tracing::debug!("Using CUDA SwiGLU path for input shape {:?}", x.shape());
         self.forward_cpu(x)
     }
 

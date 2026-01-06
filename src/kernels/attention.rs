@@ -194,10 +194,8 @@ impl FusedAttention {
 
     /// CUDA implementation.
     ///
-    /// Uses Candle's CUDA backend for GPU acceleration.
-    /// The algorithm is the same as the CPU implementation.
-    ///
-    /// Future versions may implement fused GPU kernels using CubeCL.
+    /// Uses CubeCL fused Flash Attention kernel when available, otherwise
+    /// falls back to Candle's CUDA backend.
     fn forward_cuda(
         &self,
         hidden_states: &Tensor,
@@ -208,8 +206,66 @@ impl FusedAttention {
             hidden_states.shape()
         );
 
-        // Use Candle's CUDA backend - same algorithm as CPU
+        // Try CubeCL Flash Attention if enabled and available
+        if self.config.use_flash && crate::kernels::attention_cubecl::has_cubecl_support() {
+            return self.forward_flash_attention(hidden_states, attention_mask);
+        }
+
+        // Fallback to Candle's CUDA backend
         self.forward_cpu(hidden_states, attention_mask)
+    }
+
+    /// Flash Attention implementation using CubeCL.
+    fn forward_flash_attention(
+        &self,
+        hidden_states: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (batch, seq_len, _hidden) = hidden_states.dims3()?;
+        let num_heads = self.config.num_heads;
+        let head_dim = self.config.head_dim;
+        let num_kv_heads = self.config.num_kv_heads.unwrap_or(num_heads);
+
+        // QKV projection
+        let qkv = hidden_states.broadcast_matmul(&self.qkv_weight.t()?)?;
+        
+        // Split into Q, K, V
+        let q_size = num_heads * head_dim;
+        let kv_size = num_kv_heads * head_dim;
+        
+        let q = qkv.narrow(2, 0, q_size)?;
+        let k = qkv.narrow(2, q_size, kv_size)?;
+        let v = qkv.narrow(2, q_size + kv_size, kv_size)?;
+
+        // Reshape for attention: [batch, num_heads, seq_len, head_dim]
+        let q = q.reshape((batch, seq_len, num_heads, head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let k = k.reshape((batch, seq_len, num_kv_heads, head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let v = v.reshape((batch, seq_len, num_kv_heads, head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        // Scale factor
+        let scale = (head_dim as f64).sqrt();
+
+        // Call Flash Attention CubeCL kernel
+        let attn_output = crate::kernels::attention_cubecl::flash_attention_cubecl(
+            &q, &k, &v, scale, attention_mask
+        )?;
+
+        // Reshape back: [batch, seq_len, hidden]
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((batch, seq_len, num_heads * head_dim))?;
+
+        // Output projection
+        let output = attn_output.broadcast_matmul(&self.o_weight.t()?)?;
+
+        Ok(output)
     }
 
     /// Estimate VRAM usage in bytes.

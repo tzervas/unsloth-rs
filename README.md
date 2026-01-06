@@ -2,7 +2,7 @@
 
 Rust implementations of transformer building blocks for LLM inference and fine-tuning.
 
-[![License](https://img.shields.io/crates/l/unsloth-rs.svg)](LICENSE-MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
 
@@ -115,4 +115,4 @@ Contributions are welcome, particularly:
 
 ## License
 
-Licensed under MIT or Apache-2.0 at your option.
+Licensed under the MIT License. See [LICENSE](LICENSE) for details.

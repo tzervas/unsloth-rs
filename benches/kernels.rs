@@ -25,7 +25,7 @@ fn benchmark_attention(c: &mut Criterion) {
     let mut group = c.benchmark_group("attention");
     let device = Device::Cpu;
 
-    for &batch_size in &[1, 4] {
+    for &batch_size in BATCH_SIZES {
         for &seq_len in SEQ_LENS {
             let config = FusedAttentionConfig {
                 hidden_size: 768,
@@ -34,7 +34,7 @@ fn benchmark_attention(c: &mut Criterion) {
                 ..Default::default()
             };
 
-            let attention = match FusedAttention::new(config.clone(), &device) {
+            let attention = match FusedAttention::new(config, &device) {
                 Ok(a) => a,
                 Err(_) => continue,
             };
@@ -68,7 +68,7 @@ fn benchmark_rope(c: &mut Criterion) {
     let mut group = c.benchmark_group("rope");
     let device = Device::Cpu;
 
-    for &batch_size in &[1, 4] {
+    for &batch_size in BATCH_SIZES {
         for &seq_len in SEQ_LENS {
             let head_dim = 64;
             let num_heads = 12;
@@ -122,7 +122,7 @@ fn benchmark_rmsnorm(c: &mut Criterion) {
     let mut group = c.benchmark_group("rmsnorm");
     let device = Device::Cpu;
 
-    for &batch_size in &[1, 4] {
+    for &batch_size in BATCH_SIZES {
         for &seq_len in SEQ_LENS {
             for &hidden_size in HIDDEN_SIZES {
                 let norm = match RmsNorm::new(hidden_size, 1e-5, &device) {
@@ -152,7 +152,7 @@ fn benchmark_swiglu(c: &mut Criterion) {
     let mut group = c.benchmark_group("swiglu");
     let device = Device::Cpu;
 
-    for &batch_size in &[1, 4] {
+    for &batch_size in BATCH_SIZES {
         for &seq_len in SEQ_LENS {
             for &hidden_size in HIDDEN_SIZES {
                 // Typical intermediate size is ~2.7x hidden_size for LLaMA-style models

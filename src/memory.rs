@@ -1,9 +1,22 @@
 //! Memory management utilities for tracking allocations.
 //!
-//! This module provides:
-//! - Memory pool for tracking allocations
-//! - Gradient checkpointing configuration
-//! - VRAM estimation utilities for kernel operations
+//! This module provides tools for memory tracking and estimation, which are
+//! essential for managing GPU memory when training large language models.
+//!
+//! ## Why Memory Management?
+//!
+//! Large language models can easily exhaust GPU memory. These utilities help:
+//! - Estimate memory requirements before running operations
+//! - Track actual allocations during execution
+//! - Configure gradient checkpointing to trade compute for memory
+//!
+//! ## Provided Utilities
+//!
+//! - `MemoryPool`: Tracks allocations with optional limit enforcement
+//! - `CheckpointConfig`: Configuration for gradient checkpointing
+//! - `estimate_forward_memory`: Estimates memory for forward passes
+//! - `estimate_attention_vram`: Estimates memory for attention operations
+//! - `format_bytes`: Human-readable byte formatting
 
 use crate::error::{Result, UnslothError};
 

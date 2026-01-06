@@ -1,9 +1,21 @@
 //! Multi-head attention implementation.
 //!
-//! Provides multi-head attention with support for:
-//! - Grouped-query attention (GQA)
-//! - Optional attention masking
-//! - KV cache for inference (placeholder)
+//! This module provides a multi-head attention layer commonly used in transformer
+//! architectures. The implementation supports grouped-query attention (GQA) which
+//! reduces memory usage by sharing key-value heads across multiple query heads.
+//!
+//! ## Why Multi-Head Attention?
+//!
+//! Multi-head attention allows the model to jointly attend to information from
+//! different representation subspaces at different positions. This is more
+//! effective than single-head attention with the same total dimension.
+//!
+//! ## Implementation Notes
+//!
+//! - Uses Candle's tensor operations for both CPU and GPU execution
+//! - GPU dispatch uses Candle's CUDA backend (not custom fused kernels yet)
+//! - Supports optional attention masking for causal/padded sequences
+//! - KV cache parameter is a placeholder for future inference optimization
 
 use candle_core::{Device, Tensor};
 

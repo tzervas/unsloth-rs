@@ -56,18 +56,18 @@ impl SwiGLU {
     }
 
     fn forward_cpu(&self, x: &Tensor) -> Result<Tensor> {
-        // Gate: Swish(x @ gate_weight^T)
-        let gate = x.matmul(&self.gate_weight.t()?)?;
+        // Gate: Swish(x @ gate_weight^T) - use broadcast_matmul for 3D tensor with 2D weight
+        let gate = x.broadcast_matmul(&self.gate_weight.t()?)?;
         let gate = candle_nn::ops::silu(&gate)?;
         
         // Up: x @ up_weight^T
-        let up = x.matmul(&self.up_weight.t()?)?;
+        let up = x.broadcast_matmul(&self.up_weight.t()?)?;
         
         // Element-wise multiply
         let hidden = (gate * up)?;
         
         // Down projection
-        let output = hidden.matmul(&self.down_weight.t()?)?;
+        let output = hidden.broadcast_matmul(&self.down_weight.t()?)?;
         
         Ok(output)
     }

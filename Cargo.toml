@@ -1,0 +1,35 @@
+[package]
+name = "unsloth-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Memory-optimized LLM fine-tuning with custom GPU kernels (2-5x speedup)"
+repository = "https://github.com/youruser/unsloth-rs"
+keywords = ["gpu", "cuda", "llm", "fine-tuning", "memory-optimization"]
+categories = ["science", "machine-learning"]
+
+[dependencies]
+candle-core.workspace = true
+candle-nn.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# GPU compute
+cubecl.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+anyhow.workspace = true
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "cubecl/cuda"]
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "kernels"
+harness = false

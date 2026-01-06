@@ -94,18 +94,12 @@ impl RotaryEmbedding {
         Ok((q_rotated, k_rotated))
     }
 
-    /// CUDA optimized implementation.
+    /// CUDA implementation.
     ///
-    /// Uses Candle's native CUDA operations for GPU parallelism.
-    /// Future versions will implement fused CubeCL kernels for:
-    /// - Fused cos/sin lookup + rotation in single pass
-    /// - Coalesced memory access patterns
-    /// - Shared memory for cos/sin cache
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     fn forward_cuda(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
         tracing::debug!("Using CUDA RoPE path for Q shape {:?}", q.shape());
-        
-        // Use Candle's CUDA operations - same algorithm, GPU accelerated
-        // Future: Implement fused CubeCL kernel for cos/sin lookup + rotation
         self.forward_cpu(q, k)
     }
 

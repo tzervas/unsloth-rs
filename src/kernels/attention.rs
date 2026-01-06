@@ -1,7 +1,9 @@
-//! Fused attention implementation.
+//! Multi-head attention implementation.
 //!
-//! Combines QKV projection, attention computation, and output projection
-//! into a single memory-efficient operation.
+//! Provides multi-head attention with support for:
+//! - Grouped-query attention (GQA)
+//! - Optional attention masking
+//! - KV cache for inference (placeholder)
 
 use candle_core::{Device, Tensor};
 
@@ -37,13 +39,13 @@ impl Default for FusedAttentionConfig {
     }
 }
 
-/// Fused multi-head attention layer.
+/// Multi-head attention layer.
 ///
-/// This implementation fuses multiple operations to reduce memory bandwidth:
+/// This implementation provides:
 /// 1. QKV projection
-/// 2. Rotary position embeddings (optional)
-/// 3. Scaled dot-product attention
-/// 4. Output projection
+/// 2. Scaled dot-product attention
+/// 3. Output projection
+/// 4. Support for grouped-query attention (GQA)
 pub struct FusedAttention {
     /// QKV projection weights [3 * hidden, hidden]
     qkv_weight: Tensor,
@@ -178,37 +180,23 @@ impl FusedAttention {
         Ok(output)
     }
 
-    /// CUDA optimized implementation.
+    /// CUDA implementation.
     ///
-    /// This method dispatches to GPU-optimized operations when CUDA is available.
-    /// Currently uses Candle's native CUDA operations with the same algorithm as CPU,
-    /// which benefits from GPU parallelism. Future versions will implement fused
-    /// Flash Attention kernels using CubeCL for additional memory optimization.
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     ///
-    /// # Performance Notes
-    /// - Current implementation achieves GPU parallelism via Candle's CUDA backend
-    /// - Memory usage follows standard attention pattern (O(n²) for attention scores)
-    /// - Target: Implement tiled Flash Attention for O(n) memory complexity
+    /// Future versions may implement fused GPU kernels using CubeCL.
     fn forward_cuda(
         &self,
         hidden_states: &Tensor,
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        // Log that we're using CUDA path
         tracing::debug!(
             "Using CUDA attention path for input shape {:?}",
             hidden_states.shape()
         );
 
-        // For now, use Candle's native CUDA operations which automatically
-        // parallelize on GPU. The algorithm is the same as CPU but runs on GPU.
-        // This provides immediate GPU acceleration while we develop fused kernels.
-        //
-        // Future optimization: Implement CubeCL fused kernel that:
-        // 1. Tiles Q, K, V to fit in shared memory
-        // 2. Computes attention scores in blocks
-        // 3. Streams softmax computation
-        // 4. Reduces memory bandwidth by 2-4x
+        // Use Candle's CUDA backend - same algorithm as CPU
         self.forward_cpu(hidden_states, attention_mask)
     }
 

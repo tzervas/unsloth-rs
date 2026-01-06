@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
-description = "Memory-optimized LLM fine-tuning with custom GPU kernels (2-5x speedup)"
+description = "Rust implementations of transformer building blocks for LLM inference"
 repository = "https://github.com/tzervas/unsloth-rs"
-keywords = ["gpu", "cuda", "llm", "fine-tuning", "memory-optimization"]
-categories = ["science", "machine-learning"]
+keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
+categories = ["science", "mathematics"]
 
 [dependencies]
 candle-core = "0.9"

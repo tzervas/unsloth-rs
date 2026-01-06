@@ -72,18 +72,12 @@ impl SwiGLU {
         Ok(output)
     }
 
-    /// CUDA optimized implementation.
+    /// CUDA implementation.
     ///
-    /// Uses Candle's native CUDA operations for GPU parallelism.
-    /// Future versions will implement fused CubeCL kernels for:
-    /// - Fused gate/up/down projections in single kernel
-    /// - Reduced memory bandwidth (5 ops → 1 kernel)
-    /// - Shared memory optimization for intermediate activations
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
         tracing::debug!("Using CUDA SwiGLU path for input shape {:?}", x.shape());
-        
-        // Use Candle's CUDA operations - same algorithm, GPU accelerated
-        // Future: Implement fused CubeCL kernel to reduce memory roundtrips
         self.forward_cpu(x)
     }
 

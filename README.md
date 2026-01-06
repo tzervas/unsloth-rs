@@ -1,26 +1,35 @@
 # unsloth-rs
 
-Memory-optimized LLM fine-tuning with custom GPU kernels.
+Rust implementations of transformer building blocks for LLM inference and fine-tuning.
 
-[![Crates.io](https://img.shields.io/crates/v/unsloth-rs.svg)](https://crates.io/crates/unsloth-rs)
-[![Documentation](https://docs.rs/unsloth-rs/badge.svg)](https://docs.rs/unsloth-rs)
 [![License](https://img.shields.io/crates/l/unsloth-rs.svg)](LICENSE-MIT)
 
 ## Overview
 
-`unsloth-rs` provides highly optimized GPU kernels and memory management for LLM fine-tuning:
+`unsloth-rs` provides Rust implementations of common transformer operations built on the [Candle](https://github.com/huggingface/candle) ML framework:
 
-- **2-5x faster training** through fused operations
-- **70-80% less VRAM** via gradient checkpointing and memory optimization
-- **Cross-platform GPU support** via CubeCL (CUDA, Metal, Vulkan)
+- Multi-head attention with grouped-query attention (GQA) support
+- Rotary position embeddings (RoPE)
+- RMS normalization
+- SwiGLU activation
 
-## Features
+## Status
 
-- 🚀 **Fused Attention** - Combined QKV + attention + output projection
-- 🧠 **Gradient Checkpointing** - Trade compute for memory
-- ⚡ **Optimized Kernels** - RoPE, RMSNorm, SwiGLU
-- 📉 **Memory Tracking** - Built-in VRAM estimation and monitoring
-- 🔄 **Mixed Precision** - Automatic bf16/f16 handling
+**⚠️ Early Development** - This project is in early development. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
+
+### Implemented
+- ✅ Multi-head attention (CPU reference, Candle CUDA backend)
+- ✅ Rotary position embeddings (RoPE)
+- ✅ RMS normalization
+- ✅ SwiGLU activation
+- ✅ Memory estimation utilities
+- ✅ Benchmarking suite
+
+### Planned
+- 🚧 Fused CubeCL GPU kernels
+- 🚧 Gradient checkpointing
+- 🚧 Mixed precision support
+- 🚧 Flash Attention algorithm
 
 ## Installation
 
@@ -29,58 +38,52 @@ Memory-optimized LLM fine-tuning with custom GPU kernels.
 unsloth-rs = "0.1"
 ```
 
-For CUDA support:
+For CUDA support (uses Candle's CUDA backend):
 
 ```toml
 [dependencies]
 unsloth-rs = { version = "0.1", features = ["cuda"] }
 ```
 
-## Quick Start
+## Usage
 
-### Fused Attention
+### Attention
 
 ```rust
 use unsloth_rs::kernels::{FusedAttention, FusedAttentionConfig};
-use candle_core::{Device, Tensor, DType};
+use candle_core::{Device, Tensor};
 
 fn main() -> anyhow::Result<()> {
-    let device = Device::cuda_if_available(0)?;
+    let device = Device::Cpu;
     
     let config = FusedAttentionConfig {
-        hidden_size: 4096,
-        num_heads: 32,
-        head_dim: 128,
-        num_kv_heads: Some(8),  // GQA
+        hidden_size: 768,
+        num_heads: 12,
+        head_dim: 64,
+        num_kv_heads: Some(4),  // GQA support
         ..Default::default()
     };
     
     let attention = FusedAttention::new(config, &device)?;
     
-    let hidden_states = Tensor::randn(0.0, 1.0, (1, 2048, 4096), &device)?;
+    let hidden_states = Tensor::randn(0.0f32, 1.0, (1, 128, 768), &device)?;
     let output = attention.forward(&hidden_states, None, None)?;
-    
-    // Estimate VRAM usage
-    let vram = attention.vram_estimate(1, 2048);
-    println!("Estimated VRAM: {} MB", vram / 1024 / 1024);
     
     Ok(())
 }
 ```
 
-### Memory-Efficient Training
+### Memory Estimation
 
 ```rust
-use unsloth_rs::memory::{MemoryPool, CheckpointConfig, estimate_forward_memory};
+use unsloth_rs::memory::{estimate_forward_memory, CheckpointConfig};
 
 fn main() {
-    // Configure gradient checkpointing
     let checkpoint = CheckpointConfig {
         enabled: true,
-        checkpoint_every: 2,  // Checkpoint every 2 layers
+        checkpoint_every: 2,
     };
     
-    // Estimate memory requirements
     let mem_bytes = estimate_forward_memory(
         4,     // batch_size
         2048,  // seq_len
@@ -89,45 +92,26 @@ fn main() {
         &checkpoint,
     );
     
-    println!("Estimated forward pass memory: {} GB", mem_bytes as f64 / 1e9);
+    println!("Estimated memory: {} GB", mem_bytes as f64 / 1e9);
 }
 ```
 
-## Performance Comparison
+## Benchmarks
 
-Benchmarks on A100 80GB with LLaMA-7B:
+Run benchmarks with:
 
-| Operation | PyTorch | unsloth-rs | Speedup |
-|-----------|---------|------------|---------|
-| Attention | 12.3ms | 4.1ms | 3.0x |
-| MLP (SwiGLU) | 8.7ms | 3.2ms | 2.7x |
-| Full Forward | 45ms | 18ms | 2.5x |
+```bash
+cargo bench
+```
 
-Memory with 4K context:
-
-| Config | PyTorch | unsloth-rs | Reduction |
-|--------|---------|------------|-----------|
-| No checkpoint | 24GB | 18GB | 25% |
-| With checkpoint | 24GB | 6GB | 75% |
-
-## Kernel Implementations
-
-### Currently Implemented
-- ✅ Fused Attention (CPU reference)
-- ✅ Rotary Position Embedding
-- ✅ RMS Normalization
-- ✅ SwiGLU Activation
-
-### Planned
-- 🚧 Flash Attention (CubeCL)
-- 🚧 Fused Cross Entropy
-- 🚧 Gradient Checkpointing
+Benchmarks test CPU performance across various configurations. GPU benchmarks require the `cuda` feature.
 
 ## Contributing
 
-GPU kernel contributions are especially welcome! See:
-- [CUDA Kernel Dev Skill](../.github/skills/cuda-kernel-dev/SKILL.md)
-- [Workspace AGENTS.md](../AGENTS.md)
+Contributions are welcome, particularly:
+- GPU kernel implementations using CubeCL
+- Performance optimizations
+- Additional transformer operations
 
 ## License
 

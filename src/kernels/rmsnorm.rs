@@ -56,18 +56,12 @@ impl RmsNorm {
         Ok(output)
     }
 
-    /// CUDA optimized implementation.
+    /// CUDA implementation.
     ///
-    /// Uses Candle's native CUDA operations for GPU parallelism.
-    /// Future versions will implement fused CubeCL kernels for:
-    /// - Fused x² → mean → √(mean + ε) → normalize → scale
-    /// - Warp-level reductions for mean computation
-    /// - Reduced memory bandwidth
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
         tracing::debug!("Using CUDA RMSNorm path for input shape {:?}", x.shape());
-        
-        // Use Candle's CUDA operations - same algorithm, GPU accelerated
-        // Future: Implement fused CubeCL kernel with warp-level reductions
         self.forward_cpu(x)
     }
 }

@@ -108,12 +108,22 @@ cargo bench
 
 Benchmarks test CPU performance across various configurations. GPU benchmarks require the `cuda` feature.
 
+## Development Roadmap
+
+For detailed development plans and task breakdowns, see:
+
+- **[ROADMAP.md](ROADMAP.md)** - Strategic development plan with phases and timelines
+- **[TASKS.md](TASKS.md)** - Actionable task list with priorities and estimates
+- **[SUMMARY.md](SUMMARY.md)** - Project review summary and execution guide
+
 ## Contributing
 
 Contributions are welcome, particularly:
 - GPU kernel implementations using CubeCL
 - Performance optimizations
 - Additional transformer operations
+
+See [TASKS.md](TASKS.md) for specific tasks that need implementation.
 
 ## License
 

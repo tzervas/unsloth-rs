@@ -1,16 +1,9 @@
-//! Memory management utilities for efficient GPU/CPU memory allocation.
+//! Memory management utilities for tracking allocations.
 //!
 //! This module provides:
 //! - Memory pool for tracking allocations
 //! - Gradient checkpointing configuration
 //! - VRAM estimation utilities for kernel operations
-//!
-//! # Memory Optimization Strategies
-//!
-//! 1. **Gradient Checkpointing** - Recompute activations during backward pass
-//!    instead of storing them, reducing memory by 70-80%
-//! 2. **Memory Pooling** - Pre-allocate and reuse memory buffers
-//! 3. **Fused Operations** - Combine multiple ops to reduce intermediate storage
 
 use crate::error::{Result, UnslothError};
 

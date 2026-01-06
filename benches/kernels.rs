@@ -1,14 +1,12 @@
-//! Comprehensive kernel benchmarking suite for performance and VRAM profiling.
+//! Kernel benchmarking suite for CPU performance profiling.
 //!
-//! This benchmark suite validates performance targets for all GPU kernels:
-//! - Flash Attention (Q·K^T·V single-pass)
+//! This benchmark suite measures performance for all kernel implementations:
+//! - Attention (multi-head with GQA support)
 //! - RoPE (Rotary Position Embeddings)
-//! - RMSNorm (with optional bias)
-//! - SwiGLU (fused activation)
+//! - RMSNorm
+//! - SwiGLU activation
 //!
-//! Performance targets:
-//! - Minimum 2x speedup vs naive implementation
-//! - 70-80% VRAM reduction with gradient checkpointing
+//! Note: These are CPU benchmarks. GPU benchmarks require the `cuda` feature.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use unsloth_rs::kernels::{
@@ -22,9 +20,9 @@ const BATCH_SIZES: &[usize] = &[1, 4];
 const SEQ_LENS: &[usize] = &[512, 1024, 2048];
 const HIDDEN_SIZES: &[usize] = &[768, 1024];
 
-/// Benchmark Flash Attention forward pass
-fn benchmark_flash_attention(c: &mut Criterion) {
-    let mut group = c.benchmark_group("flash_attention");
+/// Benchmark attention forward pass
+fn benchmark_attention(c: &mut Criterion) {
+    let mut group = c.benchmark_group("attention");
     let device = Device::Cpu;
 
     for &batch_size in &[1, 4] {
@@ -51,10 +49,10 @@ fn benchmark_flash_attention(c: &mut Criterion) {
                 b.iter(|| attn.forward(inp, None, None).unwrap());
             });
 
-            // Report VRAM estimate
+            // Report memory estimate
             let vram = attention.vram_estimate(batch_size, seq_len);
             println!(
-                "Flash Attention VRAM estimate (batch={}, seq={}): {} MB",
+                "Attention memory estimate (batch={}, seq={}): {} MB",
                 batch_size,
                 seq_len,
                 vram / 1024 / 1024
@@ -198,7 +196,7 @@ fn benchmark_swiglu(c: &mut Criterion) {
 
 /// Combined benchmark for all kernels
 fn benchmark_all_kernels(c: &mut Criterion) {
-    benchmark_flash_attention(c);
+    benchmark_attention(c);
     benchmark_rope(c);
     benchmark_rmsnorm(c);
     benchmark_swiglu(c);

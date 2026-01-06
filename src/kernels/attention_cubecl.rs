@@ -35,8 +35,12 @@
 //! - >50% GPU occupancy
 //! - Numerical accuracy within 1e-5 of CPU reference
 
-use candle_core::Tensor;
+use candle_core::{Device, Tensor};
 use crate::error::Result;
+
+// Note: CubeCL integration is planned but not yet implemented.
+// The following imports would be used once the kernel is implemented:
+// use cubecl::prelude::*;
 
 /// Check if CubeCL GPU support is available.
 ///
@@ -46,13 +50,31 @@ use crate::error::Result;
 pub fn has_cubecl_support() -> bool {
     // TODO: Implement actual CubeCL device detection
     // For now, check if CUDA feature is enabled
-    cfg!(feature = "cuda")
+    // CubeCL kernel implementation is still in progress (Phase 2)
+    // So we return false to use the fallback implementation
+    false
 }
 
 /// Flash Attention computation using CubeCL GPU kernel.
 ///
 /// This function implements the Flash Attention algorithm using tiled computation
 /// and online softmax for memory efficiency.
+///
+/// # Implementation Status
+///
+/// **Phase 2 (Basic CubeCL Kernel) - In Progress**
+///
+/// The kernel implementation follows an incremental approach:
+/// 1. ✅ Module structure and fallback implementation (Phase 1)
+/// 2. 🚧 Basic CubeCL kernel without tiling (Phase 2 - Current)
+/// 3. ⏳ Tiled algorithm with online softmax (Phase 3)
+/// 4. ⏳ Memory optimization and fusion (Phase 3)
+/// 5. ⏳ Performance tuning and mixed precision (Phase 3)
+///
+/// # Current Implementation
+///
+/// Currently uses a fallback implementation with Candle operations.
+/// This provides correct results while the optimized CubeCL kernel is being developed.
 ///
 /// # Arguments
 /// * `q` - Query tensor [batch, num_heads, seq_len, head_dim]
@@ -74,7 +96,7 @@ pub fn flash_attention_cubecl(
     k: &Tensor,
     v: &Tensor,
     scale: f64,
-    _mask: Option<&Tensor>,
+    mask: Option<&Tensor>,
 ) -> Result<Tensor> {
     // Validate inputs
     let q_shape = q.dims();
@@ -95,36 +117,192 @@ pub fn flash_attention_cubecl(
         batch, num_heads, num_kv_heads, seq_len, head_dim
     );
     
-    // TODO: Implement actual CubeCL kernel
-    // For now, this is a placeholder that will be implemented in phases
+    // Check if we should use CubeCL kernel
+    // Currently returns false as kernel is under development
+    if has_cubecl_support() && can_use_cubecl_kernel(q.device()) {
+        // TODO: Launch CubeCL kernel once implemented
+        // return launch_flash_attention_kernel(q, k, v, scale, mask);
+        tracing::debug!("CubeCL kernel not yet available, using fallback");
+    }
     
-    // Phase 1: Basic implementation using Candle operations (fallback)
-    // This will be replaced with optimized CubeCL kernel
-    flash_attention_fallback(q, k, v, scale, _mask)
+    // Use fallback implementation
+    flash_attention_fallback(q, k, v, scale, mask)
 }
+
+/// Check if the device supports CubeCL kernel execution.
+///
+/// CubeCL supports multiple GPU backends: CUDA, ROCm, and Vulkan.
+/// Currently we only check for CUDA as it's the primary target,
+/// but this can be expanded to other backends as they are tested.
+fn can_use_cubecl_kernel(device: &Device) -> bool {
+    // TODO: Expand to support ROCm and Vulkan once tested
+    // For now, only CUDA is supported
+    matches!(device, Device::Cuda(_))
+}
+
+/// Basic CubeCL attention kernel (Phase 2 - Simple implementation).
+///
+/// This is a simple non-tiled implementation that will be optimized in Phase 3.
+/// It computes: softmax(Q·K^T / scale) · V
+///
+/// # Implementation Plan
+///
+/// ## Phase 2: Basic Kernel (Current)
+/// 
+/// The basic kernel will:
+/// 1. Compute attention scores: S = Q·K^T / scale
+/// 2. Apply softmax: P = softmax(S)
+/// 3. Compute output: O = P·V
+///
+/// This provides a correct baseline before adding optimizations.
+///
+/// ## Phase 3: Optimization
+///
+/// Optimizations to add:
+/// - **Tiling**: Process in blocks to fit in shared memory
+/// - **Online Softmax**: Compute softmax incrementally without full materialization
+/// - **Memory Coalescing**: Optimize access patterns for GPU memory
+/// - **Kernel Fusion**: Combine operations in single pass
+/// - **Mixed Precision**: Use f16/bf16 for computation, f32 for accumulation
+///
+/// # CubeCL Kernel Structure
+///
+/// ```rust,ignore
+/// #[cube(launch)]
+/// fn flash_attention_kernel<F: Float>(
+///     q: &Tensor<F>,              // [batch, heads, seq, dim]
+///     k: &Tensor<F>,              // [batch, kv_heads, seq, dim]
+///     v: &Tensor<F>,              // [batch, kv_heads, seq, dim]
+///     output: &mut Tensor<F>,     // [batch, heads, seq, dim]
+///     scale: F,                   // 1/sqrt(head_dim)
+///     seq_len: u32,
+///     head_dim: u32,
+/// ) {
+///     // Thread/block indexing
+///     let batch_idx = CUBE_POS_X;
+///     let head_idx = CUBE_POS_Y;
+///     let seq_idx = THREAD_POS;
+///     
+///     // Compute attention for this position
+///     // ... kernel implementation
+/// }
+/// ```
+///
+/// # Launch Configuration
+///
+/// Grid dimensions: (batch, num_heads, 1)
+/// Block dimensions: (min(seq_len, 256), 1, 1)
+///
+/// This allows parallel processing across batch and heads,
+/// with threads within a block handling sequence positions.
+///
+/// # Memory Requirements
+///
+/// - Shared memory per block: ~(2 * tile_size * head_dim + tile_size²) * sizeof(float)
+/// - For tile_size=128, head_dim=64: ~80 KB shared memory
+/// - Well within typical GPU limits (48-96 KB per SM)
+///
+/// Current status: Skeleton defined, implementation pending
+#[allow(dead_code)]
+fn flash_attention_kernel_basic(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _scale: f64,
+) -> Result<Tensor> {
+    // TODO: Implement CubeCL kernel launch
+    // 
+    // Implementation steps:
+    // 1. Initialize CubeCL runtime and get device
+    // 2. Convert Candle tensors to CubeCL tensors
+    // 3. Allocate output tensor on device
+    // 4. Configure launch parameters (grid, block dimensions)
+    // 5. Launch kernel
+    // 6. Convert result back to Candle tensor
+    // 7. Return output
+    
+    unimplemented!("CubeCL kernel implementation in progress - see CUBECL_IMPLEMENTATION_GUIDE.md")
+}
+
+// ============================================================================
+// CubeCL Kernel Definition (To Be Implemented)
+// ============================================================================
+//
+// The actual CubeCL kernel will be defined here using the #[cube(launch)] macro.
+// This is commented out until the implementation is ready.
+//
+// Example structure:
+//
+// #[cube(launch)]
+// fn attention_forward_kernel<F: Float>(
+//     q: &Tensor<F>,
+//     k: &Tensor<F>,
+//     v: &Tensor<F>,
+//     output: &mut Tensor<F>,
+//     scale: F,
+//     config: AttentionConfig,
+// ) {
+//     let idx = ABSOLUTE_POS;
+//     
+//     // Step 1: Compute Q·K^T
+//     // Step 2: Apply scaling
+//     // Step 3: Compute softmax with numerical stability
+//     // Step 4: Compute attention·V
+//     // Step 5: Write output
+// }
+//
+// Helper functions for the kernel:
+//
+// #[cube]
+// fn compute_attention_scores<F: Float>(
+//     q: &Tensor<F>,
+//     k: &Tensor<F>,
+//     scale: F,
+// ) -> Tensor<F> {
+//     // Compute Q·K^T / scale
+// }
+//
+// #[cube]
+// fn softmax_stable<F: Float>(scores: &Tensor<F>) -> Tensor<F> {
+//     // Numerically stable softmax using log-sum-exp trick
+//     let max_val = row_max(scores);
+//     let exp_scores = exp(scores - max_val);
+//     let sum_exp = row_sum(exp_scores);
+//     exp_scores / sum_exp
+// }
 
 /// Fallback implementation using Candle operations.
 ///
 /// This serves as a reference and fallback when CubeCL kernel is not available.
 /// It uses the same algorithm as the CPU version but runs on GPU via Candle.
+///
+/// # Algorithm
+///
+/// 1. Compute attention scores: S = Q·K^T / scale
+/// 2. Apply attention mask (if provided)
+/// 3. Apply softmax: P = softmax(S)
+/// 4. Compute output: O = P·V
+///
+/// This implementation is memory-intensive (O(seq²)) but provides correct results
+/// for validation while the optimized Flash Attention kernel is developed.
 fn flash_attention_fallback(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
     scale: f64,
-    _mask: Option<&Tensor>,
+    mask: Option<&Tensor>,
 ) -> Result<Tensor> {
     // Compute Q·K^T
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
     let scores = (scores / scale)?;
     
     // Apply mask if provided
-    let scores = match _mask {
-        Some(mask) => scores.broadcast_add(mask)?,
+    let scores = match mask {
+        Some(m) => scores.broadcast_add(m)?,
         None => scores,
     };
     
-    // Softmax
+    // Softmax along last dimension (over key positions)
     let attn_weights = candle_nn::ops::softmax(&scores, 3)?;
     
     // Attention output: attn_weights · V

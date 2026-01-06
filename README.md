@@ -23,13 +23,17 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 - ✅ RMS normalization
 - ✅ SwiGLU activation
 - ✅ Memory estimation utilities
+- ✅ Gradient checkpointing
+- ✅ Mixed precision training support
 - ✅ Benchmarking suite
 
+### In Progress
+- 🚧 Flash Attention CubeCL GPU kernel (Phase 2 - see [FLASH_ATTENTION_IMPLEMENTATION_STATUS.md](FLASH_ATTENTION_IMPLEMENTATION_STATUS.md))
+
 ### Planned
-- 🚧 Fused CubeCL GPU kernels
-- 🚧 Gradient checkpointing
-- 🚧 Mixed precision support
-- 🚧 Flash Attention algorithm
+- ⏳ Flash Attention optimization (tiling, online softmax)
+- ⏳ Additional fused CubeCL GPU kernels
+- ⏳ Performance profiling and tuning
 
 ## Installation
 

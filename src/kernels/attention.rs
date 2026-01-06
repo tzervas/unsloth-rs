@@ -259,4 +259,72 @@ mod tests {
 
         assert_eq!(output.shape().dims(), &[2, 10, 768]);
     }
+
+    #[test]
+    fn test_attention_with_random_input() {
+        let config = FusedAttentionConfig {
+            hidden_size: 256,
+            num_heads: 4,
+            head_dim: 64,
+            ..Default::default()
+        };
+        let device = Device::Cpu;
+        let attn = FusedAttention::new(config, &device).unwrap();
+
+        // Random input
+        let input = Tensor::randn(0.0f32, 1.0, (1, 8, 256), &device).unwrap();
+        let output = attn.forward(&input, None, None);
+        
+        assert!(output.is_ok());
+        let output = output.unwrap();
+        assert_eq!(output.shape().dims(), &[1, 8, 256]);
+        
+        // Output should not have NaN values
+        let sum = output.sum_all().unwrap().to_scalar::<f32>().unwrap();
+        assert!(!sum.is_nan(), "Output contains NaN values");
+    }
+
+    #[test]
+    fn test_attention_numerical_stability() {
+        let config = FusedAttentionConfig {
+            hidden_size: 128,
+            num_heads: 2,
+            head_dim: 64,
+            ..Default::default()
+        };
+        let device = Device::Cpu;
+        let attn = FusedAttention::new(config, &device).unwrap();
+
+        // Test with larger values that could cause overflow
+        let input = Tensor::randn(0.0f32, 10.0, (1, 4, 128), &device).unwrap();
+        let output = attn.forward(&input, None, None);
+        
+        assert!(output.is_ok());
+        let output = output.unwrap();
+        
+        // Check for NaN and Inf
+        let values: Vec<f32> = output.flatten_all().unwrap().to_vec1().unwrap();
+        for v in values {
+            assert!(!v.is_nan(), "Output contains NaN");
+            assert!(!v.is_infinite(), "Output contains Inf");
+        }
+    }
+
+    #[test]
+    fn test_attention_vram_estimate() {
+        let config = FusedAttentionConfig {
+            hidden_size: 4096,
+            num_heads: 32,
+            head_dim: 128,
+            ..Default::default()
+        };
+        let device = Device::Cpu;
+        let attn = FusedAttention::new(config, &device).unwrap();
+
+        let vram = attn.vram_estimate(4, 2048);
+        
+        // Should be substantial (several GB for this config)
+        assert!(vram > 100 * 1024 * 1024); // > 100 MB
+        assert!(vram < 100 * 1024 * 1024 * 1024); // < 100 GB (sanity check)
+    }
 }

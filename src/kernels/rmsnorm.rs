@@ -93,4 +93,47 @@ mod tests {
 
         assert_eq!(output.shape().dims(), &[2, 10, 768]);
     }
+
+    #[test]
+    fn test_rmsnorm_normalizes_values() {
+        let device = Device::Cpu;
+        let norm = RmsNorm::new(64, 1e-5, &device).unwrap();
+
+        // Create input with known variance
+        let input = Tensor::randn(0.0f32, 5.0, (1, 1, 64), &device).unwrap();
+        let output = norm.forward(&input).unwrap();
+
+        // Output should have approximately unit RMS
+        let output_sq = output.sqr().unwrap();
+        let mean_sq = output_sq.mean_all().unwrap().to_scalar::<f32>().unwrap();
+        
+        // RMS should be close to 1 (within tolerance)
+        assert!(
+            (mean_sq.sqrt() - 1.0).abs() < 0.5,
+            "RMS should be approximately 1, got {}",
+            mean_sq.sqrt()
+        );
+    }
+
+    #[test]
+    fn test_rmsnorm_numerical_stability() {
+        let device = Device::Cpu;
+        let norm = RmsNorm::new(128, 1e-5, &device).unwrap();
+
+        // Test with very small values
+        let small_input = Tensor::full(1e-6f32, (1, 1, 128), &device).unwrap();
+        let output = norm.forward(&small_input);
+        assert!(output.is_ok());
+        
+        // Test with larger values
+        let large_input = Tensor::randn(0.0f32, 100.0, (1, 1, 128), &device).unwrap();
+        let output = norm.forward(&large_input).unwrap();
+        
+        // Check no NaN/Inf
+        let values: Vec<f32> = output.flatten_all().unwrap().to_vec1().unwrap();
+        for v in values {
+            assert!(!v.is_nan(), "Output contains NaN");
+            assert!(!v.is_infinite(), "Output contains Inf");
+        }
+    }
 }

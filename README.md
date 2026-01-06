@@ -66,6 +66,8 @@ fn main() -> anyhow::Result<()> {
     
     let attention = FusedAttention::new(config, &device)?;
     
+    // Create random input tensor: randn(mean, std_dev, shape, device)
+    // 0.0f32 is Rust syntax for a 32-bit float literal with value 0.0
     let hidden_states = Tensor::randn(0.0f32, 1.0, (1, 128, 768), &device)?;
     let output = attention.forward(&hidden_states, None, None)?;
     

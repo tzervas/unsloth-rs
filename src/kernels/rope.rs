@@ -1,4 +1,20 @@
 //! Rotary Position Embedding (RoPE) implementation.
+//!
+//! RoPE encodes position information directly into the query and key vectors
+//! through rotation, enabling the model to learn relative position relationships.
+//!
+//! ## Why RoPE?
+//!
+//! Unlike absolute position embeddings, RoPE:
+//! - Naturally encodes relative positions through rotation
+//! - Scales well to longer sequences than seen during training
+//! - Is used by modern LLMs like LLaMA, Mistral, and others
+//!
+//! ## Implementation Notes
+//!
+//! - Pre-computes cos/sin caches up to max_seq_len for efficiency
+//! - Applies rotation in pairs: splits head_dim in half and rotates each pair
+//! - Uses standard rotation formula: [x1*cos - x2*sin, x2*cos + x1*sin]
 
 use candle_core::{Device, Tensor};
 

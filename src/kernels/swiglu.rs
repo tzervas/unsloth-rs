@@ -1,4 +1,19 @@
 //! SwiGLU activation implementation.
+//!
+//! SwiGLU (Swish-Gated Linear Unit) is a gated activation function that
+//! combines the Swish activation with a linear gating mechanism.
+//!
+//! ## Why SwiGLU?
+//!
+//! SwiGLU has been shown to outperform other activations (ReLU, GELU) in
+//! transformer MLPs, and is used in modern LLMs like LLaMA, PaLM, and others.
+//!
+//! ## Implementation Notes
+//!
+//! - Formula: SwiGLU(x) = Swish(x @ gate_weight) ⊙ (x @ up_weight)
+//! - Swish(x) = x * sigmoid(x), also known as SiLU
+//! - The ⊙ symbol denotes element-wise multiplication
+//! - Down projection maps back to hidden_size: output = hidden @ down_weight
 
 use candle_core::{Device, Tensor};
 

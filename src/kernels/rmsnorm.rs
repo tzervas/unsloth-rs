@@ -1,4 +1,20 @@
 //! RMS Normalization implementation.
+//!
+//! Root Mean Square Layer Normalization normalizes inputs using only the RMS
+//! (root mean square) statistic, without centering (no mean subtraction).
+//!
+//! ## Why RMSNorm?
+//!
+//! Compared to LayerNorm:
+//! - Simpler computation (no mean calculation needed)
+//! - Empirically performs similarly in practice
+//! - Used in modern LLMs like LLaMA for efficiency
+//!
+//! ## Implementation Notes
+//!
+//! - Formula: output = (x / RMS(x)) * weight
+//! - RMS(x) = sqrt(mean(x^2) + eps)
+//! - Epsilon (eps) prevents division by zero for numerical stability
 
 use candle_core::{DType, Device, Tensor};
 

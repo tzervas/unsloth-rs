@@ -130,7 +130,13 @@ pub fn flash_attention_cubecl(
 }
 
 /// Check if the device supports CubeCL kernel execution.
+///
+/// CubeCL supports multiple GPU backends: CUDA, ROCm, and Vulkan.
+/// Currently we only check for CUDA as it's the primary target,
+/// but this can be expanded to other backends as they are tested.
 fn can_use_cubecl_kernel(device: &Device) -> bool {
+    // TODO: Expand to support ROCm and Vulkan once tested
+    // For now, only CUDA is supported
     matches!(device, Device::Cuda(_))
 }
 

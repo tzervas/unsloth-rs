@@ -151,8 +151,7 @@ impl FusedAttention {
 
         // Scaled dot-product attention
         let scale = (head_dim as f64).sqrt();
-        let k_t = k.transpose(2, 3)?.contiguous()?;
-        let scores = q.matmul(&k_t)?;
+        let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
         let scores = (scores / scale)?;
 
         // Apply mask if provided

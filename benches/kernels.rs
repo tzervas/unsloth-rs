@@ -207,8 +207,8 @@ fn benchmark_all_kernels(c: &mut Criterion) {
 criterion_group!(
     name = benches;
     config = Criterion::default()
-        .sample_size(10)
-        .measurement_time(std::time::Duration::from_secs(5));
+        .sample_size(50)  // Increased from 10 for more statistically reliable results
+        .measurement_time(std::time::Duration::from_secs(10));
     targets = benchmark_all_kernels
 );
 criterion_main!(benches);

@@ -1,34 +1,37 @@
 [package]
 name = "unsloth-rs"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
 description = "Memory-optimized LLM fine-tuning with custom GPU kernels (2-5x speedup)"
-repository = "https://github.com/youruser/unsloth-rs"
+repository = "https://github.com/tzervas/unsloth-rs"
 keywords = ["gpu", "cuda", "llm", "fine-tuning", "memory-optimization"]
 categories = ["science", "machine-learning"]
 
 [dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
+candle-core = "0.9"
+candle-nn = "0.9"
+thiserror = "2.0"
+tracing = "0.1"
 
-# GPU compute
-cubecl.workspace = true
+# GPU compute - CubeCL for cross-platform GPU kernels
+cubecl = "0.8"
 
 [dev-dependencies]
-criterion.workspace = true
-proptest.workspace = true
-anyhow.workspace = true
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.6"
+anyhow = "1.0"
 
 [features]
 default = []
 cuda = ["candle-core/cuda", "cubecl/cuda"]
 
-[lints]
-workspace = true
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = "warn"
 
 [[bench]]
 name = "kernels"

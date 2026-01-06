@@ -3,9 +3,9 @@
 //! Combines QKV projection, attention computation, and output projection
 //! into a single memory-efficient operation.
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 
-use crate::error::{Result, UnslothError};
+use crate::error::Result;
 
 /// Configuration for fused attention.
 #[derive(Debug, Clone)]
@@ -126,8 +126,8 @@ impl FusedAttention {
         let num_heads = self.config.num_heads;
         let head_dim = self.config.head_dim;
 
-        // QKV projection
-        let qkv = hidden_states.matmul(&self.qkv_weight.t()?)?;
+        // QKV projection - use broadcast_matmul for 3D tensor with 2D weight
+        let qkv = hidden_states.broadcast_matmul(&self.qkv_weight.t()?)?;
         
         // Split into Q, K, V
         let q_size = num_heads * head_dim;
@@ -138,16 +138,21 @@ impl FusedAttention {
         let v = qkv.narrow(2, q_size + kv_size, kv_size)?;
 
         // Reshape for attention: [batch, num_heads, seq_len, head_dim]
+        // Make contiguous after transpose for matmul compatibility
         let q = q.reshape((batch, seq_len, num_heads, head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let k = k.reshape((batch, seq_len, self.config.num_kv_heads.unwrap_or(num_heads), head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v.reshape((batch, seq_len, self.config.num_kv_heads.unwrap_or(num_heads), head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // Scaled dot-product attention
         let scale = (head_dim as f64).sqrt();
-        let scores = q.matmul(&k.transpose(2, 3)?)?;
+        let k_t = k.transpose(2, 3)?.contiguous()?;
+        let scores = q.matmul(&k_t)?;
         let scores = (scores / scale)?;
 
         // Apply mask if provided
@@ -165,10 +170,11 @@ impl FusedAttention {
         // Reshape back: [batch, seq_len, hidden]
         let attn_output = attn_output
             .transpose(1, 2)?
+            .contiguous()?
             .reshape((batch, seq_len, num_heads * head_dim))?;
 
-        // Output projection
-        let output = attn_output.matmul(&self.o_weight.t()?)?;
+        // Output projection - use broadcast_matmul for 3D tensor with 2D weight
+        let output = attn_output.broadcast_matmul(&self.o_weight.t()?)?;
 
         Ok(output)
     }
@@ -205,6 +211,7 @@ impl FusedAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::DType;
 
     #[test]
     fn test_attention_creation() {

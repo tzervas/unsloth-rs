@@ -1,6 +1,6 @@
 //! Rotary Position Embedding (RoPE) implementation.
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 
 use crate::error::Result;
 
@@ -69,7 +69,7 @@ impl RotaryEmbedding {
         &self,
         q: &Tensor,
         k: &Tensor,
-        position_ids: &Tensor,
+        _position_ids: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
         let seq_len = q.dim(2)?;
         
@@ -102,6 +102,7 @@ impl RotaryEmbedding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::DType;
 
     #[test]
     fn test_rope_creation() {

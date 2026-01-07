@@ -15,9 +15,14 @@ candle-core = "0.9"
 candle-nn = "0.9"
 thiserror = "2.0"
 tracing = "0.1"
+bytemuck = { version = "1.21", features = ["derive"] }
 
-# GPU compute - CubeCL for cross-platform GPU kernels
-cubecl = "0.8"
+# GPU compute - CubeCL for cross-platform GPU kernels (v0.8.1 validated Jan 2026)
+cubecl = "0.8.1"
+cubecl-cuda = { version = "0.8.1", optional = true }
+# Tensor-core accelerated matmul for Q@K^T and Attn@V operations
+# Note: Fallback to manual implementation initially; integrate once validated
+# cubek-matmul = { git = "https://github.com/tracel-ai/cubek" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -26,7 +31,7 @@ anyhow = "1.0"
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "cubecl/cuda"]
+cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
 
 [lints.rust]
 missing_docs = "warn"

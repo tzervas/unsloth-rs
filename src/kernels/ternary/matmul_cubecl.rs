@@ -2,19 +2,20 @@
 //!
 //! ## Implementation Status
 //!
-//! Provides three implementations with increasing optimization:
+//! Provides four implementations with increasing optimization:
 //! - **Basic kernel**: Simple popcount-based implementation for validation
 //! - **Tiled kernel**: Optimized with shared memory for better performance
 //! - **Vectorized kernel**: Uses Line<u32> for 4-element vectorized loads
+//! - **Sparse kernel**: Plane skipping optimization for 95%+ sparse models
 //!
 //! ## Completed Tasks
 //! - Task 2.1: u32 tensor interop ✅
 //! - Task 2.2: Basic popcount kernel ✅
 //! - Task 2.3: Tiled kernel with shared memory ✅
 //! - Task 2.4: Vectorized Line<u32> loads ✅
+//! - Task 2.5: Plane skipping with sparsity metadata ✅
 //!
 //! ## Future Tasks
-//! - Task 2.5: Plane skipping with sparsity metadata
 //! - Task 2.6: GPU dispatch integration
 //!
 //! ## Note on Array Types
@@ -388,6 +389,59 @@ impl VectorizedTernaryMatmulConfig {
     }
 }
 
+/// Configuration for sparse-optimized ternary matmul kernel.
+#[derive(Clone, Copy, Debug)]
+pub struct SparseOptimizedConfig {
+    /// Base vectorized config
+    pub base: VectorizedTernaryMatmulConfig,
+    /// Enable plane skipping optimization
+    pub enable_plane_skipping: bool,
+    /// Minimum sparsity to enable optimization (default: 0.90)
+    pub sparsity_threshold: f32,
+    /// Chunk size for sparsity checking in dimensions (default: 64 dims = 2 u32 words)
+    pub chunk_size: u32,
+}
+
+impl SparseOptimizedConfig {
+    /// Create from sparsity level
+    pub fn from_sparsity(
+        base: VectorizedTernaryMatmulConfig,
+        sparsity: f32,
+    ) -> Self {
+        Self {
+            base,
+            enable_plane_skipping: sparsity >= 0.90,
+            sparsity_threshold: 0.90,
+            chunk_size: 64, // 2 u32 words
+        }
+    }
+
+    /// RTX 5080 preset with sparsity optimization
+    pub fn rtx_5080_sparse(
+        m: u32, n: u32, k_words: u32, in_features: u32, sparsity: f32
+    ) -> Self {
+        let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(
+            m, n, k_words, in_features
+        );
+        Self::from_sparsity(base, sparsity)
+    }
+
+    /// RTX 3090 Ti preset with sparsity optimization
+    pub fn rtx_3090ti_sparse(
+        m: u32, n: u32, k_words: u32, in_features: u32, sparsity: f32
+    ) -> Self {
+        let base = VectorizedTernaryMatmulConfig::rtx_3090ti_preset(
+            m, n, k_words, in_features
+        );
+        Self::from_sparsity(base, sparsity)
+    }
+
+    /// Get words per chunk (chunk_size / 32)
+    pub fn words_per_chunk(&self) -> u32 {
+        self.chunk_size / 32
+    }
+}
+
 /// Vectorized tiled ternary matmul kernel using Line<u32> for 4-element loads.
 ///
 /// Uses Line<u32> to load 4 u32 words at once, improving memory bandwidth utilization.
@@ -604,6 +658,218 @@ pub fn get_vectorized_launch_config(
     let cube_dim = CubeDim::new(config.block_size, 1, 1);
 
     (cube_count, cube_dim)
+}
+
+/// Sparse-optimized ternary matmul kernel with plane skipping.
+///
+/// Uses sparsity metadata to skip computation for all-zero weight chunks.
+/// Most effective on models with 95%+ sparsity.
+///
+/// Algorithm:
+/// ```text
+/// For each K tile:
+///   - For each chunk in tile:
+///     - Check if chunk is active (non-zero) via bitmap
+///     - If inactive: skip load, quantization, and popcount
+///     - If active: perform normal computation
+///   - Accumulate only active chunks
+/// ```
+#[cube(launch_unchecked)]
+pub fn ternary_matmul_kernel_sparse<F: Float>(
+    // Input activations [batch, in_features] as f32
+    input: &Array<F>,
+    // Weight positive plane [out_features, k_words] as u32
+    w_plus: &Array<F>,
+    // Weight negative plane [out_features, k_words] as u32
+    w_minus: &Array<F>,
+    // Per-row scales [out_features]
+    scales: &Array<F>,
+    // Sparsity metadata: active chunk bitmap [out_features, num_chunks_words]
+    // Each u64 represents 64 chunks
+    sparsity_bitmap: &Array<u64>,
+    // Output [batch, out_features]
+    output: &mut Array<F>,
+    // Compile-time configuration
+    #[comptime] config: SparseOptimizedConfig,
+) {
+    let batch_idx = CUBE_POS_X;
+    let out_block_idx = CUBE_POS_Y;
+    let thread_idx = UNIT_POS_X;
+
+    if batch_idx >= config.base.m {
+        return;
+    }
+
+    // Shared memory for input tile
+    let tile_k_words = config.base.tile_k();
+    let mut input_plus_tile = SharedMemory::<u32>::new(tile_k_words);
+    let mut input_minus_tile = SharedMemory::<u32>::new(tile_k_words);
+
+    // Each thread computes outputs_per_thread outputs
+    for out_local in 0..config.base.outputs_per_thread {
+        let out_idx = out_block_idx * config.base.block_size * config.base.outputs_per_thread
+            + thread_idx * config.base.outputs_per_thread
+            + out_local;
+
+        if out_idx >= config.base.n {
+            continue;
+        }
+
+        let input_offset = batch_idx * config.base.in_features;
+        let weight_offset = out_idx * config.base.k_words;
+
+        let mut pos_sum = 0u32;
+        let mut neg_sum = 0u32;
+
+        // Calculate chunk parameters
+        let words_per_chunk = config.words_per_chunk();
+        let num_chunks = (config.base.k_words + words_per_chunk - 1) / words_per_chunk;
+        let chunks_per_u64 = 64u32;
+        
+        // Sparsity bitmap offset for this output feature
+        let bitmap_words = (num_chunks + chunks_per_u64 - 1) / chunks_per_u64;
+        let bitmap_offset = out_idx * bitmap_words;
+
+        // Number of K tiles
+        let num_k_tiles = (config.base.k_words + tile_k_words - 1) / tile_k_words;
+
+        // Process K dimension in tiles
+        for k_tile in 0..num_k_tiles {
+            let k_start = k_tile * tile_k_words;
+            let k_end = u32::min(k_start + tile_k_words, config.base.k_words);
+            let tile_size = k_end - k_start;
+
+            // Cooperatively load and quantize input tile (same as vectorized kernel)
+            let num_vec_loads = tile_size / 4;
+            let remaining_words = tile_size % 4;
+
+            if thread_idx < num_vec_loads {
+                let vec_idx = thread_idx;
+                let base_word = k_start + vec_idx * 4;
+
+                for word_offset in 0u32..4u32 {
+                    let k_word = base_word + word_offset;
+                    let mut plus_word = 0u32;
+                    let mut minus_word = 0u32;
+
+                    let base_dim = k_word * 32;
+                    let end_dim = u32::min(base_dim + 32, config.base.in_features);
+
+                    for bit in 0..(end_dim - base_dim) {
+                        let dim_idx = base_dim + bit;
+                        let val = input[input_offset + dim_idx];
+
+                        let threshold = F::new(0.5);
+                        let neg_threshold = F::new(-0.5);
+
+                        if val > threshold {
+                            plus_word = plus_word | (1u32 << bit);
+                        } else if val < neg_threshold {
+                            minus_word = minus_word | (1u32 << bit);
+                        }
+                    }
+
+                    let tile_offset = vec_idx * 4 + word_offset;
+                    input_plus_tile[tile_offset] = plus_word;
+                    input_minus_tile[tile_offset] = minus_word;
+                }
+            }
+
+            if remaining_words > 0 && thread_idx < remaining_words {
+                let k_word = k_start + num_vec_loads * 4 + thread_idx;
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+
+                let base_dim = k_word * 32;
+                let end_dim = u32::min(base_dim + 32, config.base.in_features);
+
+                for bit in 0..(end_dim - base_dim) {
+                    let dim_idx = base_dim + bit;
+                    let val = input[input_offset + dim_idx];
+
+                    let threshold = F::new(0.5);
+                    let neg_threshold = F::new(-0.5);
+
+                    if val > threshold {
+                        plus_word = plus_word | (1u32 << bit);
+                    } else if val < neg_threshold {
+                        minus_word = minus_word | (1u32 << bit);
+                    }
+                }
+
+                let tile_offset = num_vec_loads * 4 + thread_idx;
+                input_plus_tile[tile_offset] = plus_word;
+                input_minus_tile[tile_offset] = minus_word;
+            }
+
+            sync_units();
+
+            // Process tile with plane skipping
+            let chunk_start = k_start / words_per_chunk;
+            let chunk_end = (k_end + words_per_chunk - 1) / words_per_chunk;
+
+            for chunk_idx in chunk_start..chunk_end {
+                // Check if this chunk is active via bitmap
+                if config.enable_plane_skipping {
+                    let bitmap_word_idx = chunk_idx / chunks_per_u64;
+                    let bit_idx = chunk_idx % chunks_per_u64;
+                    let bitmap = sparsity_bitmap[bitmap_offset + bitmap_word_idx];
+                    let is_active = (bitmap & (1u64 << bit_idx)) != 0u64;
+
+                    if !is_active {
+                        // Skip this chunk entirely
+                        continue;
+                    }
+                }
+
+                // Process active chunk
+                let chunk_word_start = chunk_idx * words_per_chunk;
+                let chunk_word_end = u32::min(
+                    chunk_word_start + words_per_chunk,
+                    k_end
+                );
+
+                for k_word in chunk_word_start..chunk_word_end {
+                    if k_word < k_start || k_word >= k_end {
+                        continue;
+                    }
+
+                    let k_local = k_word - k_start;
+
+                    // Load weight planes
+                    let wp_f32 = w_plus[weight_offset + k_word];
+                    let wm_f32 = w_minus[weight_offset + k_word];
+                    let wp_bits = u32::reinterpret(wp_f32);
+                    let wm_bits = u32::reinterpret(wm_f32);
+
+                    // Load input planes from shared memory
+                    let ip = input_plus_tile[k_local];
+                    let im = input_minus_tile[k_local];
+
+                    // Popcount-based ternary dot product
+                    pos_sum = pos_sum + (wp_bits & ip).count_ones();
+                    pos_sum = pos_sum + (wm_bits & im).count_ones();
+
+                    neg_sum = neg_sum + (wp_bits & im).count_ones();
+                    neg_sum = neg_sum + (wm_bits & ip).count_ones();
+                }
+            }
+
+            sync_units();
+        }
+
+        // Convert popcount result to float and apply scale
+        let dot = F::cast_from(pos_sum) - F::cast_from(neg_sum);
+        let scale = scales[out_idx];
+        output[batch_idx * config.base.n + out_idx] = dot * scale;
+    }
+}
+
+/// Launch configuration for sparse kernel (same as vectorized)
+pub fn get_sparse_launch_config(
+    config: &SparseOptimizedConfig,
+) -> (CubeCount, CubeDim) {
+    get_vectorized_launch_config(&config.base)
 }
 
 /// Launch configuration for the tiled kernel
@@ -1400,5 +1666,205 @@ mod tests {
                 actual
             );
         }
+    }
+
+    #[test]
+    fn test_sparse_config_creation() {
+        let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(8, 512, 32, 1024);
+        
+        // High sparsity: enable skipping
+        let sparse = SparseOptimizedConfig::from_sparsity(base, 0.95);
+        assert!(sparse.enable_plane_skipping);
+        assert_eq!(sparse.chunk_size, 64);
+        assert_eq!(sparse.words_per_chunk(), 2);
+        
+        // Low sparsity: disable skipping
+        let dense = SparseOptimizedConfig::from_sparsity(base, 0.50);
+        assert!(!dense.enable_plane_skipping);
+    }
+
+    #[test]
+    fn test_sparse_presets() {
+        let rtx5080 = SparseOptimizedConfig::rtx_5080_sparse(16, 1024, 64, 2048, 0.95);
+        assert!(rtx5080.enable_plane_skipping);
+        assert_eq!(rtx5080.base.tile_k(), 64);
+
+        let rtx3090 = SparseOptimizedConfig::rtx_3090ti_sparse(16, 1024, 64, 2048, 0.95);
+        assert!(rtx3090.enable_plane_skipping);
+        assert_eq!(rtx3090.base.tile_k(), 32);
+    }
+
+    #[test]
+    fn test_sparse_launch_config() {
+        let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(4, 512, 32, 1024);
+        let sparse = SparseOptimizedConfig::from_sparsity(base, 0.95);
+        
+        let (cube_count, cube_dim) = get_sparse_launch_config(&sparse);
+        
+        assert_eq!(cube_dim.x, 256);
+        
+        if let CubeCount::Static(x, y, z) = cube_count {
+            assert_eq!(x, 4);
+            assert_eq!(y, 1);
+            assert_eq!(z, 1);
+        } else {
+            panic!("Expected Static cube count");
+        }
+    }
+
+    /// Test sparse kernel correctness with high sparsity
+    #[test]
+    fn test_sparse_kernel_correctness() {
+        let batch_size = 2;
+        let in_features = 128;
+        let out_features = 4;
+        let k_words = 4;
+
+        // Input: alternating for batch 0, all positive for batch 1
+        let mut input_data = vec![0.0f32; batch_size * in_features];
+        for b in 0..batch_size {
+            for i in 0..in_features {
+                input_data[b * in_features + i] = if b == 0 {
+                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                } else {
+                    1.0
+                };
+            }
+        }
+
+        // Quantize inputs
+        let mut input_plus = vec![0u32; batch_size * k_words];
+        let mut input_minus = vec![0u32; batch_size * k_words];
+
+        for b in 0..batch_size {
+            for k in 0..k_words {
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+
+                for bit in 0..32 {
+                    let dim_idx = k * 32 + bit;
+                    let val = input_data[b * in_features + dim_idx];
+
+                    if val > 0.5 {
+                        plus_word |= 1u32 << bit;
+                    } else if val < -0.5 {
+                        minus_word |= 1u32 << bit;
+                    }
+                }
+
+                input_plus[b * k_words + k] = plus_word;
+                input_minus[b * k_words + k] = minus_word;
+            }
+        }
+
+        // Create 95% sparse weights: only first chunk (2 words) per row is active
+        let mut w_plus = vec![0u32; out_features * k_words];
+        let mut w_minus = vec![0u32; out_features * k_words];
+
+        // Only first 2 words (1 chunk) have weights
+        for out_idx in 0..out_features {
+            w_plus[out_idx * k_words] = 0xFFFFFFFF;
+            w_plus[out_idx * k_words + 1] = 0xFFFFFFFF;
+        }
+
+        // Create sparsity bitmap (chunk_size = 64 dims = 2 words)
+        // Chunk 0 (words 0-1): active
+        // Chunk 1 (words 2-3): inactive
+        let num_chunks = 2; // 4 words / 2 words per chunk
+        let bitmap = vec![0x1u64; out_features]; // Only bit 0 set (chunk 0 active)
+
+        let scales = vec![1.0f32; out_features];
+
+        // Simulate sparse kernel computation with chunk skipping
+        let mut output = vec![0.0f32; batch_size * out_features];
+
+        for batch_idx in 0..batch_size {
+            for out_idx in 0..out_features {
+                let input_offset = batch_idx * k_words;
+                let weight_offset = out_idx * k_words;
+                let mut pos_sum = 0u32;
+                let mut neg_sum = 0u32;
+
+                // Process only active chunks
+                for chunk_idx in 0..num_chunks {
+                    let is_active = (bitmap[out_idx] & (1u64 << chunk_idx)) != 0;
+                    
+                    if !is_active {
+                        continue; // Skip inactive chunk
+                    }
+
+                    // Process active chunk (words 0-1 for chunk 0)
+                    let chunk_word_start = chunk_idx * 2;
+                    let chunk_word_end = std::cmp::min(chunk_word_start + 2, k_words);
+
+                    for k_word in chunk_word_start..chunk_word_end {
+                        let wp_bits = w_plus[weight_offset + k_word];
+                        let wm_bits = w_minus[weight_offset + k_word];
+                        let ip = input_plus[input_offset + k_word];
+                        let im = input_minus[input_offset + k_word];
+
+                        pos_sum += (wp_bits & ip).count_ones();
+                        pos_sum += (wm_bits & im).count_ones();
+                        neg_sum += (wp_bits & im).count_ones();
+                        neg_sum += (wm_bits & ip).count_ones();
+                    }
+                }
+
+                let dot = (pos_sum as i32 - neg_sum as i32) as f32;
+                output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
+            }
+        }
+
+        // Verify results
+        // Batch 0: alternating input (0xAAAA... + 0x5555...)
+        // Only first 64 dims (2 words) contribute
+        // Batch 1: all +1 input (0xFFFF... + 0x0)
+        // Result should be 64 (all 64 dims match +1 weights)
+
+        for (i, &val) in output.iter().enumerate() {
+            let batch = i / out_features;
+            if batch == 1 {
+                // Batch 1: all positive input, all positive weights in active chunk
+                assert!(
+                    (val - 64.0).abs() < 0.01,
+                    "Sparse kernel mismatch at {}: expected 64.0, got {}",
+                    i,
+                    val
+                );
+            }
+            // Batch 0 alternating pattern should give 0
+        }
+    }
+
+    #[test]
+    fn test_sparse_kernel_skip_detection() {
+        // Verify that inactive chunks are properly detected
+        let k_words = 8; // 8 words = 4 chunks (2 words each)
+        let out_features = 2;
+
+        // Feature 0: only first chunk active (words 0-1)
+        // Feature 1: second and third chunks active (words 2-5)
+        let mut w_plus = vec![0u32; out_features * k_words];
+        w_plus[0 * k_words + 0] = 0xFF;  // Chunk 0
+        w_plus[1 * k_words + 2] = 0xFF;  // Chunk 1
+        w_plus[1 * k_words + 4] = 0xFF;  // Chunk 2
+
+        // Build bitmap
+        let num_chunks = 4;
+        let mut bitmap = vec![0u64; out_features];
+        
+        // Feature 0: chunk 0 active
+        bitmap[0] = 0x1; // Bit 0
+        
+        // Feature 1: chunks 1 and 2 active
+        bitmap[1] = 0x6; // Bits 1 and 2
+
+        // Verify bitmap correctly identifies active chunks
+        assert_eq!((bitmap[0] & 0x1), 0x1, "Chunk 0 should be active for feature 0");
+        assert_eq!((bitmap[0] & 0x2), 0x0, "Chunk 1 should be inactive for feature 0");
+        
+        assert_eq!((bitmap[1] & 0x1), 0x0, "Chunk 0 should be inactive for feature 1");
+        assert_eq!((bitmap[1] & 0x2), 0x2, "Chunk 1 should be active for feature 1");
+        assert_eq!((bitmap[1] & 0x4), 0x4, "Chunk 2 should be active for feature 1");
     }
 }

@@ -256,6 +256,73 @@ pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
+/// Convert SparsityMetadata active_chunks to CubeCL u64 array bytes.
+///
+/// # Arguments
+/// * `metadata` - The SparsityMetadata from TernaryTensor
+///
+/// # Returns
+/// Raw bytes for CubeCL u64 array
+#[must_use]
+pub fn sparsity_metadata_to_cubecl_bytes(
+    metadata: &crate::kernels::ternary::SparsityMetadata
+) -> Vec<u8> {
+    metadata.active_chunks
+        .iter()
+        .flat_map(|&word| word.to_le_bytes())
+        .collect()
+}
+
+/// Create sparsity bitmap for entire tensor.
+///
+/// For each output feature (row), creates a chunk activity bitmap.
+///
+/// # Arguments
+/// * `tensor` - The TernaryTensor with plane data
+/// * `chunk_size` - Size of chunks in dimensions (default: 64)
+///
+/// # Returns
+/// Flattened bitmap [out_features, bitmap_words] as bytes
+#[must_use]
+pub fn create_sparsity_bitmap_for_tensor(
+    tensor: &crate::kernels::ternary::TernaryTensor,
+    chunk_size: usize,
+) -> Vec<u8> {
+    let (out_features, _in_features) = tensor.shape;
+    let k_words = tensor.k_words;
+    let words_per_chunk = chunk_size / 32;
+    let num_chunks = (k_words + words_per_chunk - 1) / words_per_chunk;
+    let bitmap_words = (num_chunks + 63) / 64;
+    
+    let mut bitmap = vec![0u64; out_features * bitmap_words];
+    
+    // Build bitmap for each output feature
+    for row in 0..out_features {
+        for chunk_idx in 0..num_chunks {
+            let word_start = row * k_words + chunk_idx * words_per_chunk;
+            let word_end = std::cmp::min(word_start + words_per_chunk, (row + 1) * k_words);
+            
+            // Check if chunk has any non-zero bits
+            let mut is_active = false;
+            for word_idx in word_start..word_end {
+                if tensor.plus_plane[word_idx] != 0 || tensor.minus_plane[word_idx] != 0 {
+                    is_active = true;
+                    break;
+                }
+            }
+            
+            if is_active {
+                let bitmap_idx = row * bitmap_words + chunk_idx / 64;
+                let bit_idx = chunk_idx % 64;
+                bitmap[bitmap_idx] |= 1u64 << bit_idx;
+            }
+        }
+    }
+    
+    // Convert to bytes
+    bitmap.iter().flat_map(|&word| word.to_le_bytes()).collect()
+}
+
 /// Convert Candle u32 tensor to CubeCL handle.
 ///
 /// Similar to `candle_to_cubecl_handle` but for u32 dtype (bitsliced planes).
@@ -464,6 +531,112 @@ mod tests {
 
         // Verify byte order (little endian)
         assert_eq!(bytes[0..4], [0x78, 0x56, 0x34, 0x12]); // First u32
+    }
+
+    #[test]
+    fn test_sparsity_bitmap_creation() {
+        use crate::kernels::ternary::TernaryTensor;
+
+        let shape = (4, 128); // 4 rows, 128 cols
+        let k_words = 4; // 128 / 32 = 4
+
+        // Create 50% sparse pattern: alternating active/inactive words
+        let mut plus = vec![0u32; 4 * k_words];
+        for row in 0..4 {
+            plus[row * k_words] = 0xFFFFFFFF; // Word 0: active
+            plus[row * k_words + 1] = 0x0;     // Word 1: inactive
+            plus[row * k_words + 2] = 0xFFFFFFFF; // Word 2: active
+            plus[row * k_words + 3] = 0x0;     // Word 3: inactive
+        }
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+
+        let tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        // Create bitmap with chunk_size = 64 (2 words per chunk)
+        let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
+
+        // Should have 2 chunks per row, 1 u64 per row
+        let bitmap_words_per_row = 1;
+        assert_eq!(bitmap_bytes.len(), 4 * bitmap_words_per_row * 8); // 4 rows * 1 u64 * 8 bytes
+
+        // Convert back to u64 for validation
+        let bitmap: Vec<u64> = bitmap_bytes
+            .chunks_exact(8)
+            .map(|chunk| u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3],
+                chunk[4], chunk[5], chunk[6], chunk[7],
+            ]))
+            .collect();
+
+        // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
+        for row in 0..4 {
+            let row_bitmap = bitmap[row];
+            // Chunk 0 (words 0-1): word 0 is active, so chunk is active
+            assert_ne!(row_bitmap & 0x1, 0, "Chunk 0 should be active for row {}", row);
+            // Chunk 1 (words 2-3): word 2 is active, so chunk is active
+            assert_ne!(row_bitmap & 0x2, 0, "Chunk 1 should be active for row {}", row);
+        }
+    }
+
+    #[test]
+    fn test_sparsity_bitmap_fully_sparse() {
+        use crate::kernels::ternary::TernaryTensor;
+
+        let shape = (2, 128);
+        let k_words = 4;
+
+        // All zero (fully sparse)
+        let plus = vec![0u32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let scales = vec![1.0f32; 2];
+
+        let tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
+        let bitmap: Vec<u64> = bitmap_bytes
+            .chunks_exact(8)
+            .map(|chunk| u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3],
+                chunk[4], chunk[5], chunk[6], chunk[7],
+            ]))
+            .collect();
+
+        // All chunks should be inactive
+        for &word in &bitmap {
+            assert_eq!(word, 0, "Fully sparse tensor should have all chunks inactive");
+        }
+    }
+
+    #[test]
+    fn test_sparsity_bitmap_fully_dense() {
+        use crate::kernels::ternary::TernaryTensor;
+
+        let shape = (2, 128);
+        let k_words = 4;
+
+        // All active (fully dense)
+        let plus = vec![0xFFFFFFFFu32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let scales = vec![1.0f32; 2];
+
+        let tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
+        let bitmap: Vec<u64> = bitmap_bytes
+            .chunks_exact(8)
+            .map(|chunk| u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3],
+                chunk[4], chunk[5], chunk[6], chunk[7],
+            ]))
+            .collect();
+
+        // All chunks should be active
+        let num_chunks = 2; // 4 words / 2 words per chunk
+        for (row, &word) in bitmap.iter().enumerate() {
+            let expected = (1u64 << num_chunks) - 1; // All bits set
+            assert_eq!(word, expected, "Fully dense tensor should have all chunks active for row {}", row);
+        }
     }
 
     // GPU tests require cuda feature and hardware

@@ -34,5 +34,8 @@ pub mod interop;
 pub mod kernel;
 
 pub use config::FlashAttentionConfig;
-pub use interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor, has_cubecl_cuda_support};
+pub use interop::{
+    candle_to_cubecl_handle, cubecl_bytes_to_u32_plane, cubecl_to_candle_tensor,
+    has_cubecl_cuda_support, ternary_tensor_to_cubecl_handles, u32_planes_to_cubecl_bytes,
+};
 pub use kernel::flash_attention_kernel;

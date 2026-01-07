@@ -390,6 +390,51 @@ mod tests {
         assert!(model.get_layer("layer1").is_some());
         assert!(model.get_layer("layer2").is_some());
 
+        // Verify accounting: layer1 = 64*128=8192, layer2 = 128*64=8192, total = 16384
+        let expected_params = 64 * 128 + 128 * 64;
+        assert_eq!(model.stats.original_params, expected_params);
+        assert_eq!(model.stats.quantized_params, expected_params);
+        assert_eq!(model.stats.original_bytes, expected_params * 4); // FP32
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_accounting_with_preserved() -> Result<()> {
+        let device = Device::Cpu;
+        let config = ModelQuantizationConfig {
+            min_layer_size: 10000, // Skip small layers
+            skip_patterns: vec![],
+            verbose: false,
+            ..Default::default()
+        };
+
+        let mut weights = HashMap::new();
+        // Large layer - will be quantized
+        weights.insert(
+            "large".to_string(),
+            Tensor::randn(0.0f32, 1.0, (256, 256), &device)?,
+        );
+        // Small layer - will be preserved
+        weights.insert(
+            "small".to_string(),
+            Tensor::randn(0.0f32, 1.0, (8, 8), &device)?,
+        );
+
+        let model = quantize_weights_collection(weights, HashMap::new(), config, &device)?;
+
+        assert_eq!(model.stats.layers_quantized, 1);
+        assert_eq!(model.stats.layers_skipped, 1);
+
+        // Verify accounting
+        let large_params = 256 * 256; // 65536
+        let small_params = 8 * 8; // 64
+        let total_params = large_params + small_params;
+
+        assert_eq!(model.stats.quantized_params, large_params);
+        assert_eq!(model.stats.original_params, total_params);
+        assert_eq!(model.stats.original_bytes, total_params * 4); // FP32
+
         Ok(())
     }
 }

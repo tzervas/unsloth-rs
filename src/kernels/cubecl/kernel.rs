@@ -57,6 +57,8 @@ use candle_core::Tensor;
 use cubecl::prelude::*;
 #[cfg(feature = "cuda")]
 use cubecl_cuda::CudaRuntime;
+#[cfg(feature = "cuda")]
+use bytemuck;
 
 // ============================================================================
 // CubeCL Kernel Definition (v0.8.1 API)

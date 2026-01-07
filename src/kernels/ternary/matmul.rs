@@ -74,7 +74,7 @@ pub struct TernaryMatmulConfig {
 pub fn ternary_matmul(
     input: &Tensor,
     weights: &TernaryTensor,
-    _config: &TernaryConfig,
+    config: &TernaryConfig,
 ) -> Result<Tensor> {
     // Validate shapes
     let input_shape = input.shape().dims();
@@ -103,6 +103,9 @@ pub fn ternary_matmul(
             }
         }
     }
+    
+    // Suppress unused variable warning when cuda feature is not enabled
+    let _ = config;
 
     // CPU fallback
     ternary_matmul_cpu(input, weights)

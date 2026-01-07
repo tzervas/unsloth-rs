@@ -1,88 +1,106 @@
 # CubeCL Research Requirements for Flash Attention Implementation
 
+**Status**: ✅ Research Complete (January 2026)  
+**CubeCL Version**: v0.8.1 (Validated)  
+**Reference Documents**: `docs/cubecl-context.md`, `docs/cubecl-guide.md`
+
 ## Purpose
-This document outlines the specific information, documentation, and examples needed to implement a production-ready Flash Attention kernel using CubeCL. Use this as a research guide to gather the necessary materials for Phase 3+ implementation.
+This document outlines the specific information, documentation, and examples needed to implement a production-ready Flash Attention kernel using CubeCL. 
+
+**Update (2026-01-06)**: Research phase completed. See `docs/cubecl-context.md` for validated API reference and `docs/cubecl-guide.md` for implementation roadmap.
 
 ---
 
 ## 1. CubeCL Core API Documentation
 
 ### 1.1 Kernel Definition and Launch
-**What we need:**
-- Complete syntax and semantics of the `#[cube(launch)]` macro
-- How to define kernel functions with generic float types `<F: Float>`
-- Parameter passing conventions (tensors, scalars, configurations)
-- Return value handling (if any)
-- Compilation and code generation process
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- What types can be passed as kernel parameters?
-- How are Rust types mapped to GPU types?
-- What are the constraints on kernel function signatures?
-- How does CubeCL handle generic float types (F32, F16, BF16)?
+**What we learned:**
+- Use `#[cube(launch_unchecked)]` for production (10-20% faster, skips bounds checks)
+- Use `#[cube(launch)]` for debugging
+- Generics: `<F: Float>` dispatches f32/f16/bf16
+- No return values; mutate outputs directly via `&mut Array<F>`
+- No dynamic allocation; everything comptime or register-based
 
-**Example needed:**
+**Validated syntax:**
 ```rust
-#[cube(launch)]
+use cubecl::prelude::*;
+
+#[cube(launch_unchecked)]
 fn example_kernel<F: Float>(
-    input: &Tensor<F>,
-    output: &mut Tensor<F>,
+    input: &Array<F>,
+    output: &mut Array<F>,
     scalar_param: F,
-    config: SomeConfig,
+    config: Comptime<SomeConfig>,
 ) {
-    // Implementation
+    let value = input[ABSOLUTE_POS];
+    output[ABSOLUTE_POS] = F::exp(value) * scalar_param;
 }
 ```
+
+**Types that can be passed:**
+- `&Array<F>` / `&mut Array<F>` - Primary input/output (1D buffer view)
+- `&Array<Line<F>>` - Vectorized 4-element loads
+- `F` (scalar) - Float constants
+- `Comptime<T>` - Compile-time constants for unrolling
 
 ### 1.2 Thread and Block Indexing
-**What we need:**
-- All available indexing primitives (ABSOLUTE_POS, CUBE_POS_X/Y/Z, THREAD_POS, etc.)
-- How to map multi-dimensional workloads to thread blocks
-- Best practices for 2D/3D indexing patterns
-- Block size limits and considerations
+**Status**: ✅ RESOLVED
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- What's the difference between ABSOLUTE_POS, CUBE_POS, and THREAD_POS?
-- How do we handle 4D tensors [batch, heads, seq, dim]?
-- What are the maximum block/grid dimensions?
-- How to compute global indices from local/block indices?
+**Available indexing primitives (validated):**
+| Primitive | Description |
+|-----------|-------------|
+| `ABSOLUTE_POS` / `ABSOLUTE_POS_X/Y/Z` | Global thread ID |
+| `CUBE_POS_X/Y/Z` | Block position in grid |
+| `UNIT_POS_X/Y/Z` | Thread position in block |
+| `CUBE_DIM_X/Y/Z` | Block dimensions |
+| `PLANE_POS` | Warp/wavefront lane (0-31 NVIDIA, 0-63 AMD) |
 
-**Example needed:**
+**Best practice for 4D tensors [batch, heads, seq, dim]:**
 ```rust
-#[cube(launch)]
-fn indexed_kernel<F: Float>(...) {
-    let batch_idx = CUBE_POS_X;
-    let head_idx = CUBE_POS_Y;
-    let seq_idx = THREAD_POS;
-    // How to combine these correctly?
-}
+// Flatten batch × heads on CUBE_POS_X, tile sequence on CUBE_POS_Y
+let batch_head = CUBE_POS_X;
+let tile_idx = CUBE_POS_Y;
+let tid = UNIT_POS_X;
+
+// Manual stride calculation
+let batch_idx = batch_head / num_heads;
+let head_idx = batch_head % num_heads;
+let global_idx = batch_idx * (heads * seq * dim) + head_idx * (seq * dim) + ...;
 ```
 
+**Maximum dimensions:** Backend-dependent (1024 threads/block typical for CUDA)
+
 ### 1.3 Tensor Operations
-**What we need:**
-- Complete list of tensor operations available in CubeCL kernels
-- Matrix multiplication APIs (if available)
-- Element-wise operations
-- Reduction operations (sum, max)
-- Transpose operations
+**Status**: ✅ RESOLVED
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- How to perform matrix multiplication in a kernel?
-- Can we use Tensor<F> methods inside kernels?
-- Are there built-in functions for common operations?
-- How to access tensor elements by index?
+**Key finding:** CubeCL kernels work with `Array<F>` (1D buffer views), NOT high-level `Tensor<F>`.
 
-**Examples needed:**
+**Matrix multiplication:**
+- Use `cubek-matmul` crate for optimized Q@Kᵀ and Attn@V (tensor cores)
+- Manual implementation: nested loops with register accumulation
+
+**Element access:**
 ```rust
-// Matrix multiplication
-let result = matmul(a, b); // Does this exist?
+let value = array[ABSOLUTE_POS];  // 1D indexing only
+// For 2D: array[row * cols + col]
+```
 
-// Element access
-let value = tensor[batch, head, i, j]; // Syntax?
+**Built-in math functions:**
+```rust
+F::exp(x)      // Exponential
+F::max(a, b)   // Maximum
+F::neg_inf()   // Negative infinity (for softmax init)
+F::new(2.0)    // Create constant (NOT F::from_f32)
+```
 
-// Reductions
-let max_val = row_max(tensor); // How to implement?
-let sum_val = row_sum(tensor); // How to implement?
+**Reductions:**
+```rust
+warp_reduce(value, |a, b| a.max(b))  // Warp-level max
+warp_reduce(value, |a, b| a + b)     // Warp-level sum
 ```
 
 ---
@@ -90,114 +108,184 @@ let sum_val = row_sum(tensor); // How to implement?
 ## 2. Memory Management
 
 ### 2.1 Shared Memory
-**What we need:**
-- How to allocate shared memory in CubeCL
-- Size limits and best practices
-- Synchronization primitives for shared memory
-- Bank conflict avoidance strategies
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- What's the API for shared memory allocation?
-- How to declare shared memory arrays?
-- Is there a SharedMemory<F> type?
-- How much shared memory is typically available?
+**Critical finding:** SharedMemory is 1D only in CubeCL v0.8.1
 
-**Example needed:**
 ```rust
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn kernel_with_shared_memory<F: Float>(...) {
-    // Allocate shared memory for tiles
-    let mut q_tile = SharedMemory::<F>::new(tile_size, head_dim); // Syntax?
+    // 1D allocation only - size must be comptime known
+    let mut tile = SharedMemory::<F>::new(TILE_SIZE * HEAD_DIM);
     
-    // Load data into shared memory
-    // ... how?
+    // Load data (manual 2D → 1D indexing)
+    let row = UNIT_POS_X / HEAD_DIM;
+    let col = UNIT_POS_X % HEAD_DIM;
+    tile[row * HEAD_DIM + col] = input[global_idx];
     
     // Synchronize threads
-    sync_threads(); // Does this exist?
+    sync_units();  // NOT sync_threads()
 }
 ```
+
+**Typical shared memory limits:**
+- RTX 3090 Ti: 48 KB per SM (configurable up to 100 KB)
+- RTX 5080: ~64-100 KB per SM
+- Tune tile_size accordingly (128 or 256)
+
+**Bank conflict avoidance:** Pad strides (+1) or transpose access patterns.
 
 ### 2.2 Global Memory Access
-**What we need:**
-- Best practices for coalesced memory access
-- How tensor data is laid out in memory
-- Stride calculations for multi-dimensional tensors
-- Performance characteristics of different access patterns
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- What's the memory layout for Tensor<F> (row-major, column-major)?
-- How to ensure coalesced access?
-- Are there alignment requirements?
-- How to handle strided accesses?
+**Memory layout:** Row-major (C-style), consecutive thread access for coalescing.
+
+**Best practices:**
+- Use `Array<Line<F>>` for vectorized 4-element loads (128-bit transactions)
+- Ensure consecutive threads access consecutive memory addresses
+- Align access to 128-byte boundaries when possible
+
+```rust
+// Coalesced access pattern (GOOD)
+let idx = ABSOLUTE_POS;
+output[idx] = input[idx];
+
+// Vectorized access (BETTER)
+// Array<Line<F>> loads 4 elements per thread
+let vec = input[ABSOLUTE_POS];  // Loads 4 floats
+output[ABSOLUTE_POS] = vec;
+```
 
 ### 2.3 Register Allocation
-**What we need:**
-- How to use registers effectively
-- Local variable storage semantics
-- Register pressure considerations
-- When data spills to local memory
+**Status**: ✅ RESOLVED
 
-**Example needed:**
+**Validated pattern:**
 ```rust
-#[cube]
-fn compute_attention(...) {
-    // These should be in registers
-    let mut acc = F::from_f32(0.0);
-    let mut max_val = F::from_f32(-INFINITY);
-    // How many registers can we use?
+#[cube(launch_unchecked)]
+fn compute_attention<F: Float>(...) {
+    // These are in registers - keep minimal count
+    let mut acc_m = F::neg_inf();    // Running max
+    let mut acc_l = F::new(0.0);     // Running sum
+    let mut acc_o = Line::splat(F::new(0.0));  // Vectorized output
+    
+    // Use #[unroll] for small loops to reduce register pressure
+    #[unroll]
+    for i in 0..4 {
+        // Small unrolled loop
+    }
 }
 ```
+
+**Guidelines:**
+- Keep accumulators minimal (1-4 per thread)
+- Large arrays spill to local memory (slow)
+- Profile with `CUBECL_PROFILE=1`
 
 ---
 
 ## 3. Launch Configuration
 
 ### 3.1 Grid and Block Dimensions
-**What we need:**
-- How to specify grid dimensions (number of blocks)
-- How to specify block dimensions (threads per block)
-- API for launching kernels with these configurations
-- How to choose optimal configurations
+**Status**: ✅ RESOLVED
 
-**Specific questions:**
-- What's the syntax for kernel launch?
-- How to pass grid/block dimensions?
-- Are there helper functions for common patterns?
-- What are typical block sizes (128, 256, 512)?
-
-**Example needed:**
+**Validated launch syntax:**
 ```rust
-fn launch_attention_kernel(...) -> Result<Tensor> {
-    let grid_dim = (batch, num_heads, num_tiles);
-    let block_dim = (tile_size, 1, 1);
+use cubecl::prelude::*;
+use cubecl_cuda::CudaRuntime as Runtime;
+
+fn launch_attention_kernel(q: &Tensor, ...) -> Result<Tensor> {
+    let client = Runtime::client(&Default::default());
     
-    // How to launch?
-    attention_kernel::launch(grid_dim, block_dim, q, k, v, output, ...)?;
-    // Or different syntax?
+    // Grid: (batch * num_heads, num_q_tiles, 1)
+    let cube_count = CubeCount::Static(
+        (batch * num_heads) as u32,
+        num_tiles,
+        1,
+    );
+    
+    // Block: 256 threads (warp-aligned)
+    let cube_dim = CubeDim::new(256, 1, 1);
+    
+    // Launch with ArrayArg for buffer handles
+    attention_kernel::launch_unchecked::<f32, Runtime>(
+        &client,
+        cube_count,
+        cube_dim,
+        ArrayArg::from_raw_parts(&q_handle, q_len, 4),  // vectorization=4
+        ArrayArg::from_raw_parts(&k_handle, k_len, 4),
+        ArrayArg::from_raw_parts(&v_handle, v_len, 4),
+        ArrayArg::from_raw_parts(&out_handle, out_len, 4),
+        ScalarArg::new(scale),
+        Comptime::new(config),
+    );
+    
+    Ok(output)
 }
 ```
 
-### 3.2 Occupancy and Performance
-**What we need:**
-- How to measure and optimize GPU occupancy
-- Trade-offs between block size, shared memory, and registers
-- Performance profiling tools for CubeCL
-- Debugging and validation techniques
+**Typical block sizes:** 128 or 256 (must be warp-aligned, max 1024)
 
-**Specific questions:**
-- How to profile CubeCL kernels?
-- What tools are available for performance analysis?
-- How to validate kernel correctness?
-- How to debug kernel issues?
+### 3.2 Occupancy and Performance
+**Status**: ✅ RESOLVED
+
+**Profiling:** Set `CUBECL_PROFILE=1` environment variable.
+
+**Performance targets:**
+- GPU occupancy: >50%
+- Shared memory: Stay within 48-64 KB per block
+- Register count: <64 per thread for full occupancy
 
 ---
 
 ## 4. Runtime and Device Management
 
 ### 4.1 CubeCL Runtime Initialization
-**What we need:**
-- How to initialize CubeCL runtime
-- Device selection and enumeration
+**Status**: ✅ RESOLVED
+
+```rust
+use cubecl_cuda::CudaRuntime as Runtime;
+
+fn setup_cubecl() -> Result<()> {
+    // Get default CUDA device client
+    let client = Runtime::client(&Default::default());
+    
+    // Create buffer from bytes
+    let handle = client.create(&tensor_bytes);
+    
+    // Allocate empty buffer
+    let out_handle = client.empty(num_bytes);
+    
+    // Read buffer back to host
+    let result_bytes = client.read(&out_handle);
+    
+    Ok(())
+}
+```
+
+**Device selection:** Use `CudaDevice(n)` for multi-GPU.
+
+### 4.2 Tensor Interoperability
+**Status**: ✅ RESOLVED (implemented in `src/kernels/cubecl/interop.rs`)
+
+**Candle → CubeCL:**
+```rust
+pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, DType)> {
+    let tensor = tensor.contiguous()?;  // Must be contiguous
+    let data: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
+    let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+    Ok((bytes, tensor.dims().to_vec(), tensor.dtype()))
+}
+```
+
+**CubeCL → Candle:**
+```rust
+pub fn cubecl_to_candle_tensor(bytes: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
+    let data: Vec<f32> = bytes.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    Tensor::from_vec(data, shape, device)
+}
+```
 - Context management
 - Error handling
 

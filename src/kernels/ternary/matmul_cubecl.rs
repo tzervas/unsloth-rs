@@ -224,7 +224,7 @@ mod tests {
         // Expected outputs:
         // Batch 0, Feature 0: sum(1..32) = 32*33/2 = 528
         // Batch 0, Feature 1: -sum(1..32) = -528
-        // Batch 0, Feature 2: sum(even positions) - sum(odd positions) 
+        // Batch 0, Feature 2: sum(input values at odd bit positions) - sum(input values at even bit positions)
         //                   = (2+4+6+...+32) - (1+3+5+...+31) = 16
         
         // Simulate kernel computation

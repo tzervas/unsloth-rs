@@ -39,6 +39,14 @@ pub enum UnslothError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// Quantization error.
+    #[error("quantization error: {0}")]
+    Quantization(String),
+
+    /// Ternary operation error.
+    #[error("ternary operation error: {0}")]
+    Ternary(String),
+
     /// Candle error.
     #[error("candle error: {0}")]
     Candle(#[from] candle_core::Error),

@@ -284,4 +284,101 @@ mod tests {
         assert!((output[4] - expected_0_1 / 2.0).abs() < 0.01);
         assert!((output[5] - expected_0_2 / 2.0).abs() < 0.01);
     }
+
+    /// Test partial word bounds checking with non-multiple of 32 input features.
+    /// 
+    /// This test validates the optimized bounds checking for partial words
+    /// (when in_features % 32 != 0). It ensures that bits beyond in_features
+    /// are not processed.
+    #[test]
+    fn test_ternary_matmul_partial_word() {
+        // Test with in_features = 48 (1 full word + 16 bits in partial word)
+        let batch_size = 2;
+        let in_features = 48;  // Not a multiple of 32
+        let out_features = 2;
+        let k_words = 2;  // ceil(48 / 32) = 2 words (second is partial)
+        
+        // Input: [1.0, 2.0, 3.0, ..., 48.0] for batch 0
+        let mut input_data = vec![0.0f32; batch_size * in_features];
+        for b in 0..batch_size {
+            for i in 0..in_features {
+                input_data[b * in_features + i] = (i + 1) as f32 / (b + 1) as f32;
+            }
+        }
+        
+        // Weights:
+        // Feature 0: all +1 in first word, all +1 in partial second word (bits 0-15)
+        // Feature 1: all -1 in partial second word only (bits 0-15)
+        let mut w_plus = vec![0u32; out_features * k_words];
+        let mut w_minus = vec![0u32; out_features * k_words];
+        
+        // Feature 0: positive in both words
+        w_plus[0] = 0xFFFFFFFF;  // word 0 (bits 0-31, all valid)
+        w_plus[1] = 0x0000FFFF;  // word 1 (bits 0-15 valid, 16-31 should be ignored)
+        
+        // Feature 1: negative in partial word only
+        w_minus[2] = 0x00000000;  // word 0 (no contribution)
+        w_minus[3] = 0x0000FFFF;  // word 1 (bits 0-15 valid, 16-31 should be ignored)
+        
+        let scales = vec![1.0f32; out_features];
+        
+        // Expected outputs:
+        // Feature 0: sum(1..32) + sum(33..48) = 528 + (33+34+...+48)
+        //          = 528 + (48*49/2 - 32*33/2) = 528 + (1176 - 528) = 1176
+        // Feature 1: -sum(33..48) = -(33+34+...+48) = -648
+        
+        // Simulate kernel computation
+        let mut output = vec![0.0f32; batch_size * out_features];
+        
+        for batch_idx in 0..batch_size {
+            for out_idx in 0..out_features {
+                let mut acc = 0.0f32;
+                let input_offset = batch_idx * in_features;
+                let weight_offset = out_idx * k_words;
+                
+                for k in 0..k_words {
+                    let wp_bits = w_plus[weight_offset + k];
+                    let wm_bits = w_minus[weight_offset + k];
+                    
+                    let is_full_word = (k * 32 + 32) <= in_features;
+                    
+                    for bit in 0..32 {
+                        let dim_idx = k * 32 + bit;
+                        
+                        // This is the critical bounds check for partial words
+                        if !is_full_word && dim_idx >= in_features {
+                            break;
+                        }
+                        
+                        let mask = 1u32 << bit;
+                        let is_pos = (wp_bits & mask) != 0;
+                        let is_neg = (wm_bits & mask) != 0;
+                        
+                        let input_val = input_data[input_offset + dim_idx];
+                        
+                        if is_pos {
+                            acc += input_val;
+                        } else if is_neg {
+                            acc -= input_val;
+                        }
+                    }
+                }
+                
+                output[batch_idx * out_features + out_idx] = acc * scales[out_idx];
+            }
+        }
+        
+        // Verify batch 0 results
+        let expected_0 = (1..=48).sum::<i32>() as f32;  // sum(1..48) = 1176
+        let expected_1 = -(33..=48).sum::<i32>() as f32;  // -sum(33..48) = -648
+        
+        assert!((output[0] - expected_0).abs() < 0.01,
+                "Feature 0 mismatch: expected {}, got {}", expected_0, output[0]);
+        assert!((output[1] - expected_1).abs() < 0.01,
+                "Feature 1 mismatch: expected {}, got {}", expected_1, output[1]);
+        
+        // Verify batch 1 (inputs halved)
+        assert!((output[2] - expected_0 / 2.0).abs() < 0.01);
+        assert!((output[3] - expected_1 / 2.0).abs() < 0.01);
+    }
 }

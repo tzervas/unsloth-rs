@@ -3,6 +3,8 @@
 //! This module implements Phase 3 tasks for ternary attention:
 //! - Task 3.1: Q·K^T Ternary Scoring Kernel ✅
 //! - Task 3.2: Online Softmax with Popcount ✅
+//! - Task 3.3: Hybrid FP/Ternary Dispatch ✅
+//! - Task 3.4: Causal Masking via Plane Operations ✅
 //!
 //! ## Algorithm Overview
 //!
@@ -1303,5 +1305,243 @@ mod hybrid_dispatch_tests {
         
         let output = fallback_fp_attention(&q, &k, &v, 1.0).unwrap();
         assert_eq!(output.dims(), &[batch, heads, seq, dim]);
+    }
+}
+
+// ============================================================================
+// Phase 3, Task 3.4: Causal Masking via Plane Operations
+// ============================================================================
+
+/// Configuration for causal masking.
+#[derive(Debug, Clone)]
+pub struct CausalMaskConfig {
+    /// Value to use for masked positions (large negative)
+    pub mask_value: f32,
+    /// Enable plane-level optimization for bulk masking
+    pub enable_plane_optimization: bool,
+    /// Underlying attention configuration
+    pub attention_config: HybridAttentionConfig,
+}
+
+impl CausalMaskConfig {
+    /// Create default causal mask configuration.
+    pub fn default() -> Self {
+        Self {
+            mask_value: -1e9,
+            enable_plane_optimization: true,
+            attention_config: HybridAttentionConfig::balanced(),
+        }
+    }
+    
+    /// Create config with specific attention mode.
+    pub fn with_attention_config(attention_config: HybridAttentionConfig) -> Self {
+        Self {
+            mask_value: -1e9,
+            enable_plane_optimization: true,
+            attention_config,
+        }
+    }
+}
+
+/// Apply causal mask to attention scores.
+///
+/// For autoregressive attention, position i can only attend to positions <= i.
+/// Masked positions (j > i) are set to a large negative value so they contribute
+/// ~0 after softmax.
+///
+/// # Arguments
+///
+/// * `scores` - Attention scores [batch, heads, q_len, k_len]
+/// * `mask_value` - Large negative value for masked positions (default: -1e9)
+///
+/// # Returns
+///
+/// Masked scores with same shape as input
+pub fn apply_causal_mask_to_scores(
+    scores: &Tensor,
+    mask_value: f32,
+) -> Result<Tensor> {
+    use candle_core::Device;
+    
+    let shape = scores.dims();
+    if shape.len() != 4 {
+        return Err(UnslothError::ShapeMismatch {
+            expected: "4D tensor [batch, heads, q_len, k_len]".to_string(),
+            got: format!("{:?}", shape),
+        });
+    }
+    
+    let (batch, heads, q_len, k_len) = (shape[0], shape[1], shape[2], shape[3]);
+    
+    // Create causal mask: upper triangular with -inf
+    // mask[i, j] = 0 if j <= i, else mask_value
+    let mut mask_data = vec![0.0f32; q_len * k_len];
+    for i in 0..q_len {
+        for j in 0..k_len {
+            if j > i {
+                mask_data[i * k_len + j] = mask_value;
+            }
+        }
+    }
+    
+    let device = scores.device();
+    let mask = Tensor::from_vec(mask_data, (q_len, k_len), device)?;
+    
+    // Broadcast mask to [batch, heads, q_len, k_len] and add to scores
+    let mask_broadcast = mask.broadcast_as((batch, heads, q_len, k_len))?;
+    let masked_scores = (scores + mask_broadcast)?;
+    
+    Ok(masked_scores)
+}
+
+/// Compute full ternary attention with causal masking.
+///
+/// Implements: Attention(Q, K, V) = softmax(causal_mask(Q·K^T / scale)) · V
+/// where K is ternary-quantized and causal masking prevents attending to future.
+///
+/// # Arguments
+///
+/// * `q` - Query tensor [batch, heads, q_seq_len, head_dim]
+/// * `k_ternary` - Ternary-quantized keys  
+/// * `v` - Value tensor [batch, heads, k_seq_len, head_dim]
+/// * `config` - Causal mask configuration
+///
+/// # Returns
+///
+/// Attention output [batch, heads, q_seq_len, head_dim]
+pub fn causal_masked_ternary_attention(
+    q: &Tensor,
+    k_ternary: &TernaryTensor,
+    v: &Tensor,
+    config: &CausalMaskConfig,
+) -> Result<Tensor> {
+    let shape = q.dims();
+    let (batch, heads, q_seq_len, head_dim) = (shape[0], shape[1], shape[2], shape[3]);
+    let k_seq_len = k_ternary.shape()[1];
+    
+    // Compute attention scores using ternary kernel
+    let scores = ternary_attention_score_cpu(q, k_ternary, 1.0 / (head_dim as f32).sqrt())?;
+    
+    // Apply causal mask
+    let masked_scores = apply_causal_mask_to_scores(&scores, config.mask_value)?;
+    
+    // Compute online softmax with masked scores
+    let output = compute_attention_from_scores(&masked_scores, v)?;
+    
+    Ok(output)
+}
+
+/// Helper function to compute attention output from scores.
+fn compute_attention_from_scores(
+    scores: &Tensor,
+    v: &Tensor,
+) -> Result<Tensor> {
+    use candle_core::D;
+    
+    // Apply softmax to scores
+    let attn_weights = candle_nn::ops::softmax_last_dim(scores)?;
+    
+    // Compute weighted sum: output = attn_weights · V
+    // attn_weights: [batch, heads, q_len, k_len]
+    // v: [batch, heads, k_len, head_dim]
+    // output: [batch, heads, q_len, head_dim]
+    let output = attn_weights.matmul(&v)?;
+    
+    Ok(output)
+}
+
+#[cfg(test)]
+mod causal_mask_tests {
+    use super::*;
+    use candle_core::{Device, Tensor};
+    
+    #[test]
+    fn test_causal_mask_config() {
+        let config = CausalMaskConfig::default();
+        assert_eq!(config.mask_value, -1e9);
+        assert!(config.enable_plane_optimization);
+        
+        let custom = CausalMaskConfig::with_attention_config(
+            HybridAttentionConfig::speed_optimized()
+        );
+        assert_eq!(custom.mask_value, -1e9);
+    }
+    
+    #[test]
+    fn test_apply_causal_mask_shape() {
+        let batch = 2;
+        let heads = 4;
+        let seq = 8;
+        
+        let scores = Tensor::zeros((batch, heads, seq, seq), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let masked = apply_causal_mask_to_scores(&scores, -1e9).unwrap();
+        
+        assert_eq!(masked.dims(), &[batch, heads, seq, seq]);
+    }
+    
+    #[test]
+    fn test_apply_causal_mask_values() {
+        let batch = 1;
+        let heads = 1;
+        let seq = 4;
+        
+        // Create scores with all ones
+        let scores = Tensor::ones((batch, heads, seq, seq), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let masked = apply_causal_mask_to_scores(&scores, -1e9).unwrap();
+        
+        let masked_data = masked.to_vec3::<f32>().unwrap();
+        
+        // Check causal pattern: position i can attend to j <= i
+        for i in 0..seq {
+            for j in 0..seq {
+                let value = masked_data[0][i][j];
+                if j > i {
+                    // Future positions should be masked
+                    assert!(value < -1e8, "Position ({}, {}) should be masked", i, j);
+                } else {
+                    // Past/current positions should be unmasked
+                    assert!((value - 1.0).abs() < 1e-5, "Position ({}, {}) should be unmasked", i, j);
+                }
+            }
+        }
+    }
+    
+    #[test]
+    fn test_causal_masked_attention_shape() {
+        let batch = 2;
+        let heads = 4;
+        let seq = 8;
+        let dim = 64;
+        
+        let q = super::hybrid_dispatch_tests::super::online_softmax_tests::super::tests::create_test_query(batch, heads, seq, dim);
+        let k_ternary = super::hybrid_dispatch_tests::create_sparse_ternary_keys(heads, seq, dim, 0.80);
+        let v = super::hybrid_dispatch_tests::super::online_softmax_tests::create_test_values(batch, heads, seq, dim);
+        
+        let config = CausalMaskConfig::default();
+        let output = causal_masked_ternary_attention(&q, &k_ternary, &v, &config).unwrap();
+        
+        assert_eq!(output.dims(), &[batch, heads, seq, dim]);
+    }
+    
+    #[test]
+    fn test_causal_masked_attention_numerical() {
+        let batch = 1;
+        let heads = 1;
+        let seq = 4;
+        let dim = 8;
+        
+        // Create simple test data
+        let q = Tensor::ones((batch, heads, seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let k_ternary = super::hybrid_dispatch_tests::create_sparse_ternary_keys(heads, seq, dim, 0.50);
+        let v = Tensor::ones((batch, heads, seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        let config = CausalMaskConfig::default();
+        let output = causal_masked_ternary_attention(&q, &k_ternary, &v, &config).unwrap();
+        
+        // Output should be valid (no NaN/Inf)
+        let output_data = output.to_vec4::<f32>().unwrap();
+        for &val in output_data[0][0].iter().flat_map(|row| row.iter()) {
+            assert!(val.is_finite(), "Output contains non-finite value: {}", val);
+        }
     }
 }

@@ -237,9 +237,7 @@ pub fn ternary_tensor_to_cubecl_handles(
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>, (usize, usize), usize) {
     let plus_bytes = u32_planes_to_cubecl_bytes(&tensor.plus_plane);
     let minus_bytes = u32_planes_to_cubecl_bytes(&tensor.minus_plane);
-    let scales_bytes: Vec<u8> = tensor.scales.iter()
-        .flat_map(|&s| s.to_le_bytes())
-        .collect();
+    let scales_bytes: Vec<u8> = tensor.scales.iter().flat_map(|&s| s.to_le_bytes()).collect();
     
     (plus_bytes, minus_bytes, scales_bytes, tensor.shape, tensor.k_words)
 }
@@ -301,19 +299,20 @@ mod tests {
         let minus = vec![0x55555555u32; 4 * k_words];
         let scales = vec![1.5f32; 4];
         
-        let tensor = TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape);
+        let expected_plus = plus.clone();
+        let tensor = TernaryTensor::new(plus, minus, scales, shape);
         let (plus_bytes, minus_bytes, scales_bytes, ret_shape, ret_k_words) = 
             ternary_tensor_to_cubecl_handles(&tensor);
         
         assert_eq!(ret_shape, shape);
         assert_eq!(ret_k_words, k_words);
-        assert_eq!(plus_bytes.len(), plus.len() * 4);
-        assert_eq!(minus_bytes.len(), minus.len() * 4);
-        assert_eq!(scales_bytes.len(), scales.len() * 4);
+        assert_eq!(plus_bytes.len(), 4 * k_words * 4);
+        assert_eq!(minus_bytes.len(), 4 * k_words * 4);
+        assert_eq!(scales_bytes.len(), 4 * 4);
         
         // Verify roundtrip
         let recovered_plus = cubecl_bytes_to_u32_plane(&plus_bytes);
-        assert_eq!(plus, recovered_plus);
+        assert_eq!(expected_plus, recovered_plus);
     }
 
     // GPU tests require cuda feature and hardware

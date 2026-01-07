@@ -815,4 +815,17 @@ mod tests {
         
         tensor.modify_dim(0, 64, 1); // Should panic
     }
+
+    #[test]
+    #[should_panic(expected = "new_val")]
+    fn test_modify_dim_invalid_value() {
+        let shape = (4, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
 }

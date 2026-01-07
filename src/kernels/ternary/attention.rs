@@ -32,6 +32,15 @@ impl Default for TernaryAttentionConfig {
 }
 
 /// Ternary attention weights (Q, K, V projections as ternary tensors).
+///
+/// # Note on Per-Head Scales
+///
+/// The `q_scales` and `k_scales` fields provide per-head scale factors for use
+/// with the `ternary_attention_score()` function in future GPU implementations
+/// using popcount-based scoring. The current `ternary_attention_cpu()` reference
+/// implementation uses standard tensor operations and does not utilize these
+/// scales directly, but they are included for API completeness and future GPU
+/// kernel integration.
 #[derive(Debug, Clone)]
 pub struct TernaryAttentionWeights {
     /// Query projection weights
@@ -42,9 +51,9 @@ pub struct TernaryAttentionWeights {
     pub v_proj: TernaryTensor,
     /// Output projection weights
     pub o_proj: TernaryTensor,
-    /// Per-head Q scale factors
+    /// Per-head Q scale factors (for future GPU popcount-based scoring)
     pub q_scales: Vec<f32>,
-    /// Per-head K scale factors
+    /// Per-head K scale factors (for future GPU popcount-based scoring)
     pub k_scales: Vec<f32>,
 }
 
@@ -56,7 +65,7 @@ pub struct TernaryAttentionWeights {
 /// # Arguments
 ///
 /// * `q_planes` - Query ternary planes for one position
-/// * `k_planes` - Key ternary planes for one position  
+/// * `k_planes` - Key ternary planes for one position
 /// * `scale_q` - Query scale factor
 /// * `scale_k` - Key scale factor
 ///
@@ -77,6 +86,15 @@ pub fn ternary_attention_score(
 /// Online softmax state for numerically stable attention.
 ///
 /// Maintains running max and sum for the online softmax algorithm.
+/// This implements the online softmax algorithm to avoid storing the full
+/// O(seq_len²) attention matrix, enabling memory-efficient attention computation.
+///
+/// # Note on CPU Implementation
+///
+/// The current `ternary_attention_cpu()` reference implementation uses standard
+/// tensor operations with `candle_nn::ops::softmax` for validation purposes.
+/// This `OnlineSoftmaxState` type is designed for future GPU kernel integration
+/// where memory-efficient online softmax becomes critical for long sequences.
 #[derive(Debug, Clone)]
 pub struct OnlineSoftmaxState {
     /// Running maximum score (for numerical stability)
@@ -118,7 +136,7 @@ impl OnlineSoftmaxState {
             // New maximum: rescale existing accumulator
             let correction = (self.max - score).exp();
             self.sum *= correction;
-            for (o, _) in self.output.iter_mut().zip(value.iter()) {
+            for o in self.output.iter_mut() {
                 *o *= correction;
             }
             self.max = score;
@@ -133,9 +151,16 @@ impl OnlineSoftmaxState {
     }
 
     /// Finalize and return normalized output.
+    ///
+    /// # Returns
+    ///
+    /// The normalized output vector. If `sum == 0.0` (which can occur if all scores
+    /// were negative infinity due to causal masking), returns the unnormalized
+    /// output (a vector of zeros) to avoid division by zero.
     #[must_use]
     pub fn finalize(self) -> Vec<f32> {
         if self.sum == 0.0 {
+            // All scores were masked out (negative infinity), return zeros
             return self.output;
         }
         self.output.into_iter().map(|o| o / self.sum).collect()
@@ -145,7 +170,15 @@ impl OnlineSoftmaxState {
 /// Apply causal masking to ternary planes by zeroing future positions.
 ///
 /// For position `query_pos`, zeros out all key positions > query_pos
-/// in both +plane and -plane.
+/// in both +plane and -plane. This implements Task 3.3 from the ternary GPU
+/// implementation plan: causal masking via bitplane zeroing.
+///
+/// # Note on CPU Implementation
+///
+/// The current `ternary_attention_cpu()` reference implementation uses standard
+/// tensor-based causal masking for validation purposes. This function provides
+/// the bit-level masking operation for future GPU kernel integration where
+/// bitplane operations are more efficient.
 ///
 /// # Arguments
 ///
@@ -174,7 +207,19 @@ pub fn apply_causal_mask_to_planes(
 
 /// CPU reference implementation of ternary attention.
 ///
-/// Computes attention using ternary Q, K, V projections with online softmax.
+/// Computes attention using ternary Q, K, V projections. This is a validation
+/// baseline for future GPU kernels and uses standard tensor operations.
+///
+/// # Implementation Notes
+///
+/// This CPU reference implementation uses:
+/// - Standard `matmul` for Q·K^T scoring (not popcount-based `ternary_attention_score`)
+/// - Standard `candle_nn::ops::softmax` (not memory-efficient `OnlineSoftmaxState`)
+/// - Standard tensor-based causal mask (not bitplane-level `apply_causal_mask_to_planes`)
+///
+/// These design choices prioritize correctness validation over performance. The
+/// corresponding GPU-optimized implementations will use the popcount-based scoring,
+/// online softmax, and bitplane masking functions defined in this module.
 ///
 /// # Arguments
 ///
@@ -199,7 +244,8 @@ pub fn ternary_attention_cpu(
     let dims = hidden_states.dims();
     if dims.len() != 3 {
         return Err(UnslothError::ShapeMismatch {
-            expected: vec![1, 1, 1], // Placeholder for batch, seq_len, hidden (3D tensor required)
+            // Expected a 3D tensor (rank 3) for [batch, seq_len, hidden]
+            expected: vec![3],
             actual: dims.to_vec(),
         });
     }
@@ -229,6 +275,8 @@ pub fn ternary_attention_cpu(
     // Apply causal mask if needed
     let scores = if config.causal {
         let mask = create_causal_mask(seq_len, hidden_states.device())?;
+        // Reshape mask from [seq_len, seq_len] to [1, 1, seq_len, seq_len] for broadcasting
+        let mask = mask.reshape((1, 1, seq_len, seq_len))?;
         scores.broadcast_add(&mask)?
     } else {
         scores
@@ -344,5 +392,98 @@ mod tests {
         assert_eq!(config.num_heads, 12);
         assert_eq!(config.head_dim, 64);
         assert!(config.causal);
+    }
+
+    #[test]
+    fn test_should_use_ternary_attention_high_sparsity() {
+        let shape = (64, 64);
+        let k_words = 2;
+        // Create tensors with high sparsity (all zeros = 100% sparsity)
+        let plus = vec![0u32; 64 * k_words];
+        let minus = vec![0u32; 64 * k_words];
+        let scales = vec![1.0f32; 64];
+        
+        let weights = TernaryAttentionWeights {
+            q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            v_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            o_proj: TernaryTensor::new(plus, minus, scales, shape),
+            q_scales: vec![1.0; 12],
+            k_scales: vec![1.0; 12],
+        };
+        
+        let config = TernaryAttentionConfig {
+            sparsity_threshold: 0.8,
+            ..Default::default()
+        };
+        
+        // 100% sparsity should exceed 0.8 threshold
+        assert!(should_use_ternary_attention(&weights, &config));
+    }
+
+    #[test]
+    fn test_should_use_ternary_attention_low_sparsity() {
+        let shape = (64, 64);
+        let k_words = 2;
+        // Create tensors with low sparsity (all +1)
+        let plus = vec![u32::MAX; 64 * k_words];
+        let minus = vec![0u32; 64 * k_words];
+        let scales = vec![1.0f32; 64];
+        
+        let weights = TernaryAttentionWeights {
+            q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            v_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            o_proj: TernaryTensor::new(plus, minus, scales, shape),
+            q_scales: vec![1.0; 12],
+            k_scales: vec![1.0; 12],
+        };
+        
+        let config = TernaryAttentionConfig {
+            sparsity_threshold: 0.8,
+            ..Default::default()
+        };
+        
+        // Low sparsity should not exceed 0.8 threshold
+        assert!(!should_use_ternary_attention(&weights, &config));
+    }
+
+    #[test]
+    fn test_should_use_ternary_attention_at_threshold() {
+        let shape = (64, 64);
+        let k_words = 2;
+        // Create tensors with exactly 80% sparsity
+        let plus = vec![0u32; 64 * k_words];
+        let minus = vec![0u32; 64 * k_words];
+        let scales = vec![1.0f32; 64];
+        
+        let weights = TernaryAttentionWeights {
+            q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            v_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
+            o_proj: TernaryTensor::new(plus, minus, scales, shape),
+            q_scales: vec![1.0; 12],
+            k_scales: vec![1.0; 12],
+        };
+        
+        let config = TernaryAttentionConfig {
+            sparsity_threshold: 1.0, // Exact threshold
+            ..Default::default()
+        };
+        
+        // At exactly 100% sparsity with 1.0 threshold, should use ternary
+        assert!(should_use_ternary_attention(&weights, &config));
+    }
+
+    #[test]
+    fn test_online_softmax_all_masked() {
+        // Test behavior when sum == 0.0 (all masked)
+        let state = OnlineSoftmaxState::new(4);
+        
+        // Don't update with any scores - simulates all masked case
+        let output = state.finalize();
+        
+        // Should return zeros without division by zero
+        assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
     }
 }

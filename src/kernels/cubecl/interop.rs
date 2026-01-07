@@ -238,7 +238,6 @@ pub fn ternary_tensor_to_cubecl_handles(
     let plus_bytes = u32_planes_to_cubecl_bytes(&tensor.plus_plane);
     let minus_bytes = u32_planes_to_cubecl_bytes(&tensor.minus_plane);
     let scales_bytes: Vec<u8> = tensor.scales.iter().flat_map(|&s| s.to_le_bytes()).collect();
-    
     (plus_bytes, minus_bytes, scales_bytes, tensor.shape, tensor.k_words)
 }
 

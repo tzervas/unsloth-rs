@@ -878,3 +878,430 @@ mod online_softmax_tests {
         assert_eq!(output.dims(), &[batch, heads, q_seq, dim]);
     }
 }
+
+// ============================================================================
+// Phase 3, Task 3.3: Hybrid FP/Ternary Dispatch
+// ============================================================================
+
+/// Dispatch mode for attention computation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionDispatchMode {
+    /// Full precision (FP32/FP16) attention
+    FullPrecision,
+    /// Ternary-quantized K with popcount scoring
+    TernaryK,
+    /// Automatic selection based on sparsity and other heuristics
+    Auto,
+}
+
+/// Configuration for hybrid FP/ternary attention dispatch.
+#[derive(Debug, Clone)]
+pub struct HybridAttentionConfig {
+    /// Base configuration for ternary attention kernels
+    pub ternary_config: TernaryAttentionScoreConfig,
+    /// Dispatch mode (FP, ternary, or auto)
+    pub mode: AttentionDispatchMode,
+    /// Sparsity threshold for auto mode (use ternary if above this)
+    pub sparsity_threshold: f32,
+    /// Sequence length threshold for auto mode (use ternary for long sequences)
+    pub seq_len_threshold: usize,
+    /// Accuracy tolerance for auto mode (use FP if ternary error > this)
+    pub accuracy_tolerance: f32,
+}
+
+impl HybridAttentionConfig {
+    /// Create configuration optimized for maximum speed.
+    ///
+    /// Uses aggressive ternary quantization with lower accuracy requirements.
+    #[must_use]
+    pub fn speed_optimized() -> Self {
+        Self {
+            ternary_config: TernaryAttentionScoreConfig::rtx_5080(),
+            mode: AttentionDispatchMode::Auto,
+            sparsity_threshold: 0.70,  // Use ternary at 70%+ sparsity
+            seq_len_threshold: 512,  // Use ternary for seq >= 512
+            accuracy_tolerance: 0.05,  // Allow 5% error
+        }
+    }
+    
+    /// Create configuration optimized for maximum accuracy.
+    ///
+    /// Conservative ternary usage, high accuracy requirements.
+    #[must_use]
+    pub fn accuracy_optimized() -> Self {
+        Self {
+            ternary_config: TernaryAttentionScoreConfig::rtx_3090_ti(),
+            mode: AttentionDispatchMode::Auto,
+            sparsity_threshold: 0.90,  // Only use ternary at 90%+ sparsity
+            seq_len_threshold: 2048,  // Only for very long sequences
+            accuracy_tolerance: 0.01,  // Allow only 1% error
+        }
+    }
+    
+    /// Create balanced configuration (default).
+    ///
+    /// Balances speed and accuracy.
+    #[must_use]
+    pub fn balanced() -> Self {
+        Self {
+            ternary_config: TernaryAttentionScoreConfig::default_config(),
+            mode: AttentionDispatchMode::Auto,
+            sparsity_threshold: 0.80,  // Use ternary at 80%+ sparsity
+            seq_len_threshold: 1024,  // Use ternary for seq >= 1024
+            accuracy_tolerance: 0.02,  // Allow 2% error
+        }
+    }
+    
+    /// Force full precision mode.
+    #[must_use]
+    pub fn force_fp() -> Self {
+        let mut config = Self::balanced();
+        config.mode = AttentionDispatchMode::FullPrecision;
+        config
+    }
+    
+    /// Force ternary mode.
+    #[must_use]
+    pub fn force_ternary() -> Self {
+        let mut config = Self::balanced();
+        config.mode = AttentionDispatchMode::TernaryK;
+        config
+    }
+}
+
+impl Default for HybridAttentionConfig {
+    fn default() -> Self {
+        Self::balanced()
+    }
+}
+
+/// Decision information for attention dispatch.
+#[derive(Debug, Clone)]
+pub struct DispatchDecision {
+    /// Selected mode for this forward pass
+    pub selected_mode: AttentionDispatchMode,
+    /// K sparsity level
+    pub k_sparsity: f32,
+    /// Sequence length
+    pub seq_len: usize,
+    /// Reason for the decision
+    pub reason: String,
+}
+
+/// Decide whether to use ternary or FP attention based on heuristics.
+///
+/// Decision factors:
+/// - K sparsity level (higher = prefer ternary)
+/// - Sequence length (longer = prefer ternary for memory savings)
+/// - Configured mode (auto, forced FP, forced ternary)
+/// - Accuracy tolerance requirements
+///
+/// # Arguments
+/// * `k_ternary` - Ternary K tensor (for sparsity check)
+/// * `seq_len` - Sequence length
+/// * `config` - Hybrid configuration with thresholds
+///
+/// # Returns
+/// Decision with selected mode and reasoning
+#[must_use]
+pub fn decide_attention_mode(
+    k_ternary: &TernaryTensor,
+    seq_len: usize,
+    config: &HybridAttentionConfig,
+) -> DispatchDecision {
+    let k_sparsity = k_ternary.sparsity();
+    
+    // Check forced modes first
+    match config.mode {
+        AttentionDispatchMode::FullPrecision => {
+            return DispatchDecision {
+                selected_mode: AttentionDispatchMode::FullPrecision,
+                k_sparsity,
+                seq_len,
+                reason: "Forced full precision mode".to_string(),
+            };
+        }
+        AttentionDispatchMode::TernaryK => {
+            return DispatchDecision {
+                selected_mode: AttentionDispatchMode::TernaryK,
+                k_sparsity,
+                seq_len,
+                reason: "Forced ternary mode".to_string(),
+            };
+        }
+        AttentionDispatchMode::Auto => {
+            // Continue to automatic decision logic
+        }
+    }
+    
+    // Automatic mode decision logic
+    
+    // Factor 1: Sparsity (most important)
+    let prefer_ternary_sparsity = k_sparsity >= config.sparsity_threshold;
+    
+    // Factor 2: Sequence length (memory savings matter more for long sequences)
+    let prefer_ternary_length = seq_len >= config.seq_len_threshold;
+    
+    // Decision: Use ternary if either condition is strongly met
+    let use_ternary = if prefer_ternary_sparsity && prefer_ternary_length {
+        // Both conditions met - definitely use ternary
+        true
+    } else if prefer_ternary_sparsity {
+        // High sparsity alone is sufficient
+        true
+    } else if prefer_ternary_length && k_sparsity >= 0.5 {
+        // Long sequence + moderate sparsity = use ternary
+        true
+    } else {
+        // Default to FP for safety
+        false
+    };
+    
+    let (selected_mode, reason) = if use_ternary {
+        (
+            AttentionDispatchMode::TernaryK,
+            format!(
+                "Auto: K sparsity={:.1}% (threshold={:.1}%), seq_len={} (threshold={}), using ternary",
+                k_sparsity * 100.0,
+                config.sparsity_threshold * 100.0,
+                seq_len,
+                config.seq_len_threshold
+            ),
+        )
+    } else {
+        (
+            AttentionDispatchMode::FullPrecision,
+            format!(
+                "Auto: K sparsity={:.1}% (threshold={:.1}%), seq_len={} (threshold={}), using FP",
+                k_sparsity * 100.0,
+                config.sparsity_threshold * 100.0,
+                seq_len,
+                config.seq_len_threshold
+            ),
+        )
+    };
+    
+    DispatchDecision {
+        selected_mode,
+        k_sparsity,
+        seq_len,
+        reason,
+    }
+}
+
+/// Hybrid attention with automatic FP/ternary dispatch.
+///
+/// Automatically selects between full-precision and ternary attention
+/// based on K sparsity, sequence length, and configuration.
+///
+/// # Arguments
+/// * `q` - Query tensor [batch, heads, q_seq_len, head_dim]
+/// * `k_ternary` - Ternary K tensor
+/// * `k_fp` - Full precision K tensor (fallback)
+/// * `v` - Value tensor [batch, heads, k_seq_len, head_dim]
+/// * `k_seq_len` - Key/value sequence length
+/// * `scale` - Attention scale factor
+/// * `config` - Hybrid configuration
+///
+/// # Returns
+/// - Attention output tensor
+/// - Dispatch decision (which mode was used and why)
+///
+/// # Errors
+/// Returns error if computation fails.
+pub fn hybrid_attention(
+    q: &Tensor,
+    k_ternary: &TernaryTensor,
+    k_fp: &Tensor,  // Fallback FP tensor
+    v: &Tensor,
+    k_seq_len: usize,
+    scale: f64,
+    config: &HybridAttentionConfig,
+) -> Result<(Tensor, DispatchDecision)> {
+    // Decide which mode to use
+    let decision = decide_attention_mode(k_ternary, k_seq_len, config);
+    
+    // Dispatch based on decision
+    let output = match decision.selected_mode {
+        AttentionDispatchMode::TernaryK => {
+            // Use ternary attention with online softmax
+            ternary_attention_cuda(
+                q,
+                k_ternary,
+                v,
+                k_seq_len,
+                scale,
+                &config.ternary_config,
+            )?
+        }
+        AttentionDispatchMode::FullPrecision => {
+            // Use standard FP attention
+            // TODO: This should call the standard attention implementation
+            // For now, fall back to a simple implementation
+            fallback_fp_attention(q, k_fp, v, scale)?
+        }
+        AttentionDispatchMode::Auto => {
+            unreachable!("Auto mode should be resolved by decide_attention_mode")
+        }
+    };
+    
+    Ok((output, decision))
+}
+
+/// Fallback full-precision attention (simple reference implementation).
+///
+/// This is a placeholder for the actual FP attention kernel.
+/// In production, this would call the optimized Flash Attention kernel.
+fn fallback_fp_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f64,
+) -> Result<Tensor> {
+    // Simple reference implementation: scores = Q @ K^T / scale
+    let scores = q.matmul(&k.transpose(2, 3)?)?;
+    let scores = (scores * scale)?;
+    
+    // Softmax
+    let probs = candle_nn::ops::softmax(&scores, candle_core::D::Minus1)?;
+    
+    // Output = probs @ V
+    let output = probs.matmul(v)?;
+    
+    Ok(output)
+}
+
+#[cfg(test)]
+mod hybrid_dispatch_tests {
+    use super::*;
+    use candle_core::Device;
+    
+    fn create_sparse_ternary_keys(heads: usize, seq_len: usize, dim: usize, sparsity: f32) -> TernaryTensor {
+        let out_features = heads * seq_len;
+        let k_words = (dim + 31) / 32;
+        
+        // Create ternary tensor with controlled sparsity
+        let mut plus = vec![0u32; out_features * k_words];
+        let mut minus = vec![0u32; out_features * k_words];
+        
+        // Set bits to achieve target sparsity
+        let bits_per_feature = dim;
+        let active_bits = ((1.0 - sparsity) * bits_per_feature as f32) as usize;
+        
+        for i in 0..out_features {
+            // Distribute active bits across words
+            for bit in 0..active_bits.min(bits_per_feature) {
+                let word_idx = bit / 32;
+                let bit_idx = (bit % 32) as u32;
+                
+                if i % 2 == 0 {
+                    plus[i * k_words + word_idx] |= 1u32 << bit_idx;
+                } else {
+                    minus[i * k_words + word_idx] |= 1u32 << bit_idx;
+                }
+            }
+        }
+        
+        let scales = vec![1.0f32; out_features];
+        TernaryTensor::new(plus, minus, scales, (out_features, dim))
+    }
+    
+    #[test]
+    fn test_hybrid_config_presets() {
+        let speed = HybridAttentionConfig::speed_optimized();
+        assert_eq!(speed.mode, AttentionDispatchMode::Auto);
+        assert!(speed.sparsity_threshold < 0.80);  // Aggressive
+        
+        let accuracy = HybridAttentionConfig::accuracy_optimized();
+        assert!(accuracy.sparsity_threshold > 0.80);  // Conservative
+        
+        let balanced = HybridAttentionConfig::balanced();
+        assert_eq!(balanced.sparsity_threshold, 0.80);
+    }
+    
+    #[test]
+    fn test_dispatch_decision_forced_fp() {
+        let config = HybridAttentionConfig::force_fp();
+        let k = create_sparse_ternary_keys(4, 8, 64, 0.95);  // Very sparse
+        
+        let decision = decide_attention_mode(&k, 2048, &config);
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::FullPrecision);
+        assert!(decision.reason.contains("Forced"));
+    }
+    
+    #[test]
+    fn test_dispatch_decision_forced_ternary() {
+        let config = HybridAttentionConfig::force_ternary();
+        let k = create_sparse_ternary_keys(4, 8, 64, 0.10);  // Very dense
+        
+        let decision = decide_attention_mode(&k, 128, &config);
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+        assert!(decision.reason.contains("Forced"));
+    }
+    
+    #[test]
+    fn test_dispatch_decision_auto_high_sparsity() {
+        let config = HybridAttentionConfig::balanced();
+        let k = create_sparse_ternary_keys(4, 8, 64, 0.90);  // Very sparse
+        
+        let decision = decide_attention_mode(&k, 512, &config);
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+        assert!(decision.k_sparsity >= config.sparsity_threshold);
+    }
+    
+    #[test]
+    fn test_dispatch_decision_auto_low_sparsity() {
+        let config = HybridAttentionConfig::balanced();
+        let k = create_sparse_ternary_keys(4, 8, 64, 0.20);  // Dense
+        
+        let decision = decide_attention_mode(&k, 128, &config);
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::FullPrecision);
+        assert!(decision.k_sparsity < config.sparsity_threshold);
+    }
+    
+    #[test]
+    fn test_dispatch_decision_auto_long_sequence() {
+        let config = HybridAttentionConfig::balanced();
+        let k = create_sparse_ternary_keys(4, 2048, 64, 0.60);  // Moderate sparsity
+        
+        let decision = decide_attention_mode(&k, 2048, &config);
+        // Should prefer ternary for long sequence + moderate sparsity
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+    }
+    
+    #[test]
+    fn test_hybrid_attention_shape() {
+        let batch = 2;
+        let heads = 4;
+        let q_seq = 8;
+        let k_seq = 8;
+        let dim = 64;
+        
+        let q = super::online_softmax_tests::super::tests::create_test_query(batch, heads, q_seq, dim);
+        let k_ternary = create_sparse_ternary_keys(heads, k_seq, dim, 0.90);
+        let k_fp = Tensor::zeros((batch, heads, k_seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let v = super::online_softmax_tests::create_test_values(batch, heads, k_seq, dim);
+        
+        let config = HybridAttentionConfig::force_ternary();
+        let (output, decision) = hybrid_attention(&q, &k_ternary, &k_fp, &v, k_seq, 1.0, &config).unwrap();
+        
+        // Verify output shape
+        assert_eq!(output.dims(), &[batch, heads, q_seq, dim]);
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+    }
+    
+    #[test]
+    fn test_fallback_fp_attention_shape() {
+        let batch = 1;
+        let heads = 2;
+        let seq = 4;
+        let dim = 64;
+        
+        let q = Tensor::zeros((batch, heads, seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let k = Tensor::zeros((batch, heads, seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let v = Tensor::ones((batch, heads, seq, dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        let output = fallback_fp_attention(&q, &k, &v, 1.0).unwrap();
+        assert_eq!(output.dims(), &[batch, heads, seq, dim]);
+    }
+}

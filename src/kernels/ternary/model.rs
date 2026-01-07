@@ -17,26 +17,33 @@ pub struct QuantizationStats {
     pub layers_quantized: usize,
     /// Number of layers skipped (non-linear or below threshold)
     pub layers_skipped: usize,
-    /// Total parameters in original model
+    /// Total parameters in original model (computed by `finalize_stats()`)
     pub original_params: usize,
     /// Total parameters in quantized model (as ternary)
     pub quantized_params: usize,
-    /// Original model size in bytes (FP32)
+    /// Original model size in bytes (FP32, computed by `finalize_stats()`)
     pub original_bytes: usize,
-    /// Quantized model size in bytes
+    /// Total model size in bytes (includes both quantized and preserved layers)
     pub quantized_bytes: usize,
     /// Average sparsity across quantized layers
     pub average_sparsity: f32,
     /// Per-layer sparsity
     pub layer_sparsities: HashMap<String, f32>,
+    /// Flag to track if finalize_stats has been called (for idempotency)
+    finalized: bool,
 }
 
 impl QuantizationStats {
     /// Compression ratio (original / quantized).
+    ///
+    /// # Returns
+    ///
+    /// Returns 1.0 (no compression) if `quantized_bytes` is zero, indicating
+    /// no quantization occurred. Otherwise returns original_bytes / quantized_bytes.
     #[must_use]
     pub fn compression_ratio(&self) -> f32 {
         if self.quantized_bytes == 0 {
-            0.0
+            1.0 // No compression if nothing was quantized
         } else {
             self.original_bytes as f32 / self.quantized_bytes as f32
         }
@@ -106,8 +113,8 @@ impl Default for ModelQuantizationConfig {
 /// * `bias` - Optional bias tensor [out_features]
 /// * `name` - Layer name for logging
 /// * `config` - Quantization configuration
-/// * `_device` - Target device (currently unused; weights remain on their original device.
-///               Kept for future multi-device support and API stability)
+/// * `_device` - Target device (currently unused; weights remain on their original device).
+///               Kept for future multi-device support and API stability.
 ///
 /// # Returns
 ///
@@ -122,7 +129,8 @@ pub fn quantize_linear_layer(
     let dims = weight.dims();
     if dims.len() != 2 {
         return Err(UnslothError::ShapeMismatch {
-            expected: vec![0, 0], // 2D
+            // Expected a 2D tensor (rank 2) for [out_features, in_features]
+            expected: vec![2],
             actual: dims.to_vec(),
         });
     }
@@ -223,7 +231,15 @@ impl TernaryModel {
     }
 
     /// Finalize statistics after all layers added.
+    ///
+    /// This method is idempotent - calling it multiple times has no additional effect.
+    /// It computes the total original parameters and bytes from quantized and preserved layers.
     pub fn finalize_stats(&mut self) {
+        // Guard against multiple calls
+        if self.stats.finalized {
+            return;
+        }
+        
         // Total original params = quantized + preserved
         self.stats.original_params += self.stats.quantized_params;
         // Total original bytes (FP32) = all params * 4 bytes
@@ -233,6 +249,8 @@ impl TernaryModel {
             self.stats.average_sparsity = self.stats.layer_sparsities.values().sum::<f32>()
                 / self.stats.layer_sparsities.len() as f32;
         }
+        
+        self.stats.finalized = true;
     }
 
     /// Get a quantized layer by name.
@@ -264,18 +282,18 @@ pub fn quantize_weights_collection(
     config: ModelQuantizationConfig,
     device: &Device,
 ) -> Result<TernaryModel> {
-    let mut model = TernaryModel::new(config.clone());
+    let mut model = TernaryModel::new(config);
 
     for (name, weight) in weights {
         let bias = biases.get(&name);
 
-        match quantize_linear_layer(&weight, bias, &name, &config, device)? {
+        match quantize_linear_layer(&weight, bias, &name, &model.config, device)? {
             Some(quantized) => {
                 model.add_layer(quantized.name, quantized.layer, quantized.sparsity);
             }
             None => {
-                // Preserve the original weight
-                model.add_preserved(name.clone(), weight);
+                // Preserve the original weight with consistent naming: {name}.weight
+                model.add_preserved(format!("{}.weight", name), weight);
                 if let Some(b) = bias {
                     model.add_preserved(format!("{}.bias", name), b.clone());
                 }
@@ -285,7 +303,7 @@ pub fn quantize_weights_collection(
 
     model.finalize_stats();
 
-    if config.verbose {
+    if model.config.verbose {
         model.stats.print_summary();
     }
 
@@ -436,5 +454,48 @@ mod tests {
         assert_eq!(model.stats.original_bytes, total_params * 4); // FP32
 
         Ok(())
+    }
+
+    #[test]
+    fn test_finalize_stats_idempotent() -> Result<()> {
+        let device = Device::Cpu;
+        let config = ModelQuantizationConfig {
+            min_layer_size: 0,
+            skip_patterns: vec![],
+            verbose: false,
+            ..Default::default()
+        };
+
+        let mut weights = HashMap::new();
+        weights.insert(
+            "layer1".to_string(),
+            Tensor::randn(0.0f32, 1.0, (64, 128), &device)?,
+        );
+
+        let mut model = quantize_weights_collection(weights, HashMap::new(), config, &device)?;
+
+        // Store initial values
+        let initial_original_params = model.stats.original_params;
+        let initial_original_bytes = model.stats.original_bytes;
+
+        // Call finalize_stats again
+        model.finalize_stats();
+
+        // Values should not change (idempotent)
+        assert_eq!(model.stats.original_params, initial_original_params);
+        assert_eq!(model.stats.original_bytes, initial_original_bytes);
+
+        // Call a third time to verify
+        model.finalize_stats();
+        assert_eq!(model.stats.original_params, initial_original_params);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compression_ratio_no_quantization() {
+        let stats = QuantizationStats::default();
+        // No quantization - should return 1.0 (no compression)
+        assert!((stats.compression_ratio() - 1.0).abs() < 0.001);
     }
 }

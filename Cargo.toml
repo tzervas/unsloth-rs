@@ -2,7 +2,7 @@
 name = "unsloth-rs"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.92"
 license = "MIT"
 authors = ["Tyler Zervas <maintainers@vectorweight.com>"]
 description = "Rust implementations of transformer building blocks for LLM inference"
@@ -11,8 +11,8 @@ keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
 categories = ["science", "mathematics"]
 
 [dependencies]
-candle-core = "0.9"
-candle-nn = "0.9"
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
 thiserror = "2.0"
 tracing = "0.1"
 bytemuck = { version = "1.21", features = ["derive"] }

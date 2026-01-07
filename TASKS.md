@@ -11,20 +11,21 @@ This document provides a prioritized, actionable task list for implementing the 
 ## 🚧 Currently In Progress
 
 ### Task 3: Implement Flash Attention CubeCL Kernel
-**Branch**: `feature/flash-attention-cubecl`  
+**Branch**: `experimental` (merged from PRs #14 and #15)  
 **Estimated Time**: 7-14 weeks (revised from 7-10 days based on research)  
-**Status**: 🚧 Phase 1 - In Progress
+**Status**: ✅ Phase 1 Complete | 🚧 Phase 2 In Progress (Hardware-Blocked)
 
 **Current Progress (2026-01-06):**
 - [x] CubeCL v0.8.1 API research completed (`docs/cubecl-context.md`, `docs/cubecl-guide.md`)
 - [x] Module structure created (`src/kernels/cubecl/`)
 - [x] Candle ↔ CubeCL tensor interop (`interop.rs`)
 - [x] Kernel configuration (`config.rs`)
-- [x] Kernel scaffolding (`kernel.rs`)
-- [ ] Implement actual CubeCL kernel launch
-- [ ] Add numerical equivalence tests
-- [ ] Profile on RTX 5080
-- [ ] Validate on RTX 3090 Ti
+- [x] Kernel implementation (`kernel.rs`) - Both basic and improved tiled kernels
+- [x] CubeCL kernel launch implementation with fallback logic
+- [x] Causal masking support (kernel + fallback)
+- [x] Numerical equivalence tests (65 tests passing, MAE < 1e-5)
+- [ ] Profile on RTX 5080 - **BLOCKED: Requires CUDA hardware access**
+- [ ] Validate on RTX 3090 Ti - **BLOCKED: Requires CUDA hardware access**
 
 **Phase Breakdown:**
 

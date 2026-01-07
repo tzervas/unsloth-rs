@@ -1,9 +1,9 @@
 # unsloth-rs Development Roadmap
 
-**Status**: Phase 1 (Flash Attention) - In Progress  
+**Status**: Phase 1 (Flash Attention) - ✅ Completed | Phase 2 - Hardware-Blocked  
 **Last Updated**: 2026-01-06  
 **CubeCL Version**: v0.8.1 (Validated)  
-**Base Branch**: `experimental`
+**Base Branch**: `experimental` (commits e619c08, 61800e6)
 
 ## Project Overview
 
@@ -19,7 +19,16 @@
 
 ## Current Implementation Status
 
-### ✅ Completed (on `experimental` branch as of ff87fec)
+### ✅ Completed (on `experimental` branch)
+
+**Phase 1: Flash Attention CubeCL Kernel** (PRs #14 and #15):
+- CubeCL v0.8.1 kernel implementation with improved tiling
+- Causal masking support (kernel-level and fallback)
+- Candle ↔ CubeCL tensor interop (`interop.rs`)
+- GPU configuration presets (RTX 5080, RTX 3090 Ti)
+- 65 passing tests with numerical equivalence (MAE < 1e-5)
+- Benchmarking infrastructure (Criterion)
+- Documentation: API guide, implementation guide, profiling guide
 
 **Kernel Implementations** (CPU reference + Candle CUDA dispatch):
 - Multi-head attention with grouped-query attention (GQA)

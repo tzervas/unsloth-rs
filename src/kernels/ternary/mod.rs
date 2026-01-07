@@ -55,6 +55,7 @@ pub mod linear;
 pub mod matmul;
 #[cfg(feature = "cuda")]
 pub mod matmul_cubecl;
+pub mod model;
 pub mod quantize;
 pub mod types;
 
@@ -65,5 +66,9 @@ pub use attention::{
 pub use config::TernaryConfig;
 pub use linear::TernaryLinear;
 pub use matmul::{ternary_matmul, ternary_matmul_cpu};
+pub use model::{
+    quantize_linear_layer, quantize_weights_collection, ModelQuantizationConfig, QuantizationStats,
+    TernaryModel,
+};
 pub use quantize::{quantize_tensor, CalibrationMethod};
 pub use types::{SparsityMetadata, TernaryPlanes, TernaryTensor};

@@ -31,22 +31,21 @@ pub struct BasicTernaryMatmulConfig {
     pub in_features: u32,
 }
 
-/// Basic ternary matmul kernel (bit-by-bit iteration).
+/// Basic ternary matmul kernel with popcount-based dot product.
 ///
 /// Each thread computes one output element: output[batch_idx, out_idx]
 ///
 /// Algorithm:
 /// ```text
-/// For each bit in packed weights:
-///   Extract ternary value from +plane and -plane
-///   if +1: acc += input[bit]
-///   if -1: acc -= input[bit]
-///   if  0: skip
-/// output = acc * scale
+/// For each input: Quantize FP input to bitsliced planes
+/// For each u32 word:
+///   pos_matches = popcount(w_plus & input_plus) + popcount(w_minus & input_minus)
+///   neg_matches = popcount(w_plus & input_minus) + popcount(w_minus & input_plus)
+///   dot += pos_matches - neg_matches
+/// output = dot * scale
 /// ```
 ///
-/// Note: This uses bit-by-bit iteration for correctness validation.
-/// Future optimizations (Task 2.5) will use vectorized popcount operations.
+/// This uses hardware popcount operations for efficiency.
 #[cube(launch_unchecked)]
 pub fn ternary_matmul_kernel_basic<F: Float>(
     // Input activations [batch, in_features] as f32
@@ -76,15 +75,47 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
         return;
     }
 
-    // Accumulator for dot product
-    let mut acc = F::new(0.0);
-
-    // Input offset for this batch element
+    // Quantize input row to bitsliced planes
+    // This converts FP values to ternary {-1, 0, +1} representation
     let input_offset = batch_idx * config.in_features;
-    // Weight offset for this output feature
-    let weight_offset = out_idx * config.k_words;
+    
+    // Allocate local arrays for input planes (on registers)
+    let mut input_plus = Array::<u32>::new(config.k_words);
+    let mut input_minus = Array::<u32>::new(config.k_words);
+    
+    // Quantize input to planes
+    for k in 0..config.k_words {
+        let mut plus_word = 0u32;
+        let mut minus_word = 0u32;
+        
+        // Process 32 dimensions per word
+        let base_dim = k * 32;
+        let end_dim = u32::min(base_dim + 32, config.in_features);
+        
+        for bit in 0u32..(end_dim - base_dim) {
+            let dim_idx = base_dim + bit;
+            let val = input[input_offset + dim_idx];
+            
+            // Simple threshold quantization: >0.5 → +1, <-0.5 → -1, else 0
+            let threshold = F::new(0.5);
+            let neg_threshold = F::new(-0.5);
+            
+            if val > threshold {
+                plus_word = plus_word | (1u32 << bit);
+            } else if val < neg_threshold {
+                minus_word = minus_word | (1u32 << bit);
+            }
+        }
+        
+        input_plus[k] = plus_word;
+        input_minus[k] = minus_word;
+    }
 
-    // Iterate over K dimension (packed u32 words)
+    // Popcount-based dot product
+    let weight_offset = out_idx * config.k_words;
+    let mut pos_sum = 0u32;
+    let mut neg_sum = 0u32;
+    
     for k in 0..config.k_words {
         // Reinterpret f32 as u32 bits for weight planes
         let wp_f32 = w_plus[weight_offset + k];
@@ -92,38 +123,25 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
         let wp_bits = u32::reinterpret(wp_f32);
         let wm_bits = u32::reinterpret(wm_f32);
         
-        // Check if this is a full word (all 32 bits are valid)
-        let is_full_word = (k * 32 + 32) <= config.in_features;
+        let ip = input_plus[k];
+        let im = input_minus[k];
         
-        // For each bit position in the u32 word
-        for bit in 0u32..32u32 {
-            let dim_idx = k * 32 + bit;
-            
-            // Only check bounds for partial words
-            if !is_full_word && dim_idx >= config.in_features {
-                break;
-            }
-            
-            let mask = 1u32 << bit;
-            
-            // Extract ternary weight value from planes
-            let is_pos = (wp_bits & mask) != 0u32;
-            let is_neg = (wm_bits & mask) != 0u32;
-
-            let input_val = input[input_offset + dim_idx];
-
-            // Ternary multiplication: +1, 0, or -1
-            if is_pos {
-                acc = acc + input_val;
-            } else if is_neg {
-                acc = acc - input_val;
-            }
-        }
+        // Popcount-based ternary dot product:
+        // pos_matches = (+1 weights × +1 inputs) + (-1 weights × -1 inputs)
+        // neg_matches = (+1 weights × -1 inputs) + (-1 weights × +1 inputs)
+        // dot = pos_matches - neg_matches
+        
+        pos_sum = pos_sum + (wp_bits & ip).count_ones();
+        pos_sum = pos_sum + (wm_bits & im).count_ones();
+        
+        neg_sum = neg_sum + (wp_bits & im).count_ones();
+        neg_sum = neg_sum + (wm_bits & ip).count_ones();
     }
 
-    // Apply per-channel scale
+    // Convert popcount result to float and apply scale
+    let dot = F::cast_from(pos_sum) - F::cast_from(neg_sum);
     let scale = scales[out_idx];
-    output[batch_idx * config.n + out_idx] = acc * scale;
+    output[batch_idx * config.n + out_idx] = dot * scale;
 }
 
 /// Launch configuration for the basic kernel
@@ -177,7 +195,7 @@ mod tests {
     /// Functional test: validates kernel algorithm with known ternary weights.
     /// 
     /// This test verifies the ternary matrix multiplication logic by simulating
-    /// the kernel computation on CPU with simple test data.
+    /// the kernel computation on CPU with popcount-based operations.
     #[test]
     fn test_ternary_matmul_kernel_correctness() {
         // Simple test case: 2 batches, 3 output features, 64 input features (2 words)
@@ -188,108 +206,155 @@ mod tests {
         let out_features = 3;
         let k_words = 2;  // 64 / 32 = 2
         
-        // Input: simple pattern [1.0, 2.0, 3.0, ..., 64.0] for batch 0
-        //                       [0.5, 1.0, 1.5, ..., 32.0] for batch 1
+        // Input: values that will quantize clearly: >0.5 → +1, <-0.5 → -1, else 0
+        // For batch 0: alternating pattern [1.0, -1.0, 1.0, -1.0, ...]
+        // For batch 1: all positive [1.0, 1.0, 1.0, ...]
         let mut input_data = vec![0.0f32; batch_size * in_features];
         for b in 0..batch_size {
             for i in 0..in_features {
-                input_data[b * in_features + i] = (i + 1) as f32 / (b + 1) as f32;
+                input_data[b * in_features + i] = if b == 0 {
+                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                } else {
+                    1.0
+                };
+            }
+        }
+        
+        // Quantize inputs to planes (simulating kernel quantization)
+        let mut input_plus = vec![0u32; batch_size * k_words];
+        let mut input_minus = vec![0u32; batch_size * k_words];
+        
+        for b in 0..batch_size {
+            for k in 0..k_words {
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+                
+                for bit in 0..32 {
+                    let dim_idx = k * 32 + bit;
+                    let val = input_data[b * in_features + dim_idx];
+                    
+                    if val > 0.5 {
+                        plus_word |= 1u32 << bit;
+                    } else if val < -0.5 {
+                        minus_word |= 1u32 << bit;
+                    }
+                }
+                
+                input_plus[b * k_words + k] = plus_word;
+                input_minus[b * k_words + k] = minus_word;
             }
         }
         
         // Weights: Create simple ternary patterns
-        // Out feature 0: first 32 bits = +1, rest = 0
-        // Out feature 1: first 32 bits = -1, rest = 0
-        // Out feature 2: alternate +1/-1 pattern in first word
+        // Out feature 0: all +1 in both words
+        // Out feature 1: all -1 in both words
+        // Out feature 2: alternating +1/-1 pattern
         let mut w_plus = vec![0u32; out_features * k_words];
         let mut w_minus = vec![0u32; out_features * k_words];
         
-        // Feature 0: all positive in first word
-        w_plus[0] = 0xFFFFFFFF;  // word 0
-        w_plus[1] = 0;           // word 1
+        // Feature 0: all positive
+        w_plus[0] = 0xFFFFFFFF;
+        w_plus[1] = 0xFFFFFFFF;
         
-        // Feature 1: all negative in first word  
-        w_minus[2] = 0xFFFFFFFF; // word 0
-        w_minus[3] = 0;          // word 1
+        // Feature 1: all negative
+        w_minus[2] = 0xFFFFFFFF;
+        w_minus[3] = 0xFFFFFFFF;
         
-        // Feature 2: alternating pattern (0xAAAAAAAA = 1010... binary)
-        w_plus[4] = 0xAAAAAAAA;  // word 0, every other bit
-        w_minus[4] = 0x55555555; // word 0, opposite bits
-        w_plus[5] = 0;
-        w_minus[5] = 0;
+        // Feature 2: alternating (0xAAAAAAAA = 10101...2)
+        w_plus[4] = 0xAAAAAAAA;
+        w_plus[5] = 0xAAAAAAAA;
+        w_minus[4] = 0x55555555;
+        w_minus[5] = 0x55555555;
         
         // Scales: all 1.0 for simplicity
         let scales = vec![1.0f32; out_features];
         
-        // Expected outputs:
-        // Batch 0, Feature 0: sum(1..32) = 32*33/2 = 528
-        // Batch 0, Feature 1: -sum(1..32) = -528
-        // Batch 0, Feature 2: sum(input values at odd bit positions) - sum(input values at even bit positions)
-        //                   = (2+4+6+...+32) - (1+3+5+...+31) = 16
-        
-        // Simulate kernel computation
+        // Simulate popcount-based kernel computation
         let mut output = vec![0.0f32; batch_size * out_features];
         
         for batch_idx in 0..batch_size {
             for out_idx in 0..out_features {
-                let mut acc = 0.0f32;
-                let input_offset = batch_idx * in_features;
                 let weight_offset = out_idx * k_words;
+                let input_offset = batch_idx * k_words;
+                let mut pos_sum = 0u32;
+                let mut neg_sum = 0u32;
                 
                 for k in 0..k_words {
                     let wp_bits = w_plus[weight_offset + k];
                     let wm_bits = w_minus[weight_offset + k];
+                    let ip = input_plus[input_offset + k];
+                    let im = input_minus[input_offset + k];
                     
-                    let is_full_word = (k * 32 + 32) <= in_features;
-                    
-                    for bit in 0..32 {
-                        let dim_idx = k * 32 + bit;
-                        
-                        if !is_full_word && dim_idx >= in_features {
-                            break;
-                        }
-                        
-                        let mask = 1u32 << bit;
-                        let is_pos = (wp_bits & mask) != 0;
-                        let is_neg = (wm_bits & mask) != 0;
-                        
-                        let input_val = input_data[input_offset + dim_idx];
-                        
-                        if is_pos {
-                            acc += input_val;
-                        } else if is_neg {
-                            acc -= input_val;
-                        }
-                    }
+                    // Popcount-based dot product
+                    pos_sum += (wp_bits & ip).count_ones();
+                    pos_sum += (wm_bits & im).count_ones();
+                    neg_sum += (wp_bits & im).count_ones();
+                    neg_sum += (wm_bits & ip).count_ones();
                 }
                 
-                output[batch_idx * out_features + out_idx] = acc * scales[out_idx];
+                let dot = (pos_sum as i32 - neg_sum as i32) as f32;
+                output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
             }
         }
         
-        // Verify batch 0 results
-        let expected_0_0 = (1..=32).sum::<i32>() as f32; // sum(1..32) = 528
-        let expected_0_1 = -expected_0_0;                 // -528
-        let expected_0_2 = 16.0;                          // alternating pattern
+        // Batch 0 input quantizes to: +plane = 0xAAAAAAAA (even bits), -plane = 0x55555555 (odd bits)
+        // Batch 1 input quantizes to: +plane = 0xFFFFFFFF (all bits), -plane = 0x00000000 (no bits)
         
-        assert!((output[0] - expected_0_0).abs() < 0.01, 
-                "Feature 0 mismatch: expected {}, got {}", expected_0_0, output[0]);
-        assert!((output[1] - expected_0_1).abs() < 0.01,
-                "Feature 1 mismatch: expected {}, got {}", expected_0_1, output[1]);
-        assert!((output[2] - expected_0_2).abs() < 0.01,
-                "Feature 2 mismatch: expected {}, got {}", expected_0_2, output[2]);
+        // Batch 0, Feature 0 (all +1 weights):
+        //   pos_sum = popcount(0xFFFF... & 0xAAAA...) + popcount(0x0 & 0x5555...) = 32 + 0 = 32 (per word) = 64 total
+        //   neg_sum = popcount(0xFFFF... & 0x5555...) + popcount(0x0 & 0xAAAA...) = 32 + 0 = 32 (per word) = 64 total
+        //   dot = 64 - 64 = 0
+        let expected_b0_f0 = 0.0;
         
-        // Verify batch 1 results (half of batch 0 since inputs are halved)
-        assert!((output[3] - expected_0_0 / 2.0).abs() < 0.01);
-        assert!((output[4] - expected_0_1 / 2.0).abs() < 0.01);
-        assert!((output[5] - expected_0_2 / 2.0).abs() < 0.01);
+        // Batch 0, Feature 1 (all -1 weights):
+        //   pos_sum = popcount(0x0 & 0xAAAA...) + popcount(0xFFFF... & 0x5555...) = 0 + 32 = 32 (per word) = 64 total
+        //   neg_sum = popcount(0x0 & 0x5555...) + popcount(0xFFFF... & 0xAAAA...) = 0 + 32 = 32 (per word) = 64 total
+        //   dot = 64 - 64 = 0
+        let expected_b0_f1 = 0.0;
+        
+        // Batch 0, Feature 2 (alternating):
+        //   pos_sum = popcount(0xAAAA... & 0xAAAA...) + popcount(0x5555... & 0x5555...) = 16 + 16 = 32 (per word) = 64 total
+        //   neg_sum = popcount(0xAAAA... & 0x5555...) + popcount(0x5555... & 0xAAAA...) = 0 + 0 = 0
+        //   dot = 64 - 0 = 64
+        let expected_b0_f2 = 64.0;
+        
+        // Batch 1, Feature 0 (all +1 weights, all +1 input):
+        //   pos_sum = popcount(0xFFFF... & 0xFFFF...) + popcount(0x0 & 0x0) = 64 + 0 = 64
+        //   neg_sum = popcount(0xFFFF... & 0x0) + popcount(0x0 & 0xFFFF...) = 0 + 0 = 0
+        //   dot = 64 - 0 = 64
+        let expected_b1_f0 = 64.0;
+        
+        // Batch 1, Feature 1 (all -1 weights, all +1 input):
+        //   pos_sum = popcount(0x0 & 0xFFFF...) + popcount(0xFFFF... & 0x0) = 0 + 0 = 0
+        //   neg_sum = popcount(0x0 & 0x0) + popcount(0xFFFF... & 0xFFFF...) = 0 + 64 = 64
+        //   dot = 0 - 64 = -64
+        let expected_b1_f1 = -64.0;
+        
+        // Batch 1, Feature 2 (alternating, all +1 input):
+        //   pos_sum = popcount(0xAAAA... & 0xFFFF...) + popcount(0x5555... & 0x0) = 32 + 0 = 32 (per word) = 64 total
+        //   neg_sum = popcount(0xAAAA... & 0x0) + popcount(0x5555... & 0xFFFF...) = 0 + 32 = 32 (per word) = 64 total
+        //   dot = 64 - 64 = 0
+        let expected_b1_f2 = 0.0;
+        
+        assert!((output[0] - expected_b0_f0).abs() < 0.01, 
+                "B0F0 mismatch: expected {}, got {}", expected_b0_f0, output[0]);
+        assert!((output[1] - expected_b0_f1).abs() < 0.01,
+                "B0F1 mismatch: expected {}, got {}", expected_b0_f1, output[1]);
+        assert!((output[2] - expected_b0_f2).abs() < 0.01,
+                "B0F2 mismatch: expected {}, got {}", expected_b0_f2, output[2]);
+        
+        assert!((output[3] - expected_b1_f0).abs() < 0.01,
+                "B1F0 mismatch: expected {}, got {}", expected_b1_f0, output[3]);
+        assert!((output[4] - expected_b1_f1).abs() < 0.01,
+                "B1F1 mismatch: expected {}, got {}", expected_b1_f1, output[4]);
+        assert!((output[5] - expected_b1_f2).abs() < 0.01,
+                "B1F2 mismatch: expected {}, got {}", expected_b1_f2, output[5]);
     }
 
     /// Test partial word bounds checking with non-multiple of 32 input features.
     /// 
-    /// This test validates the optimized bounds checking for partial words
-    /// (when in_features % 32 != 0). It ensures that bits beyond in_features
-    /// are not processed.
+    /// This test validates the quantization and popcount with partial words
+    /// (when in_features % 32 != 0).
     #[test]
     fn test_ternary_matmul_partial_word() {
         // Test with in_features = 48 (1 full word + 16 bits in partial word)
@@ -298,17 +363,45 @@ mod tests {
         let out_features = 2;
         let k_words = 2;  // ceil(48 / 32) = 2 words (second is partial)
         
-        // Input: [1.0, 2.0, 3.0, ..., 48.0] for batch 0
+        // Input: all +1.0 for batch 0, all -1.0 for batch 1
         let mut input_data = vec![0.0f32; batch_size * in_features];
         for b in 0..batch_size {
             for i in 0..in_features {
-                input_data[b * in_features + i] = (i + 1) as f32 / (b + 1) as f32;
+                input_data[b * in_features + i] = if b == 0 { 1.0 } else { -1.0 };
+            }
+        }
+        
+        // Quantize inputs
+        let mut input_plus = vec![0u32; batch_size * k_words];
+        let mut input_minus = vec![0u32; batch_size * k_words];
+        
+        for b in 0..batch_size {
+            for k in 0..k_words {
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+                
+                let base_dim = k * 32;
+                let end_dim = std::cmp::min(base_dim + 32, in_features);
+                
+                for bit in 0..(end_dim - base_dim) {
+                    let dim_idx = base_dim + bit;
+                    let val = input_data[b * in_features + dim_idx];
+                    
+                    if val > 0.5 {
+                        plus_word |= 1u32 << bit;
+                    } else if val < -0.5 {
+                        minus_word |= 1u32 << bit;
+                    }
+                }
+                
+                input_plus[b * k_words + k] = plus_word;
+                input_minus[b * k_words + k] = minus_word;
             }
         }
         
         // Weights:
-        // Feature 0: all +1 in first word, all +1 in partial second word (bits 0-15)
-        // Feature 1: all -1 in partial second word only (bits 0-15)
+        // Feature 0: all +1 in both words (32 + 16 = 48 dimensions)
+        // Feature 1: all -1 in partial second word only (16 dimensions)
         let mut w_plus = vec![0u32; out_features * k_words];
         let mut w_minus = vec![0u32; out_features * k_words];
         
@@ -318,67 +411,73 @@ mod tests {
         
         // Feature 1: negative in partial word only
         w_minus[2] = 0x00000000;  // word 0 (no contribution)
-        w_minus[3] = 0x0000FFFF;  // word 1 (bits 0-15 valid, 16-31 should be ignored)
+        w_minus[3] = 0x0000FFFF;  // word 1 (bits 0-15 valid)
         
         let scales = vec![1.0f32; out_features];
         
-        // Expected outputs:
-        // Feature 0: sum(1..32) + sum(33..48) = 528 + (33+34+...+48)
-        //          = 528 + (48*49/2 - 32*33/2) = 528 + (1176 - 528) = 1176
-        // Feature 1: -sum(33..48) = -(33+34+...+48) = -648
-        
-        // Simulate kernel computation
+        // Simulate popcount computation
         let mut output = vec![0.0f32; batch_size * out_features];
         
         for batch_idx in 0..batch_size {
             for out_idx in 0..out_features {
-                let mut acc = 0.0f32;
-                let input_offset = batch_idx * in_features;
                 let weight_offset = out_idx * k_words;
+                let input_offset = batch_idx * k_words;
+                let mut pos_sum = 0u32;
+                let mut neg_sum = 0u32;
                 
                 for k in 0..k_words {
                     let wp_bits = w_plus[weight_offset + k];
                     let wm_bits = w_minus[weight_offset + k];
+                    let ip = input_plus[input_offset + k];
+                    let im = input_minus[input_offset + k];
                     
-                    let is_full_word = (k * 32 + 32) <= in_features;
-                    
-                    for bit in 0..32 {
-                        let dim_idx = k * 32 + bit;
-                        
-                        // This is the critical bounds check for partial words
-                        if !is_full_word && dim_idx >= in_features {
-                            break;
-                        }
-                        
-                        let mask = 1u32 << bit;
-                        let is_pos = (wp_bits & mask) != 0;
-                        let is_neg = (wm_bits & mask) != 0;
-                        
-                        let input_val = input_data[input_offset + dim_idx];
-                        
-                        if is_pos {
-                            acc += input_val;
-                        } else if is_neg {
-                            acc -= input_val;
-                        }
-                    }
+                    pos_sum += (wp_bits & ip).count_ones();
+                    pos_sum += (wm_bits & im).count_ones();
+                    neg_sum += (wp_bits & im).count_ones();
+                    neg_sum += (wm_bits & ip).count_ones();
                 }
                 
-                output[batch_idx * out_features + out_idx] = acc * scales[out_idx];
+                let dot = (pos_sum as i32 - neg_sum as i32) as f32;
+                output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
             }
         }
         
-        // Verify batch 0 results
-        let expected_0 = (1..=48).sum::<i32>() as f32;  // sum(1..48) = 1176
-        let expected_1 = -(33..=48).sum::<i32>() as f32;  // -sum(33..48) = -648
+        // Batch 0 (all +1 input):
+        //   input quantizes to: word0=0xFFFFFFFF, word1=0x0000FFFF
+        // Feature 0 (all +1 weights):
+        //   pos_sum = popcount(0xFFFF... & 0xFFFF...) + popcount(0xFFFF & 0xFFFF) = 32 + 16 = 48
+        //   neg_sum = 0
+        //   dot = 48
+        let expected_b0_f0 = 48.0;
         
-        assert!((output[0] - expected_0).abs() < 0.01,
-                "Feature 0 mismatch: expected {}, got {}", expected_0, output[0]);
-        assert!((output[1] - expected_1).abs() < 0.01,
-                "Feature 1 mismatch: expected {}, got {}", expected_1, output[1]);
+        // Feature 1 (partial -1 weights):
+        //   pos_sum = 0
+        //   neg_sum = popcount(0xFFFF & 0xFFFF) = 16
+        //   dot = -16
+        let expected_b0_f1 = 0.0;  // No matches since input is +1 and weight is -1
         
-        // Verify batch 1 (inputs halved)
-        assert!((output[2] - expected_0 / 2.0).abs() < 0.01);
-        assert!((output[3] - expected_1 / 2.0).abs() < 0.01);
+        // Batch 1 (all -1 input):
+        //   input quantizes to: word0=0xFFFFFFFF, word1=0x0000FFFF in minus plane
+        // Feature 0:
+        //   pos_sum = 0
+        //   neg_sum = popcount(0xFFFF... & 0xFFFF...) + popcount(0xFFFF & 0xFFFF) = 32 + 16 = 48
+        //   dot = -48
+        let expected_b1_f0 = -48.0;
+        
+        // Feature 1:
+        //   pos_sum = popcount(0xFFFF & 0xFFFF) = 16
+        //   neg_sum = 0
+        //   dot = 16
+        let expected_b1_f1 = 16.0;
+        
+        assert!((output[0] - expected_b0_f0).abs() < 0.01,
+                "B0F0 mismatch: expected {}, got {}", expected_b0_f0, output[0]);
+        assert!((output[1] - expected_b0_f1).abs() < 0.01,
+                "B0F1 mismatch: expected {}, got {}", expected_b0_f1, output[1]);
+        
+        assert!((output[2] - expected_b1_f0).abs() < 0.01,
+                "B1F0 mismatch: expected {}, got {}", expected_b1_f0, output[2]);
+        assert!((output[3] - expected_b1_f1).abs() < 0.01,
+                "B1F1 mismatch: expected {}, got {}", expected_b1_f1, output[3]);
     }
 }

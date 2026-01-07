@@ -31,6 +31,8 @@ use super::config::TernaryConfig;
 use super::types::TernaryTensor;
 use crate::error::{Result, UnslothError};
 use candle_core::Tensor;
+#[cfg(feature = "cuda")]
+use candle_core::Device;
 
 // CubeCL imports for kernel implementation
 #[cfg(feature = "cuda")]
@@ -71,10 +73,11 @@ pub struct TernaryMatmulConfig {
 /// # Errors
 ///
 /// Returns error if shapes don't match or computation fails.
+#[allow(unused_variables)]
 pub fn ternary_matmul(
     input: &Tensor,
     weights: &TernaryTensor,
-    _config: &TernaryConfig,
+    config: &TernaryConfig,
 ) -> Result<Tensor> {
     // Validate shapes
     let input_shape = input.shape().dims();

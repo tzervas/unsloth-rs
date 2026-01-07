@@ -209,6 +209,56 @@ pub fn allocate_output_buffer(num_elements: usize) -> Vec<u8> {
     vec![0u8; num_elements * 4]
 }
 
+/// Convert u32 plane data to raw bytes for CubeCL buffer creation.
+///
+/// # Arguments
+/// * `plane` - The u32 plane data (e.g., plus_plane or minus_plane from TernaryTensor)
+///
+/// # Returns
+/// Raw bytes that can be passed to `client.create()`
+#[must_use]
+pub fn u32_planes_to_cubecl_bytes(plane: &[u32]) -> Vec<u8> {
+    plane.iter().flat_map(|&word| word.to_le_bytes()).collect()
+}
+
+/// Convert a TernaryTensor to CubeCL buffer handles.
+///
+/// Returns the raw bytes for plus_plane, minus_plane, and scales,
+/// along with shape metadata for kernel configuration.
+///
+/// # Arguments
+/// * `tensor` - The TernaryTensor to convert
+///
+/// # Returns
+/// Tuple of (plus_bytes, minus_bytes, scales_bytes, shape, k_words)
+#[must_use]
+pub fn ternary_tensor_to_cubecl_handles(
+    tensor: &crate::kernels::ternary::TernaryTensor,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, (usize, usize), usize) {
+    let plus_bytes = u32_planes_to_cubecl_bytes(&tensor.plus_plane);
+    let minus_bytes = u32_planes_to_cubecl_bytes(&tensor.minus_plane);
+    let scales_bytes: Vec<u8> = tensor.scales.iter()
+        .flat_map(|&s| s.to_le_bytes())
+        .collect();
+    
+    (plus_bytes, minus_bytes, scales_bytes, tensor.shape, tensor.k_words)
+}
+
+/// Convert CubeCL output bytes back to u32 plane.
+///
+/// # Arguments
+/// * `bytes` - Raw bytes from CubeCL buffer
+///
+/// # Returns
+/// Vec<u32> plane data
+#[must_use]
+pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +280,40 @@ mod tests {
         let tensor = Tensor::zeros((2, 4), DType::F32, &Device::Cpu).unwrap();
         let result = candle_to_cubecl_handle(&tensor);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_u32_planes_to_bytes_roundtrip() {
+        let original: Vec<u32> = vec![0xDEADBEEF, 0xCAFEBABE, 0x12345678];
+        let bytes = u32_planes_to_cubecl_bytes(&original);
+        let recovered = cubecl_bytes_to_u32_plane(&bytes);
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_ternary_tensor_to_cubecl_handles() {
+        use crate::kernels::ternary::TernaryTensor;
+        
+        let shape = (4, 64); // 4 rows, 64 cols
+        let k_words = 2; // 64 / 32 = 2
+        
+        let plus = vec![0xAAAAAAAAu32; 4 * k_words];
+        let minus = vec![0x55555555u32; 4 * k_words];
+        let scales = vec![1.5f32; 4];
+        
+        let tensor = TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape);
+        let (plus_bytes, minus_bytes, scales_bytes, ret_shape, ret_k_words) = 
+            ternary_tensor_to_cubecl_handles(&tensor);
+        
+        assert_eq!(ret_shape, shape);
+        assert_eq!(ret_k_words, k_words);
+        assert_eq!(plus_bytes.len(), plus.len() * 4);
+        assert_eq!(minus_bytes.len(), minus.len() * 4);
+        assert_eq!(scales_bytes.len(), scales.len() * 4);
+        
+        // Verify roundtrip
+        let recovered_plus = cubecl_bytes_to_u32_plane(&plus_bytes);
+        assert_eq!(plus, recovered_plus);
     }
 
     // GPU tests require cuda feature and hardware

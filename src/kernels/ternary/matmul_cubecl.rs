@@ -1,10 +1,16 @@
 //! CubeCL GPU kernel for ternary bitsliced matrix multiplication.
 //!
-//! Uses native popcount intrinsics for efficient dot product computation.
+//! ## Implementation Status
 //!
-//! ## Note on Implementation
+//! This is a **basic, non-optimized** implementation using bit-by-bit iteration
+//! for correctness validation. Future tasks will add:
+//! - Task 2.3: Tiling with SharedMemory
+//! - Task 2.4: Vectorized Line loads
+//! - Task 2.5: Optimized popcount-based dot products
 //!
-//! This is a basic (non-tiled) implementation using f32 arrays with bit reinterpretation.
+//! ## Note on Array Types
+//!
+//! This implementation uses f32 arrays with bit reinterpretation for weight planes.
 //! Task 2.1 will add proper u32 array support via CubeCL interop.
 //! The weight planes (w_plus, w_minus) are f32 arrays where each f32 is reinterpreted as u32.
 //! This is a temporary workaround until proper u32 tensor support is available.
@@ -24,15 +30,22 @@ pub struct TernaryMatmulConfig {
     pub in_features: u32,
 }
 
-/// Basic ternary matmul kernel using popcount.
+/// Basic ternary matmul kernel (bit-by-bit iteration).
 ///
 /// Each thread computes one output element: output[batch_idx, out_idx]
 ///
 /// Algorithm:
 /// ```text
-/// dot = popcount(w_plus & input_bits) - popcount(w_minus & input_bits)
-/// output = dot * scale
+/// For each bit in packed weights:
+///   Extract ternary value from +plane and -plane
+///   if +1: acc += input[bit]
+///   if -1: acc -= input[bit]
+///   if  0: skip
+/// output = acc * scale
 /// ```
+///
+/// Note: This uses bit-by-bit iteration for correctness validation.
+/// Future optimizations (Task 2.5) will use vectorized popcount operations.
 #[cube(launch_unchecked)]
 pub fn ternary_matmul_kernel_basic<F: Float>(
     // Input activations [batch, in_features] as f32

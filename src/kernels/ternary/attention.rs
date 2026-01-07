@@ -107,6 +107,10 @@ impl OnlineSoftmaxState {
     ///
     /// * `score` - New attention score
     /// * `value` - Corresponding value vector
+    ///
+    /// # Panics
+    ///
+    /// Panics if value length doesn't match output dimension.
     pub fn update(&mut self, score: f32, value: &[f32]) {
         assert_eq!(value.len(), self.output.len(), "value dimension mismatch");
 
@@ -195,7 +199,7 @@ pub fn ternary_attention_cpu(
     let dims = hidden_states.dims();
     if dims.len() != 3 {
         return Err(UnslothError::ShapeMismatch {
-            expected: vec![0, 0, 0], // 3D
+            expected: vec![1, 1, 1], // Placeholder for batch, seq_len, hidden (3D tensor required)
             actual: dims.to_vec(),
         });
     }

@@ -1,31 +1,34 @@
 //! CubeCL GPU kernel implementation for Ternary Attention.
 //!
-//! This module implements Phase 3, Task 3.1: Q·K^T Ternary Scoring Kernel
-//! for memory-efficient attention with ternary-quantized K matrices.
+//! This module implements Phase 3 tasks for ternary attention:
+//! - Task 3.1: Q·K^T Ternary Scoring Kernel ✅
+//! - Task 3.2: Online Softmax with Popcount ✅
 //!
 //! ## Algorithm Overview
 //!
-//! Computes attention scores S = Q · K^T where K is ternary-quantized:
+//! Computes full attention with ternary-quantized K matrices:
 //! - Q: [batch, heads, seq_len, head_dim] - FP32 query vectors
 //! - K: [batch, heads, seq_len, head_dim] - Ternary bitsliced keys
-//! - S: [batch, heads, seq_len, seq_len] - FP32 attention scores
+//! - V: [batch, heads, seq_len, head_dim] - FP32 value vectors
+//! - Output: [batch, heads, seq_len, head_dim] - Attention result
 //!
 //! Uses popcount-based dot product from Phase 2 ternary matmul kernels,
-//! adapted for the transpose-aware access pattern required by Q·K^T.
+//! adapted for attention with online softmax for memory efficiency.
 //!
 //! ## Memory Efficiency
 //!
 //! - Keys stored as bitsliced planes (32x compression vs FP32)
-//! - Cooperative loading into shared memory
-//! - Tiled computation to fit in SRAM
-//! - Output accumulated directly to global memory
+//! - Online softmax avoids materializing full attention matrix
+//! - Incremental computation with running max and sum
+//! - Numerical stability via max rescaling
 //!
 //! ## Implementation Status
 //!
 //! - [x] Configuration structures
-//! - [x] CPU simulation kernel for testing
+//! - [x] Q·K^T ternary scoring kernel (Task 3.1)
+//! - [x] Online softmax with popcount (Task 3.2)
+//! - [x] CPU simulation for testing
 //! - [x] Multi-head support with GQA
-//! - [x] Launch configuration helper
 //! - [ ] Actual CubeCL kernel (awaiting GPU hardware)
 
 use super::types::{TernaryPlanes, TernaryTensor};
@@ -463,5 +466,415 @@ mod tests {
         
         // Should produce valid output
         assert_eq!(scores.dims(), &[batch, heads, q_seq, k_seq]);
+    }
+}
+
+// ============================================================================
+// Phase 3, Task 3.2: Online Softmax with Popcount
+// ============================================================================
+
+/// Online softmax accumulator for memory-efficient attention.
+///
+/// Maintains running statistics (max, sum, output) for numerically stable
+/// softmax computation without materializing the full attention matrix.
+///
+/// Algorithm follows Flash Attention approach:
+/// 1. Track running max across all scores
+/// 2. Rescale previous outputs when new max is found  
+/// 3. Accumulate exp(score - max) incrementally
+/// 4. Final normalization divides by sum
+#[derive(Debug, Clone)]
+struct OnlineSoftmaxState {
+    /// Current maximum score seen
+    max_score: f32,
+    /// Sum of exp(score - max) for normalization
+    exp_sum: f32,
+}
+
+impl OnlineSoftmaxState {
+    /// Create new accumulator state.
+    #[must_use]
+    fn new() -> Self {
+        Self {
+            max_score: f32::NEG_INFINITY,
+            exp_sum: 0.0,
+        }
+    }
+    
+    /// Update state with new score and return attention weight.
+    ///
+    /// Uses numerical stability trick: exp(x - max) instead of exp(x).
+    ///
+    /// # Arguments
+    /// * `score` - New attention score from Q·K^T
+    ///
+    /// # Returns
+    /// - Updated max score
+    /// - Correction factor for previous values
+    /// - Current attention weight (unnormalized)
+    fn update(&mut self, score: f32) -> (f32, f32, f32) {
+        let old_max = self.max_score;
+        
+        // Update max if needed
+        if score > self.max_score {
+            self.max_score = score;
+        }
+        
+        // Correction factor for rescaling previous outputs
+        let correction = if self.max_score != old_max {
+            (old_max - self.max_score).exp()
+        } else {
+            1.0
+        };
+        
+        // Current weight: exp(score - max)
+        let weight = (score - self.max_score).exp();
+        
+        // Update sum with correction for old values
+        self.exp_sum = self.exp_sum * correction + weight;
+        
+        (self.max_score, correction, weight)
+    }
+    
+    /// Get final normalization factor.
+    ///
+    /// Should be called after all scores have been processed.
+    ///
+    /// # Returns
+    /// 1 / sum for final output normalization
+    #[must_use]
+    fn get_norm_factor(&self) -> f32 {
+        if self.exp_sum > 0.0 {
+            1.0 / self.exp_sum
+        } else {
+            0.0
+        }
+    }
+}
+
+/// CPU simulation of ternary attention with online softmax.
+///
+/// Computes full attention: Attention(Q, K, V) = softmax(Q·K^T / scale) · V
+/// where K is ternary-quantized. Uses online softmax to avoid materializing
+/// the full attention matrix.
+///
+/// # Arguments
+/// * `q` - Query tensor [batch, heads, q_seq_len, head_dim] (FP32)
+/// * `k_ternary` - Ternary keys tensor with bitsliced planes
+/// * `v` - Value tensor [batch, heads, k_seq_len, head_dim] (FP32)
+/// * `k_seq_len` - Key/value sequence length
+/// * `scale` - Attention scale factor (typically 1/sqrt(head_dim))
+/// * `config` - Kernel configuration
+///
+/// # Returns
+/// Attention output tensor [batch, heads, q_seq_len, head_dim]
+///
+/// # Errors
+/// Returns error if shapes are incompatible or computation fails.
+pub fn ternary_attention_online_softmax_cpu(
+    q: &Tensor,
+    k_ternary: &TernaryTensor,
+    v: &Tensor,
+    k_seq_len: usize,
+    scale: f64,
+    _config: &TernaryAttentionScoreConfig,
+) -> Result<Tensor> {
+    // Get Q dimensions
+    let q_dims = q.dims();
+    if q_dims.len() != 4 {
+        return Err(UnslothError::ShapeMismatch {
+            expected: vec![4],
+            actual: q_dims.to_vec(),
+        });
+    }
+    
+    let (batch, num_heads, q_seq_len, head_dim) = 
+        (q_dims[0], q_dims[1], q_dims[2], q_dims[3]);
+    
+    // Verify V shape
+    let v_dims = v.dims();
+    if v_dims != [batch, num_heads, k_seq_len, head_dim] {
+        return Err(UnslothError::ShapeMismatch {
+            expected: vec![batch, num_heads, k_seq_len, head_dim],
+            actual: v_dims.to_vec(),
+        });
+    }
+    
+    // Verify K shape matches
+    let (k_out_features, k_in_features) = k_ternary.shape();
+    let expected_k_shape = (num_heads * k_seq_len, head_dim);
+    
+    if (k_out_features, k_in_features) != expected_k_shape {
+        return Err(UnslothError::ShapeMismatch {
+            expected: vec![expected_k_shape.0, expected_k_shape.1],
+            actual: vec![k_out_features, k_in_features],
+        });
+    }
+    
+    // Allocate output tensor
+    let mut output_data = vec![0.0f32; batch * num_heads * q_seq_len * head_dim];
+    
+    // Get Q and V data
+    let q_data = q.to_vec2::<f32>()?;
+    let q_flat: Vec<f32> = q_data.iter().flatten().copied().collect();
+    let v_data = v.to_vec2::<f32>()?;
+    let v_flat: Vec<f32> = v_data.iter().flatten().copied().collect();
+    
+    // Compute attention with online softmax
+    // For each batch and head
+    for b in 0..batch {
+        for h in 0..num_heads {
+            // For each query position
+            for qi in 0..q_seq_len {
+                // Initialize online softmax state
+                let mut softmax_state = OnlineSoftmaxState::new();
+                
+                // Accumulator for output (will be rescaled as we process keys)
+                let mut output_accum = vec![0.0f32; head_dim];
+                
+                // Get query vector
+                let q_offset = ((b * num_heads + h) * q_seq_len + qi) * head_dim;
+                let q_vec = &q_flat[q_offset..q_offset + head_dim];
+                
+                // Process each key incrementally (online softmax)
+                for ki in 0..k_seq_len {
+                    // Get K row index
+                    let k_row = h * k_seq_len + ki;
+                    
+                    // Compute ternary dot product: Q[qi] · K[ki]
+                    let score = ternary_dot_product_fp_query(q_vec, k_ternary, k_row, head_dim);
+                    let scaled_score = score * (scale as f32);
+                    
+                    // Update softmax state and get attention weight
+                    let (_max, correction, weight) = softmax_state.update(scaled_score);
+                    
+                    // Rescale previous output accumulator
+                    if correction != 1.0 {
+                        for val in &mut output_accum {
+                            *val *= correction;
+                        }
+                    }
+                    
+                    // Add weighted value vector
+                    let v_offset = ((b * num_heads + h) * k_seq_len + ki) * head_dim;
+                    let v_vec = &v_flat[v_offset..v_offset + head_dim];
+                    
+                    for (j, v_val) in v_vec.iter().enumerate() {
+                        output_accum[j] += weight * v_val;
+                    }
+                }
+                
+                // Final normalization
+                let norm_factor = softmax_state.get_norm_factor();
+                for val in &mut output_accum {
+                    *val *= norm_factor;
+                }
+                
+                // Store to output
+                let out_offset = ((b * num_heads + h) * q_seq_len + qi) * head_dim;
+                output_data[out_offset..out_offset + head_dim].copy_from_slice(&output_accum);
+            }
+        }
+    }
+    
+    // Convert to tensor
+    let output = Tensor::from_vec(
+        output_data,
+        (batch, num_heads, q_seq_len, head_dim),
+        q.device(),
+    )?;
+    
+    Ok(output)
+}
+
+/// GPU implementation of ternary attention with online softmax (placeholder).
+///
+/// This function will dispatch to the actual CubeCL kernel when GPU hardware
+/// is available. Currently falls back to CPU simulation.
+///
+/// # Arguments
+/// * `q` - Query tensor [batch, heads, q_seq_len, head_dim]
+/// * `k_ternary` - Ternary keys tensor
+/// * `v` - Value tensor [batch, heads, k_seq_len, head_dim]
+/// * `k_seq_len` - Key/value sequence length
+/// * `scale` - Attention scale factor
+/// * `config` - Kernel configuration
+///
+/// # Returns
+/// Attention output tensor [batch, heads, q_seq_len, head_dim]
+///
+/// # Errors
+/// Returns error if GPU execution fails or shapes are incompatible.
+pub fn ternary_attention_cuda(
+    q: &Tensor,
+    k_ternary: &TernaryTensor,
+    v: &Tensor,
+    k_seq_len: usize,
+    scale: f64,
+    config: &TernaryAttentionScoreConfig,
+) -> Result<Tensor> {
+    // TODO: Implement actual CubeCL kernel dispatch
+    // For now, fall back to CPU simulation
+    ternary_attention_online_softmax_cpu(q, k_ternary, v, k_seq_len, scale, config)
+}
+
+#[cfg(test)]
+mod online_softmax_tests {
+    use super::*;
+    use candle_core::Device;
+    
+    fn create_test_values(batch: usize, heads: usize, seq_len: usize, dim: usize) -> Tensor {
+        // Create simple pattern for testing
+        let size = batch * heads * seq_len * dim;
+        let data: Vec<f32> = (0..size).map(|i| ((i % 7) as f32 + 1.0) * 0.1).collect();
+        Tensor::from_vec(data, (batch, heads, seq_len, dim), &Device::Cpu).unwrap()
+    }
+    
+    #[test]
+    fn test_online_softmax_state_update() {
+        let mut state = OnlineSoftmaxState::new();
+        
+        // First score
+        let (max1, corr1, weight1) = state.update(1.0);
+        assert_eq!(max1, 1.0);
+        assert_eq!(corr1, 1.0);
+        assert!((weight1 - 1.0).abs() < 0.001);
+        
+        // Second score (higher)
+        let (max2, corr2, weight2) = state.update(2.0);
+        assert_eq!(max2, 2.0);
+        assert!(corr2 < 1.0);  // Should rescale previous
+        assert!((weight2 - 1.0).abs() < 0.001);
+        
+        // Third score (lower)
+        let (max3, corr3, weight3) = state.update(0.5);
+        assert_eq!(max3, 2.0);  // Max unchanged
+        assert_eq!(corr3, 1.0);  // No rescaling needed
+        assert!(weight3 < weight2);  // Lower score = lower weight
+    }
+    
+    #[test]
+    fn test_online_softmax_normalization() {
+        let mut state = OnlineSoftmaxState::new();
+        
+        // Add some scores
+        state.update(1.0);
+        state.update(2.0);
+        state.update(3.0);
+        
+        let norm = state.get_norm_factor();
+        assert!(norm > 0.0);
+        assert!(norm < 1.0);  // Should be < 1 since sum > 1
+    }
+    
+    #[test]
+    fn test_ternary_attention_online_softmax_shape() {
+        let batch = 2;
+        let heads = 4;
+        let q_seq = 8;
+        let k_seq = 8;
+        let dim = 64;
+        
+        let q = super::tests::create_test_query(batch, heads, q_seq, dim);
+        let k = super::tests::create_test_ternary_keys(heads, k_seq, dim);
+        let v = create_test_values(batch, heads, k_seq, dim);
+        let config = TernaryAttentionScoreConfig::default_config();
+        
+        let output = ternary_attention_online_softmax_cpu(&q, &k, &v, k_seq, 1.0, &config).unwrap();
+        
+        // Verify output shape
+        assert_eq!(output.dims(), &[batch, heads, q_seq, dim]);
+    }
+    
+    #[test]
+    fn test_ternary_attention_online_softmax_numerical() {
+        let batch = 1;
+        let heads = 1;
+        let q_seq = 1;
+        let k_seq = 3;
+        let dim = 32;
+        
+        // Create simple query: [1, 0, 0, ...]
+        let mut q_data = vec![0.0f32; batch * heads * q_seq * dim];
+        q_data[0] = 1.0;
+        let q = Tensor::from_vec(q_data, (batch, heads, q_seq, dim), &Device::Cpu).unwrap();
+        
+        // Create keys with different similarities
+        let k_words = 1;
+        let mut plus = vec![0u32; heads * k_seq * k_words];
+        let mut minus = vec![0u32; heads * k_seq * k_words];
+        
+        // Key 0: high similarity (bit 0 = +1)
+        plus[0] = 1u32;
+        // Key 1: medium similarity (bit 1 = +1)
+        plus[1] = 2u32;
+        // Key 2: low similarity (no match)
+        plus[2] = 0u32;
+        
+        let scales = vec![1.0f32; heads * k_seq];
+        let k = TernaryTensor::new(plus, minus, scales, (heads * k_seq, dim));
+        
+        // Create distinct values
+        let mut v_data = vec![0.0f32; batch * heads * k_seq * dim];
+        v_data[0] = 1.0;  // V0: [1, 0, ...]
+        v_data[dim + 1] = 1.0;  // V1: [0, 1, ...]
+        v_data[2 * dim + 2] = 1.0;  // V2: [0, 0, 1, ...]
+        let v = Tensor::from_vec(v_data, (batch, heads, k_seq, dim), &Device::Cpu).unwrap();
+        
+        let config = TernaryAttentionScoreConfig::default_config();
+        let output = ternary_attention_online_softmax_cpu(&q, &k, &v, k_seq, 1.0, &config).unwrap();
+        
+        let output_vec = output.to_vec2::<f32>().unwrap();
+        let output_flat: Vec<f32> = output_vec.iter().flatten().copied().collect();
+        
+        // Output should be weighted combination of values
+        // Key 0 has highest similarity, so V0 should dominate
+        assert!(output_flat[0] > output_flat[1]);
+        assert!(output_flat[0] > output_flat[2]);
+    }
+    
+    #[test]
+    fn test_ternary_attention_online_softmax_stability() {
+        // Test with extreme scores for numerical stability
+        let batch = 1;
+        let heads = 1;
+        let q_seq = 1;
+        let k_seq = 2;
+        let dim = 32;
+        
+        let q = super::tests::create_test_query(batch, heads, q_seq, dim);
+        let k = super::tests::create_test_ternary_keys(heads, k_seq, dim);
+        let v = create_test_values(batch, heads, k_seq, dim);
+        let config = TernaryAttentionScoreConfig::default_config();
+        
+        // Should not panic with extreme scale
+        let output = ternary_attention_online_softmax_cpu(&q, &k, &v, k_seq, 10.0, &config).unwrap();
+        
+        // Output should be finite
+        let output_vec = output.to_vec2::<f32>().unwrap();
+        let output_flat: Vec<f32> = output_vec.iter().flatten().copied().collect();
+        for val in output_flat {
+            assert!(val.is_finite());
+        }
+    }
+    
+    #[test]
+    fn test_ternary_attention_cuda_fallback() {
+        // Test that CUDA version falls back to CPU correctly
+        let batch = 1;
+        let heads = 2;
+        let q_seq = 4;
+        let k_seq = 4;
+        let dim = 64;
+        
+        let q = super::tests::create_test_query(batch, heads, q_seq, dim);
+        let k = super::tests::create_test_ternary_keys(heads, k_seq, dim);
+        let v = create_test_values(batch, heads, k_seq, dim);
+        let config = TernaryAttentionScoreConfig::default_config();
+        
+        let output = ternary_attention_cuda(&q, &k, &v, k_seq, 1.0, &config).unwrap();
+        
+        // Should produce valid output
+        assert_eq!(output.dims(), &[batch, heads, q_seq, dim]);
     }
 }

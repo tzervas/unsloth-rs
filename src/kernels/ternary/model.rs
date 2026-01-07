@@ -106,7 +106,8 @@ impl Default for ModelQuantizationConfig {
 /// * `bias` - Optional bias tensor [out_features]
 /// * `name` - Layer name for logging
 /// * `config` - Quantization configuration
-/// * `_device` - Target device (unused, kept for API compatibility)
+/// * `_device` - Target device (currently unused; weights remain on their original device.
+///               Kept for future multi-device support and API stability)
 ///
 /// # Returns
 ///
@@ -162,6 +163,8 @@ pub fn quantize_linear_layer(
     }
 
     // Create ternary linear layer
+    // Note: bias.cloned() is necessary because TernaryLinear::with_config expects Option<Tensor> (owned),
+    // but we receive Option<&Tensor> (borrowed). This clone is intentional for API ergonomics.
     let layer = TernaryLinear::with_config(ternary_weights, bias.cloned(), config.ternary_config)?;
 
     Ok(Some(QuantizedLayer {
@@ -202,7 +205,7 @@ impl TernaryModel {
 
         self.stats.layers_quantized += 1;
         self.stats.quantized_params += num_params;
-        self.stats.original_bytes += num_params * 4; // FP32
+        // Note: original_params will be accumulated in finalize_stats()
         self.stats.quantized_bytes += layer.memory_bytes();
         self.stats.layer_sparsities.insert(name.clone(), sparsity);
 
@@ -214,7 +217,6 @@ impl TernaryModel {
         let num_params = tensor.elem_count();
         self.stats.layers_skipped += 1;
         self.stats.original_params += num_params;
-        self.stats.original_bytes += num_params * 4;
         self.stats.quantized_bytes += num_params * 4; // Still FP32
 
         self.preserved_tensors.insert(name, tensor);
@@ -222,7 +224,10 @@ impl TernaryModel {
 
     /// Finalize statistics after all layers added.
     pub fn finalize_stats(&mut self) {
+        // Total original params = quantized + preserved
         self.stats.original_params += self.stats.quantized_params;
+        // Total original bytes (FP32) = all params * 4 bytes
+        self.stats.original_bytes = self.stats.original_params * 4;
 
         if !self.stats.layer_sparsities.is_empty() {
             self.stats.average_sparsity = self.stats.layer_sparsities.values().sum::<f32>()

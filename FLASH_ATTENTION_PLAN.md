@@ -1,80 +1,96 @@
 # Flash Attention Implementation Plan
 
+**CubeCL Version**: v0.8.1 (Validated January 2026)  
+**Last Updated**: 2026-01-06  
+**Status**: Phase 1 (Minimal Viable Kernel) - In Progress
+
 ## Objective
 Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-efficient LLM training.
+
+## Hardware Targets
+- **Phase 1**: GeForce RTX 5080 (primary development/test machine)
+- **Phase 2**: GeForce RTX 3090 Ti (validation and tuning)
+- **Future**: A100/H100 (datacenter), AMD MI series, WGPU/CPU backends
 
 ## Performance Targets
 - **Speedup:** 2-5x vs naive implementation
 - **VRAM Reduction:** 70-80% vs baseline
 - **GPU Occupancy:** >50%
-- **Numerical Accuracy:** Within 1e-5 tolerance vs CPU reference
+- **Numerical Accuracy:** Within 1e-5 tolerance vs CPU reference (f32), 1e-3 (f16)
 
 ## Implementation Phases
 
-### Phase 1: Foundation & Research (Current)
-**Goal:** Understand Flash Attention algorithm and CubeCL API
+### Phase 1: Minimal Viable Kernel (RTX 5080 Focus)
+**Goal:** Correct, basic f32 Flash Attention on RTX 5080  
+**Estimated Time:** 1-3 weeks  
+**Status:** In Progress
 
 **Tasks:**
 - [x] Review existing CPU reference implementation
 - [x] Study Flash Attention paper and algorithm
-- [ ] Explore CubeCL API and examples
-- [ ] Design kernel memory layout and access patterns
-- [ ] Document mathematical operations and optimization strategy
+- [x] Complete CubeCL v0.8.1 API research (see `docs/cubecl-context.md`)
+- [x] Create module structure (`src/kernels/cubecl/`)
+- [x] Implement Candle ↔ CubeCL interop (`interop.rs`)
+- [x] Implement kernel configuration (`config.rs`)
+- [ ] Implement basic non-masked tiled kernel (tile_size=128)
+- [ ] Add small-test equivalence suite (tolerance 1e-5)
+- [ ] Profile on RTX 5080 (target >2x speedup vs Candle fallback)
+- [ ] Validate VRAM reduction on seq=2048
 
 **Deliverables:**
-- Algorithm documentation
-- Memory access pattern design
-- Kernel implementation strategy
+- `src/kernels/cubecl/` module with kernel, interop, config
+- Working Flash Attention kernel (f32, non-masked)
+- Test suite with numerical equivalence validation
+
+**Acceptance Criteria:**
+- All small tests pass
+- No NaN/Inf in outputs
+- Matches Candle fallback within 1e-5 tolerance
+- Measurable speedup on RTX 5080
 
 ---
 
-### Phase 2: Basic CubeCL Kernel
-**Goal:** Implement working CubeCL kernel with basic functionality
+### Phase 2: Cross-GPU Validation (RTX 3090 Ti)
+**Goal:** Cross-GPU compatibility and initial tuning  
+**Estimated Time:** 1-2 weeks  
+**Status:** Not Started
 
 **Tasks:**
-- [ ] Create CubeCL kernel module structure
-- [ ] Implement basic Q·K^T computation in CubeCL
-- [ ] Implement softmax computation
-- [ ] Implement attention·V computation
-- [ ] Add device dispatch (CUDA/CPU)
-- [ ] Basic integration with FusedAttention struct
-
-**Deliverables:**
-- `src/kernels/attention_cubecl.rs` - CubeCL kernel implementation
-- Working end-to-end attention computation on GPU
+- [ ] Run Phase 1 kernel on RTX 3090 Ti
+- [ ] Fix any arch-specific issues (shared memory limits, tensor core differences)
+- [ ] Tune tile sizes per GPU (256 on 5080, 128 on 3090 Ti)
+- [ ] Add causal masking via index checks
+- [ ] Benchmark longer sequences (4096+ tokens)
 
 **Acceptance Criteria:**
-- Kernel compiles without errors
-- Produces output with correct shape
-- No crashes or memory errors
+- Equivalence and stability on both GPUs
+- Measurable VRAM savings vs O(N²) baseline
 
 ---
 
-### Phase 3: Optimization & Fusion
-**Goal:** Optimize for performance and memory efficiency
+### Phase 3: Advanced Features & Precision
+**Goal:** Production-ready features  
+**Estimated Time:** 2-4 weeks  
+**Status:** Not Started
 
 **Tasks:**
-- [ ] Implement tiling strategy for memory efficiency
-- [ ] Fuse operations (single-pass Q·K^T·V)
-- [ ] Optimize memory access patterns (coalesced access)
-- [ ] Use shared memory for intermediate results
-- [ ] Implement mixed precision support (f16/bf16)
-- [ ] Optimize block/thread configuration
-
-**Deliverables:**
-- Optimized kernel with fused operations
-- Memory-efficient tiled algorithm
-- Tuned launch configuration
+- [ ] Padding/arbitrary mask support
+- [ ] GQA/MQA via head repetition (repeat_interleave on K/V)
+- [ ] f16/bf16 paths with tensor core usage (via `cubek-matmul`)
+- [ ] Sliding-window attention variant
+- [ ] Memory optimization (register pressure, shared memory tuning)
 
 **Acceptance Criteria:**
-- Reduced memory footprint (measure VRAM usage)
-- Improved performance (benchmark vs baseline)
-- Maintains numerical stability
+- GQA support verified
+- f16 accuracy within 1e-3 tolerance
+- Mixed precision benchmarks documented
 
 ---
 
 ### Phase 4: Testing & Validation
-**Goal:** Ensure correctness and numerical stability
+**Goal:** Ensure correctness and numerical stability  
+**Estimated Time:** 1-2 weeks  
+**Status:** Not Started
 
 **Tasks:**
 - [ ] Add unit tests for kernel functions
@@ -289,20 +305,27 @@ Tiled computation with online softmax:
 
 ---
 
-## Timeline Estimate
+## Timeline Estimate (Revised)
 
-- **Phase 1 (Foundation):** 1-2 hours
-- **Phase 2 (Basic Kernel):** 4-6 hours
-- **Phase 3 (Optimization):** 4-6 hours
-- **Phase 4 (Testing):** 2-3 hours
-- **Phase 5 (Benchmarking):** 2-3 hours
-- **Phase 6 (Documentation):** 1-2 hours
+Based on validated CubeCL v0.8.1 API research:
 
-**Total:** 14-22 hours (2-3 work days)
+| Phase | Description | Estimated Time |
+|-------|-------------|----------------|
+| Phase 1 | Minimal Viable Kernel (RTX 5080) | 1-3 weeks |
+| Phase 2 | Cross-GPU Validation (RTX 3090 Ti) | 1-2 weeks |
+| Phase 3 | Advanced Features & Precision | 2-4 weeks |
+| Phase 4 | Testing & Validation | 1-2 weeks |
+| Phase 5 | Benchmarking & Profiling | 1-2 weeks |
+| Phase 6 | Documentation & Integration | 1 week |
+
+**Total:** 7-14 weeks (realistic for production-ready kernel)
+
+**Note:** Previous estimate of 14-22 hours was overly optimistic. CubeCL kernel development requires significant iteration for correctness and performance.
 
 ---
 
 ## Current Status
-- **Phase:** 1 (Foundation & Research)
+- **Phase:** 1 (Minimal Viable Kernel)
 - **Branch:** `feature/flash-attention-cubecl`
-- **Next Action:** Explore CubeCL API and design kernel structure
+- **Module:** `src/kernels/cubecl/`
+- **Next Action:** Implement actual CubeCL kernel launch in `kernel.rs`

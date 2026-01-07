@@ -1,12 +1,21 @@
 # unsloth-rs Development Roadmap
 
-**Status**: Planning Phase  
+**Status**: Phase 1 (Flash Attention) - In Progress  
 **Last Updated**: 2026-01-06  
+**CubeCL Version**: v0.8.1 (Validated)  
 **Base Branch**: `experimental`
 
 ## Project Overview
 
 `unsloth-rs` is a Rust implementation of transformer building blocks for LLM inference and fine-tuning, built on the Candle ML framework. The project aims to provide memory-efficient, high-performance GPU kernels using CubeCL.
+
+## Hardware Targets
+
+| Phase | GPU | Purpose |
+|-------|-----|--------|
+| Primary | GeForce RTX 5080 | Development and initial testing |
+| Validation | GeForce RTX 3090 Ti | Cross-GPU compatibility |
+| Future | A100/H100, AMD MI series | Datacenter deployment |
 
 ## Current Implementation Status
 
@@ -154,6 +163,16 @@ The `experimental` branch (ff87fec) has:
 - ⚠️ No mixed precision support yet
 - ⚠️ No Flash Attention yet
 
+### 🚧 In Progress (2026-01-06)
+
+**Flash Attention CubeCL Implementation:**
+- ✅ CubeCL v0.8.1 API research completed (`docs/cubecl-context.md`, `docs/cubecl-guide.md`)
+- ✅ Module structure: `src/kernels/cubecl/` with config, interop, kernel
+- ✅ Dependencies updated: `cubecl = "0.8.1"`, `cubecl-cuda = "0.8.1"`
+- ✅ Candle ↔ CubeCL tensor conversion utilities
+- ✅ Kernel configuration (`FlashAttentionConfig`)
+- 🚧 Actual CubeCL kernel implementation
+
 This is a solid starting point for implementing the advanced features planned in the phases below.
 
 ## Development Phases
@@ -277,46 +296,48 @@ pub struct MixedPrecisionConfig {
 
 ### Task 2.1: Fused Flash Attention Kernel
 **Branch**: `experimental/flash-attention-cubecl`  
-**File**: `src/kernels/attention.rs`  
-**Status**: Not Started
+**Files**: `src/kernels/cubecl/kernel.rs`, `src/kernels/attention_cubecl.rs`  
+**Status**: 🚧 In Progress (Phase 1)
 
 **Objective**: Implement single-pass QKV^T attention with O(N) memory complexity.
 
-**Current State**:
-```rust
-// src/kernels/attention.rs:200
-// Future versions may implement fused GPU kernels using CubeCL.
-fn forward_cuda(...) {
-    // Currently uses Candle's CUDA backend
-    self.forward_cpu(hidden_states, attention_mask)
-}
-```
+**Current Progress (2026-01-06):**
+- ✅ CubeCL v0.8.1 API research completed
+- ✅ Module structure created (`src/kernels/cubecl/`)
+- ✅ Candle ↔ CubeCL interop implemented
+- ✅ Kernel configuration implemented
+- 🚧 CubeCL kernel launch implementation
 
-**Implementation Plan**:
-1. Study Flash Attention algorithm (Dao et al., 2022)
-2. Implement tiling strategy for shared memory
-3. Write CubeCL kernel for fused attention
-4. Implement online softmax computation
-5. Add GQA support to fused kernel
-6. Benchmark against baseline implementation
-7. Add numerical accuracy tests
+**Implementation Plan (Revised):**
+
+| Phase | Description | Hardware | Est. Time |
+|-------|-------------|----------|----------|
+| 1 | Minimal Viable Kernel (f32, non-masked) | RTX 5080 | 1-3 weeks |
+| 2 | Cross-GPU Validation + Causal Mask | RTX 3090 Ti | 1-2 weeks |
+| 3 | f16/bf16, GQA/MQA support | Both | 2-4 weeks |
+
+**CubeCL v0.8.1 Key APIs:**
+- `#[cube(launch_unchecked)]` - Performance kernel definition
+- `Array<Line<F>>` - Vectorized 4-element loads
+- `SharedMemory::<F>::new(size)` - 1D shared memory
+- `sync_units()` - Block barrier
+- `warp_reduce(val, |a, b| ...)` - Warp-level reductions
 
 **Performance Targets**:
 - 2-5x speedup vs. current implementation
 - 70-80% VRAM reduction
 - >50% GPU occupancy
 
-**Success Criteria**:
-- [ ] CubeCL kernel implemented and tested
-- [ ] Performance targets met
-- [ ] Numerical accuracy within tolerance (1e-4)
-- [ ] GQA support verified
-- [ ] Benchmarks added and documented
+**Success Criteria:**
+- [ ] CubeCL kernel compiles and launches
+- [ ] Numerical equivalence within 1e-5 (f32), 1e-3 (f16)
+- [ ] Performance targets met on RTX 5080
+- [ ] Cross-GPU validation on RTX 3090 Ti
+- [ ] Benchmarks documented
 
-**Technical Notes**:
-- Use tiling for efficient shared memory usage
-- Implement block-sparse attention for long sequences
-- Consider mixed precision for memory savings
+**References:**
+- `docs/cubecl-context.md` - CubeCL v0.8.1 API reference
+- `docs/cubecl-guide.md` - Implementation roadmap
 
 ---
 
@@ -652,11 +673,13 @@ experimental (base)
 ### Current Dependencies
 - `candle-core` 0.9 - Core tensor operations
 - `candle-nn` 0.9 - Neural network layers
-- `cubecl` 0.8 - GPU kernel framework
+- `cubecl` 0.8.1 - GPU kernel framework (validated Jan 2026)
+- `cubecl-cuda` 0.8.1 - CUDA runtime (optional, via `cuda` feature)
 - `thiserror` 2.0 - Error handling
 - `tracing` 0.1 - Logging/instrumentation
 
 ### Planned Dependencies
+- `cubek-matmul` - Tensor-core accelerated matmul (when validated)
 - `half` - FP16/BF16 support (if needed)
 - `nccl` or equivalent - For distributed training
 

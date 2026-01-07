@@ -1,5 +1,8 @@
 # Issue Status Tracking
 
+**Last Updated**: 2026-01-06  
+**CubeCL Version**: v0.8.1 (Validated)
+
 This document tracks the completion status of open issues relative to what has been merged into the `experimental` branch.
 
 ## Summary
@@ -10,21 +13,36 @@ This document tracks the completion status of open issues relative to what has b
 - Memory estimation utilities
 - Project documentation and skills
 
-**None of the open issues (#1-#9) are fully complete**, as they all require CubeCL GPU kernel implementations which have not yet been implemented.
+**Recent Progress (2026-01-06):**
+- ✅ CubeCL v0.8.1 API research completed (see `docs/cubecl-context.md`, `docs/cubecl-guide.md`)
+- ✅ Created `src/kernels/cubecl/` module structure with config, interop, kernel scaffolding
+- ✅ Updated dependencies: `cubecl = "0.8.1"`, `cubecl-cuda = "0.8.1"`
+- ✅ Implemented Candle ↔ CubeCL tensor conversion utilities
+
+**Hardware Targets:**
+- Phase 1: GeForce RTX 5080 (primary development)
+- Phase 2: GeForce RTX 3090 Ti (validation)
 
 ## Issue-by-Issue Status
 
 ### Issue #5: [Kernel] Fused Flash Attention (Single-Pass Q·K^T·V) GPU Kernel Implementation
-**Status:** Not started (foundational work in place)
+**Status:** In Progress (Phase 1 - Minimal Viable Kernel)
+**Priority:** Highest
+
 - ✅ CPU reference implementation exists (`src/kernels/attention.rs`)
 - ✅ Benchmarking infrastructure exists (`benches/kernels.rs`)
 - ✅ Memory estimation utilities exist (`src/memory.rs`)
-- ❌ CubeCL GPU kernel NOT implemented
+- ✅ CubeCL v0.8.1 API research completed
+- ✅ Module structure created (`src/kernels/cubecl/`)
+- ✅ Candle ↔ CubeCL interop implemented
+- ✅ Kernel configuration implemented (`FlashAttentionConfig`)
+- 🚧 CubeCL GPU kernel implementation IN PROGRESS
 - ❌ Numerical equivalence tests NOT done
 - ❌ GPU benchmarks NOT done
 - ❌ VRAM profiling NOT done
 
-**Branch:** Currently being implemented in `feature/flash-attention-cubecl`
+**Branch:** `feature/flash-attention-cubecl`  
+**Estimated Completion:** 1-3 weeks for Phase 1 (RTX 5080 target)
 
 ---
 
@@ -118,3 +136,28 @@ Flash Attention is the highest priority task because:
 4. Establishes the CubeCL kernel implementation pattern for subsequent work
 
 **Active branch:** `feature/flash-attention-cubecl`
+
+**Implementation Phases (Revised 2026-01-06):**
+
+| Phase | Description | Hardware Target | Est. Time |
+|-------|-------------|-----------------|----------|
+| 1 | Minimal Viable Kernel | RTX 5080 | 1-3 weeks |
+| 2 | Cross-GPU Validation | RTX 3090 Ti | 1-2 weeks |
+| 3 | Advanced Features (f16, GQA) | Both | 2-4 weeks |
+| 4 | Testing & Validation | Both | 1-2 weeks |
+| 5 | Benchmarking | Both | 1-2 weeks |
+
+**Current Phase 1 Progress:**
+- [x] CubeCL API research (validated v0.8.1)
+- [x] Module structure (`src/kernels/cubecl/`)
+- [x] Tensor interop utilities
+- [x] Kernel configuration
+- [ ] Actual kernel implementation
+- [ ] Test suite
+- [ ] RTX 5080 profiling
+
+**Reference Documents:**
+- `docs/cubecl-context.md` - CubeCL v0.8.1 API reference
+- `docs/cubecl-guide.md` - Implementation roadmap
+- `CUBECL_IMPLEMENTATION_GUIDE.md` - Detailed kernel design
+- `FLASH_ATTENTION_PLAN.md` - Phase breakdown

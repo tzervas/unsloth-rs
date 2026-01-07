@@ -138,7 +138,8 @@ pub fn quantize_tensor(
     let shape = tensor.shape();
     if shape.dims().len() != 2 {
         return Err(UnslothError::ShapeMismatch {
-            expected: vec![0, 0], // Indicates "must be 2D"
+            // Expected a 2D tensor (rank 2) for weight matrix
+            expected: vec![2],
             actual: shape.dims().to_vec(),
         });
     }

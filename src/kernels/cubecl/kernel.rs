@@ -74,6 +74,8 @@ pub struct TileConfig {
     pub seq_len: u32,
     /// Number of KV tiles to iterate over
     pub num_kv_tiles: u32,
+    /// Whether to apply causal masking (upper triangular mask)
+    pub causal: bool,
 }
 
 /// Flash Attention forward kernel - Phase 1 simplified implementation.
@@ -180,6 +182,165 @@ fn flash_attention_tile<F: Float>(
     out[out_offset] = running_out;
 }
 
+/// Improved Flash Attention kernel with proper tiling (Phase 1.5).
+///
+/// This kernel implements a more efficient tiled approach:
+/// - Each block processes a tile of Q rows (tile_size rows)
+/// - Threads cooperatively load Q/K/V tiles into shared memory
+/// - Supports causal masking for autoregressive attention
+///
+/// Algorithm (per Q tile):
+/// ```text
+/// For q_tile_idx in 0..num_q_tiles:
+///     Load Q[q_tile_idx] to shared memory
+///     Initialize accumulators: m_i = -inf, l_i = 0, O_i = 0
+///     
+///     For kv_tile_idx in 0..num_kv_tiles:
+///         Load K[kv_tile_idx], V[kv_tile_idx] to shared memory
+///         Compute S_ij = Q_tile @ K_tile^T * scale
+///         Apply causal mask if needed
+///         
+///         # Online softmax update
+///         m_new = max(m_i, rowmax(S_ij))
+///         P_ij = exp(S_ij - m_new)
+///         l_new = exp(m_i - m_new) * l_i + rowsum(P_ij)
+///         O_i = (exp(m_i - m_new) * l_i * O_i + P_ij @ V_tile) / l_new
+///         
+///         m_i = m_new, l_i = l_new
+///     
+///     Write O_i to global memory
+/// ```
+#[cfg(feature = "cuda")]
+#[cube(launch_unchecked)]
+fn flash_attention_tiled<F: Float>(
+    q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
+    k: &Array<F>,       // Key [batch * heads * seq_len * head_dim]
+    v: &Array<F>,       // Value [batch * heads * seq_len * head_dim]
+    out: &mut Array<F>, // Output [batch * heads * seq_len * head_dim]
+    scale: F,           // 1/sqrt(head_dim)
+    #[comptime] config: TileConfig,
+) {
+    // Grid: (batch * heads, num_q_tiles, 1)
+    // Block: (tile_size, 1, 1) - each thread handles one Q row
+
+    let batch_head_idx = CUBE_POS_X;
+    let q_tile_idx = CUBE_POS_Y;
+    let thread_in_tile = UNIT_POS_X;
+
+    // Calculate which Q row this thread handles globally
+    let q_row_global = q_tile_idx * config.tile_size + thread_in_tile;
+
+    // Early exit if beyond sequence length
+    if q_row_global >= config.seq_len {
+        return;
+    }
+
+    // Stride calculations
+    let head_stride = config.seq_len * config.head_dim;
+    let base_offset = batch_head_idx * head_stride;
+
+    // Allocate shared memory for Q tile (tile_size × head_dim)
+    // Each thread loads head_dim elements for its Q row
+    let mut q_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+
+    // Load Q tile cooperatively
+    // Thread i loads Q[q_row_global, :] into q_tile[thread_in_tile, :]
+    for dim_idx in 0..config.head_dim {
+        let q_offset = base_offset + q_row_global * config.head_dim + dim_idx;
+        let tile_offset = thread_in_tile * config.head_dim + dim_idx;
+        q_tile[tile_offset] = q[q_offset];
+    }
+    sync_units();
+
+    // Initialize per-row accumulators (in registers)
+    let mut running_max = F::new(-1e30);
+    let mut running_sum = F::new(0.0);
+
+    // Output accumulator (head_dim elements per thread)
+    let mut out_acc = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+    for dim_idx in 0..config.head_dim {
+        out_acc[thread_in_tile * config.head_dim + dim_idx] = F::new(0.0);
+    }
+
+    // Iterate over KV tiles
+    for kv_tile_idx in 0..config.num_kv_tiles {
+        let kv_start = kv_tile_idx * config.tile_size;
+        let kv_end = F::min(kv_start + config.tile_size, config.seq_len);
+        let kv_tile_actual_size = kv_end - kv_start;
+
+        // Allocate shared memory for K and V tiles
+        let mut k_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+        let mut v_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+
+        // Load K and V tiles cooperatively
+        // Each thread loads multiple rows if needed
+        for local_kv_idx in 0..kv_tile_actual_size {
+            if local_kv_idx % config.tile_size == thread_in_tile {
+                let kv_row_global = kv_start + local_kv_idx;
+                for dim_idx in 0..config.head_dim {
+                    let k_offset = base_offset + kv_row_global * config.head_dim + dim_idx;
+                    let v_offset = base_offset + kv_row_global * config.head_dim + dim_idx;
+                    let tile_offset = local_kv_idx * config.head_dim + dim_idx;
+                    k_tile[tile_offset] = k[k_offset];
+                    v_tile[tile_offset] = v[v_offset];
+                }
+            }
+        }
+        sync_units();
+
+        // Compute attention scores for this thread's Q row against all KV rows in tile
+        for local_kv_idx in 0..kv_tile_actual_size {
+            let kv_row_global = kv_start + local_kv_idx;
+
+            // Apply causal mask: if causal and q_row < kv_row, skip
+            if config.causal && q_row_global < kv_row_global {
+                continue;
+            }
+
+            // Compute dot product Q[thread_in_tile] @ K[local_kv_idx]
+            let mut score = F::new(0.0);
+            for dim_idx in 0..config.head_dim {
+                let q_val = q_tile[thread_in_tile * config.head_dim + dim_idx];
+                let k_val = k_tile[local_kv_idx * config.head_dim + dim_idx];
+                score = score + q_val * k_val;
+            }
+            score = score * scale;
+
+            // Online softmax update
+            let new_max = F::max(running_max, score);
+            let exp_old = F::exp(running_max - new_max);
+            let exp_new = F::exp(score - new_max);
+
+            // Update running sum with correction factor
+            let new_sum = exp_old * running_sum + exp_new;
+
+            // Update output: O_new = (exp_old * l_old * O_old + exp_new * V) / l_new
+            for dim_idx in 0..config.head_dim {
+                let out_offset = thread_in_tile * config.head_dim + dim_idx;
+                let old_out = out_acc[out_offset];
+                let v_val = v_tile[local_kv_idx * config.head_dim + dim_idx];
+
+                // Apply correction and add new contribution
+                let corrected_old = exp_old * running_sum * old_out;
+                let new_contrib = exp_new * v_val;
+                out_acc[out_offset] = (corrected_old + new_contrib) / new_sum;
+            }
+
+            // Update statistics
+            running_max = new_max;
+            running_sum = new_sum;
+        }
+        sync_units();
+    }
+
+    // Write output to global memory
+    for dim_idx in 0..config.head_dim {
+        let out_offset = base_offset + q_row_global * config.head_dim + dim_idx;
+        let tile_offset = thread_in_tile * config.head_dim + dim_idx;
+        out[out_offset] = out_acc[tile_offset];
+    }
+}
+
 /// Launch Flash Attention CubeCL kernel.
 ///
 /// This is the main entry point for the CubeCL Flash Attention implementation.
@@ -220,7 +381,7 @@ pub fn flash_attention_kernel(
     v: &Tensor,
     scale: f64,
     mask: Option<&Tensor>,
-    #[allow(unused_variables)] config: &FlashAttentionConfig,
+    config: &FlashAttentionConfig,
 ) -> Result<Tensor> {
     // Validate input shapes
     validate_attention_inputs(q, k, v)?;
@@ -228,7 +389,7 @@ pub fn flash_attention_kernel(
     // Check for CubeCL support
     if !has_cubecl_cuda_support() {
         tracing::debug!("CubeCL CUDA not available, using fallback implementation");
-        return fallback_attention(q, k, v, scale, mask);
+        return fallback_attention(q, k, v, scale, mask, config);
     }
 
     // Try to launch CubeCL kernel; fall back on any error
@@ -242,7 +403,7 @@ pub fn flash_attention_kernel(
         }
     }
 
-    fallback_attention(q, k, v, scale, mask)
+    fallback_attention(q, k, v, scale, mask, config)
 }
 
 /// Launch the actual CubeCL Flash Attention kernel.
@@ -304,6 +465,7 @@ fn launch_cubecl_attention(
         head_dim: head_dim as u32,
         seq_len: seq_len as u32,
         num_kv_tiles: config.num_kv_tiles(seq_len as u32),
+        causal: config.causal_mask,
     };
 
     // Grid: (batch * heads, seq_len) - one block per (batch-head, q_row)
@@ -396,12 +558,22 @@ fn fallback_attention(
     v: &Tensor,
     scale: f64,
     mask: Option<&Tensor>,
+    config: &FlashAttentionConfig,
 ) -> Result<Tensor> {
     // Q @ K^T, scaled by 1/sqrt(head_dim)
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
     let scores = (scores * scale)?;
 
-    // Apply mask if provided
+    // Apply causal mask if configured
+    let scores = if config.causal_mask {
+        let seq_len = q.dims()[2];
+        let causal_mask = create_causal_mask_tensor(seq_len, q.device())?;
+        scores.broadcast_add(&causal_mask)?
+    } else {
+        scores
+    };
+
+    // Apply additional mask if provided
     let scores = match mask {
         Some(m) => scores.broadcast_add(m)?,
         None => scores,
@@ -414,6 +586,21 @@ fn fallback_attention(
     let output = attn_weights.matmul(v)?;
 
     Ok(output)
+}
+
+/// Create a causal mask tensor with -inf in upper triangle.
+fn create_causal_mask_tensor(seq_len: usize, device: &candle_core::Device) -> Result<Tensor> {
+    let mut mask_data = vec![0.0f32; seq_len * seq_len];
+    for i in 0..seq_len {
+        for j in 0..seq_len {
+            if j > i {
+                mask_data[i * seq_len + j] = f32::NEG_INFINITY;
+            }
+        }
+    }
+
+    let mask = Tensor::from_vec(mask_data, (1, 1, seq_len, seq_len), device)?;
+    Ok(mask)
 }
 
 #[cfg(test)]
@@ -709,5 +896,120 @@ mod tests {
         let mae = mean_absolute_error(&output, &v);
         // With softmax and scaling, we expect some deviation but should be reasonable
         assert!(mae < 0.5, "Identity pattern MAE {} too high", mae);
+    }
+
+    // =========================================================================
+    // Causal Masking Tests
+    // =========================================================================
+
+    #[test]
+    fn test_causal_masking_basic() {
+        // Test that causal masking prevents attending to future positions
+        let device = Device::Cpu;
+        let (batch, heads, seq, dim) = (1, 1, 4, 64);
+        let scale = 1.0 / (dim as f64).sqrt();
+
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+
+        let config = FlashAttentionConfig::default().with_causal_mask();
+        let output = flash_attention_kernel(&q, &k, &v, scale, None, &config).unwrap();
+
+        // Verify output shape
+        assert_eq!(output.dims(), &[batch, heads, seq, dim]);
+
+        // Verify no NaN/Inf
+        let values: Vec<f32> = output.flatten_all().unwrap().to_vec1().unwrap();
+        for val in values {
+            assert!(!val.is_nan() && !val.is_infinite());
+        }
+    }
+
+    #[test]
+    fn test_causal_vs_non_causal_difference() {
+        // Causal and non-causal should produce different outputs
+        let device = Device::Cpu;
+        let (batch, heads, seq, dim) = (1, 2, 8, 64);
+        let scale = 1.0 / (dim as f64).sqrt();
+
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+
+        let config_normal = FlashAttentionConfig::default();
+        let config_causal = FlashAttentionConfig::default().with_causal_mask();
+
+        let output_normal =
+            flash_attention_kernel(&q, &k, &v, scale, None, &config_normal).unwrap();
+        let output_causal =
+            flash_attention_kernel(&q, &k, &v, scale, None, &config_causal).unwrap();
+
+        // Outputs should differ (causal mask changes attention)
+        let mae = mean_absolute_error(&output_normal, &output_causal);
+        assert!(mae > 1e-4, "Causal and non-causal outputs are too similar");
+    }
+
+    #[test]
+    fn test_causal_masking_numerical_equivalence() {
+        // Test causal masking against reference implementation
+        let device = Device::Cpu;
+        let (batch, heads, seq, dim) = (2, 4, 16, 64);
+        let scale = 1.0 / (dim as f64).sqrt();
+
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, dim), &device).unwrap();
+
+        // Create causal mask manually
+        let causal_mask = create_causal_mask(seq, &device);
+
+        let config = FlashAttentionConfig::default().with_causal_mask();
+        let output = flash_attention_kernel(&q, &k, &v, scale, None, &config).unwrap();
+
+        // Reference with explicit mask
+        let reference = reference_attention_with_mask(&q, &k, &v, scale, Some(&causal_mask));
+
+        let mae = mean_absolute_error(&output, &reference);
+        assert!(mae < 1e-5, "Causal MAE {} exceeds tolerance 1e-5", mae);
+    }
+
+    /// Create causal mask (upper triangular with -inf)
+    fn create_causal_mask(seq_len: usize, device: &Device) -> Tensor {
+        let mut mask_data = vec![0.0f32; seq_len * seq_len];
+        for i in 0..seq_len {
+            for j in 0..seq_len {
+                if j > i {
+                    mask_data[i * seq_len + j] = f32::NEG_INFINITY;
+                }
+            }
+        }
+        Tensor::from_vec(mask_data, (1, 1, seq_len, seq_len), device)
+            .unwrap()
+            .broadcast_as((1, 1, seq_len, seq_len))
+            .unwrap()
+    }
+
+    /// Reference attention with explicit mask
+    fn reference_attention_with_mask(
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        scale: f64,
+        mask: Option<&Tensor>,
+    ) -> Tensor {
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let scores = (scores * scale).unwrap();
+
+        let scores = if let Some(m) = mask {
+            scores.broadcast_add(m).unwrap()
+        } else {
+            scores
+        };
+
+        let attn_weights = candle_nn::ops::softmax(&scores, 3).unwrap();
+        attn_weights.matmul(v).unwrap()
     }
 }

@@ -527,8 +527,18 @@ impl TernaryTensor {
     /// The ternary value at (row, col): -1, 0, or +1
     #[must_use]
     pub fn get_dim(&self, row: usize, col: usize) -> i8 {
-        assert!(row < self.shape.0, "row out of bounds");
-        assert!(col < self.shape.1, "col out of bounds");
+        assert!(
+            row < self.shape.0,
+            "row index {} out of bounds for number of rows {}",
+            row,
+            self.shape.0
+        );
+        assert!(
+            col < self.shape.1,
+            "column index {} out of bounds for number of columns {}",
+            col,
+            self.shape.1
+        );
 
         let word_idx = col / 32;
         let bit_idx = col % 32;

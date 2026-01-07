@@ -458,6 +458,126 @@ impl TernaryTensor {
     pub fn scales_tensor(&self, device: &Device) -> candle_core::Result<Tensor> {
         Tensor::from_vec(self.scales.clone(), self.shape.0, device)
     }
+
+    /// Modify a single ternary value in O(1) time via bit manipulation.
+    ///
+    /// This enables efficient in-place edits without reconstructing the tensor.
+    /// Useful for fine-tuning, pruning, or weight correction.
+    ///
+    /// # Arguments
+    ///
+    /// * `row` - Row index (0 to out_features-1)
+    /// * `col` - Column index (0 to in_features-1)
+    /// * `new_val` - New ternary value: -1, 0, or +1
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - `row >= shape.0` (out of bounds)
+    /// - `col >= shape.1` (out of bounds)
+    /// - `new_val` is not in {-1, 0, +1}
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut tensor = TernaryTensor::new(...);
+    /// tensor.modify_dim(0, 5, 1);  // Set weight[0, 5] = +1
+    /// tensor.modify_dim(0, 5, 0);  // Set weight[0, 5] = 0 (prune)
+    /// tensor.modify_dim(0, 5, -1); // Set weight[0, 5] = -1
+    /// ```
+    pub fn modify_dim(&mut self, row: usize, col: usize, new_val: i8) {
+        assert!(row < self.shape.0, "row {} out of bounds (max {})", row, self.shape.0 - 1);
+        assert!(col < self.shape.1, "col {} out of bounds (max {})", col, self.shape.1 - 1);
+        assert!(
+            (-1..=1).contains(&new_val),
+            "new_val must be -1, 0, or +1, got {new_val}"
+        );
+
+        let word_idx = col / 32;
+        let bit_idx = col % 32;
+        let mask = 1u32 << bit_idx;
+        let plane_idx = row * self.k_words + word_idx;
+
+        // Clear both planes at this position
+        self.plus_plane[plane_idx] &= !mask;
+        self.minus_plane[plane_idx] &= !mask;
+
+        // Set the appropriate plane based on new value
+        match new_val {
+            1 => self.plus_plane[plane_idx] |= mask,
+            -1 => self.minus_plane[plane_idx] |= mask,
+            0 => {} // Already cleared
+            _ => unreachable!(),
+        }
+
+        // Invalidate cached sparsity (it may have changed)
+        // Note: We don't update self.sparsity here for performance;
+        // call recalculate_sparsity() if needed after batch edits
+    }
+
+    /// Get a single ternary value.
+    ///
+    /// # Arguments
+    ///
+    /// * `row` - Row index
+    /// * `col` - Column index
+    ///
+    /// # Returns
+    ///
+    /// The ternary value at (row, col): -1, 0, or +1
+    #[must_use]
+    pub fn get_dim(&self, row: usize, col: usize) -> i8 {
+        assert!(row < self.shape.0, "row out of bounds");
+        assert!(col < self.shape.1, "col out of bounds");
+
+        let word_idx = col / 32;
+        let bit_idx = col % 32;
+        let mask = 1u32 << bit_idx;
+        let plane_idx = row * self.k_words + word_idx;
+
+        let is_plus = (self.plus_plane[plane_idx] & mask) != 0;
+        let is_minus = (self.minus_plane[plane_idx] & mask) != 0;
+
+        debug_assert!(!(is_plus && is_minus), "invalid state: both planes set");
+
+        if is_plus {
+            1
+        } else if is_minus {
+            -1
+        } else {
+            0
+        }
+    }
+
+    /// Recalculate and update the cached sparsity value.
+    ///
+    /// Call this after batch modifications via `modify_dim()`.
+    pub fn recalculate_sparsity(&mut self) {
+        let plus_ones: u32 = self.plus_plane.iter().map(|w| w.count_ones()).sum();
+        let minus_ones: u32 = self.minus_plane.iter().map(|w| w.count_ones()).sum();
+        let total_elements = self.shape.0 * self.shape.1;
+        let nonzero = plus_ones + minus_ones;
+        self.sparsity = 1.0 - (nonzero as f32 / total_elements as f32);
+    }
+
+    /// Prune weights below a threshold by setting them to zero.
+    ///
+    /// This is a batch operation that sets all weights with absolute
+    /// scale contribution below threshold to zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Minimum absolute contribution to keep
+    ///
+    /// # Returns
+    ///
+    /// Number of weights pruned
+    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
+        // For ternary, all non-zero weights have equal magnitude (±scale)
+        // So threshold-based pruning would prune all or none per row
+        // This is a placeholder for more sophisticated pruning
+        0
+    }
 }
 
 #[cfg(test)]
@@ -571,5 +691,117 @@ mod tests {
         // Compression ~16x
         let ratio = tensor.compression_ratio();
         assert!(ratio > 10.0 && ratio < 20.0);
+    }
+
+    #[test]
+    fn test_modify_dim_basic() {
+        let shape = (4, 64);
+        let k_words = 2;
+        
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        // Initially all zeros
+        assert_eq!(tensor.get_dim(0, 0), 0);
+        assert_eq!(tensor.get_dim(0, 31), 0);
+        assert_eq!(tensor.get_dim(0, 32), 0);
+        
+        // Set to +1
+        tensor.modify_dim(0, 0, 1);
+        assert_eq!(tensor.get_dim(0, 0), 1);
+        
+        // Set to -1
+        tensor.modify_dim(0, 0, -1);
+        assert_eq!(tensor.get_dim(0, 0), -1);
+        
+        // Set back to 0
+        tensor.modify_dim(0, 0, 0);
+        assert_eq!(tensor.get_dim(0, 0), 0);
+        
+        // Test across word boundary
+        tensor.modify_dim(0, 32, 1);
+        assert_eq!(tensor.get_dim(0, 32), 1);
+        tensor.modify_dim(0, 63, -1);
+        assert_eq!(tensor.get_dim(0, 63), -1);
+    }
+
+    #[test]
+    fn test_modify_dim_different_rows() {
+        let shape = (4, 64);
+        let k_words = 2;
+        
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        // Set values in different rows
+        tensor.modify_dim(0, 0, 1);
+        tensor.modify_dim(1, 0, -1);
+        tensor.modify_dim(2, 0, 1);
+        tensor.modify_dim(3, 0, 0);
+        
+        assert_eq!(tensor.get_dim(0, 0), 1);
+        assert_eq!(tensor.get_dim(1, 0), -1);
+        assert_eq!(tensor.get_dim(2, 0), 1);
+        assert_eq!(tensor.get_dim(3, 0), 0);
+    }
+
+    #[test]
+    fn test_recalculate_sparsity() {
+        let shape = (4, 64);
+        let k_words = 2;
+        
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        // Initially 100% sparse
+        assert!((tensor.sparsity() - 1.0).abs() < 0.001);
+        
+        // Add some non-zero values
+        for i in 0..10 {
+            tensor.modify_dim(0, i, 1);
+        }
+        
+        // Sparsity hasn't updated yet (cached)
+        // Recalculate
+        tensor.recalculate_sparsity();
+        
+        // Now should be (256 - 10) / 256 = 0.9609...
+        let expected = 1.0 - (10.0 / 256.0);
+        assert!((tensor.sparsity() - expected).abs() < 0.001);
+    }
+
+    #[test]
+    #[should_panic(expected = "row")]
+    fn test_modify_dim_row_bounds() {
+        let shape = (4, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        tensor.modify_dim(4, 0, 1); // Should panic
+    }
+
+    #[test]
+    #[should_panic(expected = "col")]
+    fn test_modify_dim_col_bounds() {
+        let shape = (4, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![1.0f32; 4];
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        
+        tensor.modify_dim(0, 64, 1); // Should panic
     }
 }

@@ -572,7 +572,8 @@ impl TernaryTensor {
     /// # Returns
     ///
     /// Number of weights pruned
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
+    #[allow(unused_variables)]
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
         // For ternary, all non-zero weights have equal magnitude (±scale)
         // So threshold-based pruning would prune all or none per row
         // This is a placeholder for more sophisticated pruning

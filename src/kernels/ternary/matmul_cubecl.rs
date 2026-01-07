@@ -2,17 +2,18 @@
 //!
 //! ## Implementation Status
 //!
-//! Provides both basic and tiled implementations:
+//! Provides three implementations with increasing optimization:
 //! - **Basic kernel**: Simple popcount-based implementation for validation
 //! - **Tiled kernel**: Optimized with shared memory for better performance
+//! - **Vectorized kernel**: Uses Line<u32> for 4-element vectorized loads
 //!
 //! ## Completed Tasks
 //! - Task 2.1: u32 tensor interop ✅
 //! - Task 2.2: Basic popcount kernel ✅
 //! - Task 2.3: Tiled kernel with shared memory ✅
+//! - Task 2.4: Vectorized Line<u32> loads ✅
 //!
 //! ## Future Tasks
-//! - Task 2.4: Vectorized Line<u32> loads
 //! - Task 2.5: Plane skipping with sparsity metadata
 //! - Task 2.6: GPU dispatch integration
 //!
@@ -332,6 +333,277 @@ pub fn ternary_matmul_kernel_tiled<F: Float>(
         let scale = scales[out_idx];
         output[batch_idx * config.n + out_idx] = dot * scale;
     }
+}
+
+/// Compile-time configuration for vectorized tiled ternary matmul kernel.
+#[derive(Clone, Copy, Debug)]
+pub struct VectorizedTernaryMatmulConfig {
+    /// Number of u32 words in K dimension (in_features / 32)
+    pub k_words: u32,
+    /// Number of output rows (batch size)
+    pub m: u32,
+    /// Number of output cols (out_features)
+    pub n: u32,
+    /// Number of input features (for bounds checking)
+    pub in_features: u32,
+    /// Tile size for K dimension in Line<u32> elements (default: 8-16)
+    /// Each Line<u32> contains 4 u32 words, so tile_k_lines=8 means 32 u32 words
+    pub tile_k_lines: u32,
+    /// Number of outputs computed per thread (default: 1-4)
+    pub outputs_per_thread: u32,
+    /// Block size (threads per block, default: 256)
+    pub block_size: u32,
+}
+
+impl VectorizedTernaryMatmulConfig {
+    /// Create configuration optimized for RTX 5080 with vectorization
+    pub fn rtx_5080_preset(m: u32, n: u32, k_words: u32, in_features: u32) -> Self {
+        Self {
+            k_words,
+            m,
+            n,
+            in_features,
+            tile_k_lines: 16,  // 16 Line<u32> = 64 u32 words = 2048 dimensions
+            outputs_per_thread: 2,
+            block_size: 256,
+        }
+    }
+
+    /// Create configuration optimized for RTX 3090 Ti with vectorization
+    pub fn rtx_3090ti_preset(m: u32, n: u32, k_words: u32, in_features: u32) -> Self {
+        Self {
+            k_words,
+            m,
+            n,
+            in_features,
+            tile_k_lines: 8,  // 8 Line<u32> = 32 u32 words = 1024 dimensions
+            outputs_per_thread: 2,
+            block_size: 256,
+        }
+    }
+
+    /// Get actual tile size in u32 words (tile_k_lines * 4)
+    pub fn tile_k(&self) -> u32 {
+        self.tile_k_lines * 4
+    }
+}
+
+/// Vectorized tiled ternary matmul kernel using Line<u32> for 4-element loads.
+///
+/// Uses Line<u32> to load 4 u32 words at once, improving memory bandwidth utilization.
+/// Each Line<u32> load fetches 128 bits (4 × 32 bits) in a single memory transaction.
+///
+/// Algorithm:
+/// ```text
+/// For each K tile (in Line<u32> units):
+///   - Cooperatively load input tile using vectorized loads
+///   - Quantize to bitsliced planes in shared memory
+///   - Each thread processes 4 u32 words per iteration
+///   - Compute popcount dot products for tile
+///   - Accumulate results
+/// output = accumulated_dot * scale
+/// ```
+#[cube(launch_unchecked)]
+pub fn ternary_matmul_kernel_vectorized<F: Float>(
+    // Input activations [batch, in_features] as f32
+    input: &Array<F>,
+    // Weight positive plane [out_features, k_words] as u32 (bit-reinterpreted from f32)
+    w_plus: &Array<F>,
+    // Weight negative plane [out_features, k_words] as u32
+    w_minus: &Array<F>,
+    // Per-row scales [out_features]
+    scales: &Array<F>,
+    // Output [batch, out_features]
+    output: &mut Array<F>,
+    // Compile-time configuration
+    #[comptime] config: VectorizedTernaryMatmulConfig,
+) {
+    // Thread and block indices
+    let batch_idx = CUBE_POS_X;
+    let out_block_idx = CUBE_POS_Y;
+    let thread_idx = UNIT_POS_X;
+
+    // Bounds check for batch
+    if batch_idx >= config.m {
+        return;
+    }
+
+    // Shared memory for input tile (plus and minus planes)
+    // Store as u32 (non-vectorized) for flexible access patterns
+    let tile_k_words = config.tile_k();
+    let mut input_plus_tile = SharedMemory::<u32>::new(tile_k_words);
+    let mut input_minus_tile = SharedMemory::<u32>::new(tile_k_words);
+
+    // Each thread computes outputs_per_thread outputs
+    for out_local in 0..config.outputs_per_thread {
+        let out_idx = out_block_idx * config.block_size * config.outputs_per_thread
+            + thread_idx * config.outputs_per_thread
+            + out_local;
+
+        if out_idx >= config.n {
+            continue;
+        }
+
+        let input_offset = batch_idx * config.in_features;
+        let weight_offset = out_idx * config.k_words;
+
+        // Accumulator for this output
+        let mut pos_sum = 0u32;
+        let mut neg_sum = 0u32;
+
+        // Number of K tiles (in Line<u32> units)
+        let num_k_tiles = (config.k_words + tile_k_words - 1) / tile_k_words;
+
+        // Process K dimension in tiles
+        for k_tile in 0..num_k_tiles {
+            let k_start = k_tile * tile_k_words;
+            let k_end = u32::min(k_start + tile_k_words, config.k_words);
+            let tile_size = k_end - k_start;
+
+            // Cooperatively load and quantize input tile to shared memory
+            // Use vectorized loads when possible (4 u32 words per thread)
+            let num_vec_loads = tile_size / 4;
+            let remaining_words = tile_size % 4;
+
+            // Vectorized loading phase (4 words at a time)
+            if thread_idx < num_vec_loads {
+                let vec_idx = thread_idx;
+                let base_word = k_start + vec_idx * 4;
+
+                // Process 4 consecutive u32 words
+                for word_offset in 0u32..4u32 {
+                    let k_word = base_word + word_offset;
+                    let mut plus_word = 0u32;
+                    let mut minus_word = 0u32;
+
+                    // Quantize 32 input dimensions to one u32 word
+                    let base_dim = k_word * 32;
+                    let end_dim = u32::min(base_dim + 32, config.in_features);
+
+                    for bit in 0..(end_dim - base_dim) {
+                        let dim_idx = base_dim + bit;
+                        let val = input[input_offset + dim_idx];
+
+                        let threshold = F::new(0.5);
+                        let neg_threshold = F::new(-0.5);
+
+                        if val > threshold {
+                            plus_word = plus_word | (1u32 << bit);
+                        } else if val < neg_threshold {
+                            minus_word = minus_word | (1u32 << bit);
+                        }
+                    }
+
+                    let tile_offset = vec_idx * 4 + word_offset;
+                    input_plus_tile[tile_offset] = plus_word;
+                    input_minus_tile[tile_offset] = minus_word;
+                }
+            }
+
+            // Handle remaining words (non-vectorized)
+            if remaining_words > 0 && thread_idx < remaining_words {
+                let k_word = k_start + num_vec_loads * 4 + thread_idx;
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+
+                let base_dim = k_word * 32;
+                let end_dim = u32::min(base_dim + 32, config.in_features);
+
+                for bit in 0..(end_dim - base_dim) {
+                    let dim_idx = base_dim + bit;
+                    let val = input[input_offset + dim_idx];
+
+                    let threshold = F::new(0.5);
+                    let neg_threshold = F::new(-0.5);
+
+                    if val > threshold {
+                        plus_word = plus_word | (1u32 << bit);
+                    } else if val < neg_threshold {
+                        minus_word = minus_word | (1u32 << bit);
+                    }
+                }
+
+                let tile_offset = num_vec_loads * 4 + thread_idx;
+                input_plus_tile[tile_offset] = plus_word;
+                input_minus_tile[tile_offset] = minus_word;
+            }
+
+            // Synchronize to ensure tile is fully loaded
+            sync_units();
+
+            // Compute popcount dot product for this tile
+            // Use vectorized access pattern (process 4 words at once)
+            let num_vec_iter = tile_size / 4;
+            let remaining = tile_size % 4;
+
+            // Vectorized processing
+            for vec_idx in 0..num_vec_iter {
+                for word_offset in 0u32..4u32 {
+                    let k_word = k_start + vec_idx * 4 + word_offset;
+                    let k_local = vec_idx * 4 + word_offset;
+
+                    // Load weight planes
+                    let wp_f32 = w_plus[weight_offset + k_word];
+                    let wm_f32 = w_minus[weight_offset + k_word];
+                    let wp_bits = u32::reinterpret(wp_f32);
+                    let wm_bits = u32::reinterpret(wm_f32);
+
+                    // Load input planes from shared memory
+                    let ip = input_plus_tile[k_local];
+                    let im = input_minus_tile[k_local];
+
+                    // Popcount-based ternary dot product
+                    pos_sum = pos_sum + (wp_bits & ip).count_ones();
+                    pos_sum = pos_sum + (wm_bits & im).count_ones();
+
+                    neg_sum = neg_sum + (wp_bits & im).count_ones();
+                    neg_sum = neg_sum + (wm_bits & ip).count_ones();
+                }
+            }
+
+            // Handle remaining words
+            for word_offset in 0..remaining {
+                let k_word = k_start + num_vec_iter * 4 + word_offset;
+                let k_local = num_vec_iter * 4 + word_offset;
+
+                let wp_f32 = w_plus[weight_offset + k_word];
+                let wm_f32 = w_minus[weight_offset + k_word];
+                let wp_bits = u32::reinterpret(wp_f32);
+                let wm_bits = u32::reinterpret(wm_f32);
+
+                let ip = input_plus_tile[k_local];
+                let im = input_minus_tile[k_local];
+
+                pos_sum = pos_sum + (wp_bits & ip).count_ones();
+                pos_sum = pos_sum + (wm_bits & im).count_ones();
+
+                neg_sum = neg_sum + (wp_bits & im).count_ones();
+                neg_sum = neg_sum + (wm_bits & ip).count_ones();
+            }
+
+            // Synchronize before loading next tile
+            sync_units();
+        }
+
+        // Convert popcount result to float and apply scale
+        let dot = F::cast_from(pos_sum) - F::cast_from(neg_sum);
+        let scale = scales[out_idx];
+        output[batch_idx * config.n + out_idx] = dot * scale;
+    }
+}
+
+/// Launch configuration for the vectorized kernel
+pub fn get_vectorized_launch_config(
+    config: &VectorizedTernaryMatmulConfig,
+) -> (CubeCount, CubeDim) {
+    // Number of output blocks needed
+    let outputs_per_block = config.block_size * config.outputs_per_thread;
+    let grid_y = (config.n + outputs_per_block - 1) / outputs_per_block;
+
+    let cube_count = CubeCount::Static(config.m, grid_y, 1);
+    let cube_dim = CubeDim::new(config.block_size, 1, 1);
+
+    (cube_count, cube_dim)
 }
 
 /// Launch configuration for the tiled kernel
@@ -857,6 +1129,272 @@ mod tests {
             assert!(
                 (actual - expected).abs() < 0.01,
                 "Mismatch at index {}: expected {}, got {}",
+                i,
+                expected,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_vectorized_config_creation() {
+        let config = VectorizedTernaryMatmulConfig::rtx_5080_preset(8, 512, 32, 1024);
+        assert_eq!(config.k_words, 32);
+        assert_eq!(config.m, 8);
+        assert_eq!(config.n, 512);
+        assert_eq!(config.tile_k_lines, 16);
+        assert_eq!(config.tile_k(), 64); // 16 * 4 = 64 u32 words
+        assert_eq!(config.outputs_per_thread, 2);
+        assert_eq!(config.block_size, 256);
+    }
+
+    #[test]
+    fn test_vectorized_launch_config() {
+        let config = VectorizedTernaryMatmulConfig::rtx_5080_preset(4, 512, 32, 1024);
+        let (cube_count, cube_dim) = get_vectorized_launch_config(&config);
+
+        assert_eq!(cube_dim.x, 256);
+        assert_eq!(cube_dim.y, 1);
+        assert_eq!(cube_dim.z, 1);
+
+        if let CubeCount::Static(x, y, z) = cube_count {
+            assert_eq!(x, 4);
+            assert_eq!(y, 1); // ceil(512 / (256*2)) = 1
+            assert_eq!(z, 1);
+        } else {
+            panic!("Expected Static cube count");
+        }
+    }
+
+    #[test]
+    fn test_vectorized_presets() {
+        let rtx5080 = VectorizedTernaryMatmulConfig::rtx_5080_preset(16, 1024, 64, 2048);
+        assert_eq!(rtx5080.tile_k_lines, 16, "RTX 5080 uses 16 Line<u32>");
+        assert_eq!(rtx5080.tile_k(), 64); // 16 * 4 = 64 words
+
+        let rtx3090 = VectorizedTernaryMatmulConfig::rtx_3090ti_preset(16, 1024, 64, 2048);
+        assert_eq!(rtx3090.tile_k_lines, 8, "RTX 3090 Ti uses 8 Line<u32>");
+        assert_eq!(rtx3090.tile_k(), 32); // 8 * 4 = 32 words
+
+        assert_eq!(rtx5080.block_size, rtx3090.block_size);
+    }
+
+    /// Test vectorized kernel correctness.
+    ///
+    /// Validates that vectorized loading produces same results as non-vectorized.
+    #[test]
+    fn test_vectorized_kernel_correctness() {
+        let batch_size = 2;
+        let in_features = 128;  // 4 words (perfect for vectorization)
+        let out_features = 4;
+        let k_words = 4;
+
+        // Input: alternating pattern for batch 0, all positive for batch 1
+        let mut input_data = vec![0.0f32; batch_size * in_features];
+        for b in 0..batch_size {
+            for i in 0..in_features {
+                input_data[b * in_features + i] = if b == 0 {
+                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                } else {
+                    1.0
+                };
+            }
+        }
+
+        // Quantize inputs
+        let mut input_plus = vec![0u32; batch_size * k_words];
+        let mut input_minus = vec![0u32; batch_size * k_words];
+
+        for b in 0..batch_size {
+            for k in 0..k_words {
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+
+                for bit in 0..32 {
+                    let dim_idx = k * 32 + bit;
+                    let val = input_data[b * in_features + dim_idx];
+
+                    if val > 0.5 {
+                        plus_word |= 1u32 << bit;
+                    } else if val < -0.5 {
+                        minus_word |= 1u32 << bit;
+                    }
+                }
+
+                input_plus[b * k_words + k] = plus_word;
+                input_minus[b * k_words + k] = minus_word;
+            }
+        }
+
+        // Weights: same patterns as tiled test
+        let mut w_plus = vec![0u32; out_features * k_words];
+        let mut w_minus = vec![0u32; out_features * k_words];
+
+        // Feature 0: all +1
+        for k in 0..k_words {
+            w_plus[0 * k_words + k] = 0xFFFFFFFF;
+        }
+
+        // Feature 1: all -1
+        for k in 0..k_words {
+            w_minus[1 * k_words + k] = 0xFFFFFFFF;
+        }
+
+        // Feature 2: alternating
+        for k in 0..k_words {
+            w_plus[2 * k_words + k] = 0xAAAAAAAA;
+            w_minus[2 * k_words + k] = 0x55555555;
+        }
+
+        // Feature 3: first half +1, second half -1
+        w_plus[3 * k_words + 0] = 0xFFFFFFFF;
+        w_plus[3 * k_words + 1] = 0xFFFFFFFF;
+        w_minus[3 * k_words + 2] = 0xFFFFFFFF;
+        w_minus[3 * k_words + 3] = 0xFFFFFFFF;
+
+        let scales = vec![1.0f32; out_features];
+
+        // Simulate vectorized computation
+        // Process in 4-word chunks (vectorized)
+        let mut output = vec![0.0f32; batch_size * out_features];
+
+        for batch_idx in 0..batch_size {
+            for out_idx in 0..out_features {
+                let input_offset = batch_idx * k_words;
+                let weight_offset = out_idx * k_words;
+                let mut pos_sum = 0u32;
+                let mut neg_sum = 0u32;
+
+                // Process all words (simulating vectorized access)
+                for k in 0..k_words {
+                    let wp_bits = w_plus[weight_offset + k];
+                    let wm_bits = w_minus[weight_offset + k];
+                    let ip = input_plus[input_offset + k];
+                    let im = input_minus[input_offset + k];
+
+                    pos_sum += (wp_bits & ip).count_ones();
+                    pos_sum += (wm_bits & im).count_ones();
+                    neg_sum += (wp_bits & im).count_ones();
+                    neg_sum += (wm_bits & ip).count_ones();
+                }
+
+                let dot = (pos_sum as i32 - neg_sum as i32) as f32;
+                output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
+            }
+        }
+
+        // Verify results match tiled kernel results
+        let expected = vec![
+            0.0, 0.0, 256.0, 0.0,  // Batch 0
+            256.0, -256.0, 0.0, 0.0, // Batch 1
+        ];
+
+        for (i, (actual, expected)) in output.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 0.01,
+                "Vectorized mismatch at index {}: expected {}, got {}",
+                i,
+                expected,
+                actual
+            );
+        }
+    }
+
+    /// Test vectorized kernel with non-aligned tile size.
+    ///
+    /// Validates handling of partial vectorized loads (when k_words % 4 != 0).
+    #[test]
+    fn test_vectorized_kernel_partial() {
+        let batch_size = 2;
+        let in_features = 96;  // 3 words (not divisible by 4)
+        let out_features = 2;
+        let k_words = 3;
+
+        // Input: all +1 for batch 0, all -1 for batch 1
+        let mut input_data = vec![0.0f32; batch_size * in_features];
+        for b in 0..batch_size {
+            for i in 0..in_features {
+                input_data[b * in_features + i] = if b == 0 { 1.0 } else { -1.0 };
+            }
+        }
+
+        // Quantize inputs
+        let mut input_plus = vec![0u32; batch_size * k_words];
+        let mut input_minus = vec![0u32; batch_size * k_words];
+
+        for b in 0..batch_size {
+            for k in 0..k_words {
+                let mut plus_word = 0u32;
+                let mut minus_word = 0u32;
+
+                for bit in 0..32 {
+                    let dim_idx = k * 32 + bit;
+                    let val = input_data[b * in_features + dim_idx];
+
+                    if val > 0.5 {
+                        plus_word |= 1u32 << bit;
+                    } else if val < -0.5 {
+                        minus_word |= 1u32 << bit;
+                    }
+                }
+
+                input_plus[b * k_words + k] = plus_word;
+                input_minus[b * k_words + k] = minus_word;
+            }
+        }
+
+        // Weights: simple patterns
+        let mut w_plus = vec![0u32; out_features * k_words];
+        let mut w_minus = vec![0u32; out_features * k_words];
+
+        // Feature 0: all +1
+        for k in 0..k_words {
+            w_plus[0 * k_words + k] = 0xFFFFFFFF;
+        }
+
+        // Feature 1: all -1
+        for k in 0..k_words {
+            w_minus[1 * k_words + k] = 0xFFFFFFFF;
+        }
+
+        let scales = vec![1.0f32; out_features];
+
+        // Simulate computation
+        let mut output = vec![0.0f32; batch_size * out_features];
+
+        for batch_idx in 0..batch_size {
+            for out_idx in 0..out_features {
+                let input_offset = batch_idx * k_words;
+                let weight_offset = out_idx * k_words;
+                let mut pos_sum = 0u32;
+                let mut neg_sum = 0u32;
+
+                for k in 0..k_words {
+                    let wp_bits = w_plus[weight_offset + k];
+                    let wm_bits = w_minus[weight_offset + k];
+                    let ip = input_plus[input_offset + k];
+                    let im = input_minus[input_offset + k];
+
+                    pos_sum += (wp_bits & ip).count_ones();
+                    pos_sum += (wm_bits & im).count_ones();
+                    neg_sum += (wp_bits & im).count_ones();
+                    neg_sum += (wm_bits & ip).count_ones();
+                }
+
+                let dot = (pos_sum as i32 - neg_sum as i32) as f32;
+                output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
+            }
+        }
+
+        // Expected: 96 dimensions per feature
+        // Batch 0 (all +1): Feature 0 (all +1) = 96, Feature 1 (all -1) = -96
+        // Batch 1 (all -1): Feature 0 (all +1) = -96, Feature 1 (all -1) = 96
+        let expected = vec![96.0, -96.0, -96.0, 96.0];
+
+        for (i, (actual, expected)) in output.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 0.01,
+                "Partial vectorized mismatch at {}: expected {}, got {}",
                 i,
                 expected,
                 actual

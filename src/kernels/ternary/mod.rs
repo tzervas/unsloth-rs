@@ -26,6 +26,7 @@
 //! - [`quantize`] - FP → ternary quantization with scale calibration
 //! - [`matmul`] - Bitsliced matrix multiplication kernel
 //! - [`linear`] - Drop-in `TernaryLinear` layer
+//! - [`attention`] - Ternary attention scoring with online softmax
 //!
 //! ## Usage
 //!
@@ -48,6 +49,7 @@
 //! - **Memory**: ≥10x weight reduction (targeting 20-30x with sparsity)
 //! - **Accuracy**: <2% perplexity degradation post-calibration
 
+pub mod attention;
 pub mod config;
 pub mod linear;
 pub mod matmul;
@@ -56,6 +58,10 @@ pub mod matmul_cubecl;
 pub mod quantize;
 pub mod types;
 
+pub use attention::{
+    should_use_ternary_attention, ternary_attention_cpu, TernaryAttentionConfig,
+    TernaryAttentionWeights,
+};
 pub use config::TernaryConfig;
 pub use linear::TernaryLinear;
 pub use matmul::{ternary_matmul, ternary_matmul_cpu};

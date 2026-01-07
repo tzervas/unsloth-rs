@@ -572,8 +572,17 @@ impl TernaryTensor {
 
     /// Prune weights below a threshold by setting them to zero.
     ///
-    /// This is a batch operation that sets all weights with absolute
-    /// scale contribution below threshold to zero.
+    /// This is intended as a batch operation that sets all weights with
+    /// absolute scale contribution below `threshold` to zero.
+    ///
+    /// Note: For ternary weights, all non-zero values have equal magnitude
+    /// (±scale), so simple threshold-based pruning would typically prune
+    /// all or none per row. As a result, this method is currently a
+    /// no-op stub and does not modify any weights.
+    ///
+    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
+    /// rows based on aggregate contribution) or remove this method if it
+    /// remains unused.
     ///
     /// # Arguments
     ///
@@ -581,12 +590,9 @@ impl TernaryTensor {
     ///
     /// # Returns
     ///
-    /// Number of weights pruned
-    #[allow(unused_variables)]
-    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
-        // For ternary, all non-zero weights have equal magnitude (±scale)
-        // So threshold-based pruning would prune all or none per row
-        // This is a placeholder for more sophisticated pruning
+    /// Number of weights pruned (currently always 0; no-op)
+    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
+        // Intentionally a no-op: see documentation above.
         0
     }
 }
@@ -781,8 +787,7 @@ mod tests {
             tensor.modify_dim(0, i, 1);
         }
         
-        // Sparsity hasn't updated yet (cached)
-        // Recalculate
+        // Sparsity is not automatically updated by modify_dim; recompute it now
         tensor.recalculate_sparsity();
         
         // Now should be (256 - 10) / 256 = 0.9609...

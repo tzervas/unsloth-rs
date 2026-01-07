@@ -51,6 +51,8 @@
 pub mod config;
 pub mod linear;
 pub mod matmul;
+#[cfg(feature = "cuda")]
+pub mod matmul_cubecl;
 pub mod quantize;
 pub mod types;
 

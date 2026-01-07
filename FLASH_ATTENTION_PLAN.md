@@ -2,7 +2,7 @@
 
 **CubeCL Version**: v0.8.1 (Validated January 2026)  
 **Last Updated**: 2026-01-06  
-**Status**: Phase 1 (Minimal Viable Kernel) - In Progress
+**Status**: Phase 1 (Minimal Viable Kernel) - ✅ Completed
 
 ## Objective
 Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-efficient LLM training.
@@ -23,7 +23,7 @@ Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-ef
 ### Phase 1: Minimal Viable Kernel (RTX 5080 Focus)
 **Goal:** Correct, basic f32 Flash Attention on RTX 5080  
 **Estimated Time:** 1-3 weeks  
-**Status:** In Progress
+**Status:** ✅ Completed (PRs #14 and #15)
 
 **Tasks:**
 - [x] Review existing CPU reference implementation
@@ -32,21 +32,26 @@ Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-ef
 - [x] Create module structure (`src/kernels/cubecl/`)
 - [x] Implement Candle ↔ CubeCL interop (`interop.rs`)
 - [x] Implement kernel configuration (`config.rs`)
-- [ ] Implement basic non-masked tiled kernel (tile_size=128)
-- [ ] Add small-test equivalence suite (tolerance 1e-5)
-- [ ] Profile on RTX 5080 (target >2x speedup vs Candle fallback)
-- [ ] Validate VRAM reduction on seq=2048
+- [x] Implement basic tiled kernel with improved tiling (tile_size=256)
+- [x] Add causal masking support
+- [x] Add small-test equivalence suite (tolerance 1e-5) - 65 tests passing
+- [ ] Profile on RTX 5080 (target >2x speedup vs Candle fallback) - **BLOCKED: Requires CUDA hardware**
+- [ ] Validate VRAM reduction on seq=2048 - **BLOCKED: Requires CUDA hardware**
 
 **Deliverables:**
-- `src/kernels/cubecl/` module with kernel, interop, config
-- Working Flash Attention kernel (f32, non-masked)
-- Test suite with numerical equivalence validation
+- ✅ `src/kernels/cubecl/` module with kernel, interop, config
+- ✅ Working Flash Attention kernel (f32, with causal masking)
+- ✅ Test suite with numerical equivalence validation (65 tests)
 
 **Acceptance Criteria:**
-- All small tests pass
-- No NaN/Inf in outputs
-- Matches Candle fallback within 1e-5 tolerance
-- Measurable speedup on RTX 5080
+- ✅ All small tests pass (65/65)
+- ✅ No NaN/Inf in outputs
+- ✅ Matches Candle fallback within 1e-5 tolerance
+- ⏸️ Measurable speedup on RTX 5080 - **BLOCKED: Requires CUDA hardware**
+
+**Merged PRs:**
+- PR #14: Phase 1 base implementation (commit e619c08)
+- PR #15: Improved tiling + causal masking (commit 61800e6)
 
 ---
 

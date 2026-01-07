@@ -52,15 +52,15 @@ Production-ready changes are merged from `dev` to `main` for:
 
 ## PR #16 Workflow
 
-### Current State
-- **PR #16**: `feature/unsloth-rs/ternary-gpu-kernels` → `experimental` (✅ Updated)
+### Current State (as of 2026-01-07)
+- **PR #16**: `feature/unsloth-rs/ternary-gpu-kernels` → `experimental` (✅ Confirmed)
 - Following the correct workflow for new features
 
 ### Promotion Path
 
 The feature will follow this promotion path:
 
-1. **Phase 1: Merge to Experimental** (Current)
+1. **Phase 1: Merge to Experimental** (In Progress)
    - **PR #16**: `feature/unsloth-rs/ternary-gpu-kernels` → `experimental`
    - Initial feature integration and validation
    

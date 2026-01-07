@@ -17,9 +17,10 @@
 
 use cubecl::prelude::*;
 
-/// Compile-time configuration for ternary matmul kernel.
+/// Compile-time configuration for basic ternary matmul kernel.
+/// Renamed from TernaryMatmulConfig to distinguish from the tiled version in matmul.rs.
 #[derive(Clone, Copy, Debug)]
-pub struct TernaryMatmulConfig {
+pub struct BasicTernaryMatmulConfig {
     /// Number of u32 words in K dimension (in_features / 32)
     pub k_words: u32,
     /// Number of output rows (batch size)
@@ -59,7 +60,7 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
     // Output [batch, out_features]
     output: &mut Array<F>,
     // Compile-time configuration
-    #[comptime] config: TernaryMatmulConfig,
+    #[comptime] config: BasicTernaryMatmulConfig,
 ) {
     // Thread indices: each thread handles one (batch, out_feature) element
     // Grid layout: X=batch, Y=blocks of features
@@ -67,7 +68,10 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
     let batch_idx = CUBE_POS_X;
     let out_idx = CUBE_POS_Y * CUBE_DIM_X + UNIT_POS_X;
 
-    // Bounds check
+    // Bounds checks
+    if batch_idx >= config.m {
+        return;
+    }
     if out_idx >= config.n {
         return;
     }
@@ -85,31 +89,34 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
         // Reinterpret f32 as u32 bits for weight planes
         let wp_f32 = w_plus[weight_offset + k];
         let wm_f32 = w_minus[weight_offset + k];
+        let wp_bits = u32::reinterpret(wp_f32);
+        let wm_bits = u32::reinterpret(wm_f32);
+        
+        // Check if this is a full word (all 32 bits are valid)
+        let is_full_word = (k * 32 + 32) <= config.in_features;
         
         // For each bit position in the u32 word
         for bit in 0u32..32u32 {
             let dim_idx = k * 32 + bit;
             
-            if dim_idx < config.in_features {
-                let mask = 1u32 << bit;
-                
-                // Extract ternary weight value from planes
-                // Note: We're working with f32 reinterpreted as u32
-                // In production, use proper u32 arrays
-                let wp_bits = u32::reinterpret(wp_f32);
-                let wm_bits = u32::reinterpret(wm_f32);
-                
-                let is_pos = (wp_bits & mask) != 0u32;
-                let is_neg = (wm_bits & mask) != 0u32;
+            // Only check bounds for partial words
+            if !is_full_word && dim_idx >= config.in_features {
+                break;
+            }
+            
+            let mask = 1u32 << bit;
+            
+            // Extract ternary weight value from planes
+            let is_pos = (wp_bits & mask) != 0u32;
+            let is_neg = (wm_bits & mask) != 0u32;
 
-                let input_val = input[input_offset + dim_idx];
+            let input_val = input[input_offset + dim_idx];
 
-                // Ternary multiplication: +1, 0, or -1
-                if is_pos {
-                    acc = acc + input_val;
-                } else if is_neg {
-                    acc = acc - input_val;
-                }
+            // Ternary multiplication: +1, 0, or -1
+            if is_pos {
+                acc = acc + input_val;
+            } else if is_neg {
+                acc = acc - input_val;
             }
         }
     }
@@ -139,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_config_creation() {
-        let config = TernaryMatmulConfig {
+        let config = BasicTernaryMatmulConfig {
             k_words: 4,
             m: 8,
             n: 64,
@@ -154,5 +161,127 @@ mod tests {
         let (cube_count, cube_dim) = get_basic_launch_config(4, 512);
         // Should have 4 blocks in X (batch), 2 blocks in Y (512/256)
         assert_eq!(cube_dim.x, 256);
+        assert_eq!(cube_dim.y, 1);
+        assert_eq!(cube_dim.z, 1);
+        
+        // Verify grid dimensions
+        if let CubeCount::Static(x, y, z) = cube_count {
+            assert_eq!(x, 4, "Grid X dimension should match batch size");
+            assert_eq!(y, 2, "Grid Y dimension should be ceil(512/256) = 2");
+            assert_eq!(z, 1, "Grid Z dimension should be 1");
+        } else {
+            panic!("Expected Static cube count");
+        }
+    }
+
+    /// Functional test: validates kernel algorithm with known ternary weights.
+    /// 
+    /// This test verifies the ternary matrix multiplication logic by simulating
+    /// the kernel computation on CPU with simple test data.
+    #[test]
+    fn test_ternary_matmul_kernel_correctness() {
+        // Simple test case: 2 batches, 3 output features, 64 input features (2 words)
+        // Weights pattern: each output uses different ternary pattern
+        
+        let batch_size = 2;
+        let in_features = 64;
+        let out_features = 3;
+        let k_words = 2;  // 64 / 32 = 2
+        
+        // Input: simple pattern [1.0, 2.0, 3.0, ..., 64.0] for batch 0
+        //                       [0.5, 1.0, 1.5, ..., 32.0] for batch 1
+        let mut input_data = vec![0.0f32; batch_size * in_features];
+        for b in 0..batch_size {
+            for i in 0..in_features {
+                input_data[b * in_features + i] = (i + 1) as f32 / (b + 1) as f32;
+            }
+        }
+        
+        // Weights: Create simple ternary patterns
+        // Out feature 0: first 32 bits = +1, rest = 0
+        // Out feature 1: first 32 bits = -1, rest = 0
+        // Out feature 2: alternate +1/-1 pattern in first word
+        let mut w_plus = vec![0u32; out_features * k_words];
+        let mut w_minus = vec![0u32; out_features * k_words];
+        
+        // Feature 0: all positive in first word
+        w_plus[0] = 0xFFFFFFFF;  // word 0
+        w_plus[1] = 0;           // word 1
+        
+        // Feature 1: all negative in first word  
+        w_minus[2] = 0xFFFFFFFF; // word 0
+        w_minus[3] = 0;          // word 1
+        
+        // Feature 2: alternating pattern (0xAAAAAAAA = 1010... binary)
+        w_plus[4] = 0xAAAAAAAA;  // word 0, every other bit
+        w_minus[4] = 0x55555555; // word 0, opposite bits
+        w_plus[5] = 0;
+        w_minus[5] = 0;
+        
+        // Scales: all 1.0 for simplicity
+        let scales = vec![1.0f32; out_features];
+        
+        // Expected outputs:
+        // Batch 0, Feature 0: sum(1..32) = 32*33/2 = 528
+        // Batch 0, Feature 1: -sum(1..32) = -528
+        // Batch 0, Feature 2: sum(even positions) - sum(odd positions) 
+        //                   = (2+4+6+...+32) - (1+3+5+...+31) = 16
+        
+        // Simulate kernel computation
+        let mut output = vec![0.0f32; batch_size * out_features];
+        
+        for batch_idx in 0..batch_size {
+            for out_idx in 0..out_features {
+                let mut acc = 0.0f32;
+                let input_offset = batch_idx * in_features;
+                let weight_offset = out_idx * k_words;
+                
+                for k in 0..k_words {
+                    let wp_bits = w_plus[weight_offset + k];
+                    let wm_bits = w_minus[weight_offset + k];
+                    
+                    let is_full_word = (k * 32 + 32) <= in_features;
+                    
+                    for bit in 0..32 {
+                        let dim_idx = k * 32 + bit;
+                        
+                        if !is_full_word && dim_idx >= in_features {
+                            break;
+                        }
+                        
+                        let mask = 1u32 << bit;
+                        let is_pos = (wp_bits & mask) != 0;
+                        let is_neg = (wm_bits & mask) != 0;
+                        
+                        let input_val = input_data[input_offset + dim_idx];
+                        
+                        if is_pos {
+                            acc += input_val;
+                        } else if is_neg {
+                            acc -= input_val;
+                        }
+                    }
+                }
+                
+                output[batch_idx * out_features + out_idx] = acc * scales[out_idx];
+            }
+        }
+        
+        // Verify batch 0 results
+        let expected_0_0 = (1..=32).sum::<i32>() as f32; // sum(1..32) = 528
+        let expected_0_1 = -expected_0_0;                 // -528
+        let expected_0_2 = 16.0;                          // alternating pattern
+        
+        assert!((output[0] - expected_0_0).abs() < 0.01, 
+                "Feature 0 mismatch: expected {}, got {}", expected_0_0, output[0]);
+        assert!((output[1] - expected_0_1).abs() < 0.01,
+                "Feature 1 mismatch: expected {}, got {}", expected_0_1, output[1]);
+        assert!((output[2] - expected_0_2).abs() < 0.01,
+                "Feature 2 mismatch: expected {}, got {}", expected_0_2, output[2]);
+        
+        // Verify batch 1 results (half of batch 0 since inputs are halved)
+        assert!((output[3] - expected_0_0 / 2.0).abs() < 0.01);
+        assert!((output[4] - expected_0_1 / 2.0).abs() < 0.01);
+        assert!((output[5] - expected_0_2 / 2.0).abs() < 0.01);
     }
 }

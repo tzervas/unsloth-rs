@@ -1,6 +1,13 @@
 //! CubeCL GPU kernel for ternary bitsliced matrix multiplication.
 //!
 //! Uses native popcount intrinsics for efficient dot product computation.
+//!
+//! ## Note on Implementation
+//!
+//! This is a basic (non-tiled) implementation using f32 arrays with bit reinterpretation.
+//! Task 2.1 will add proper u32 array support via CubeCL interop.
+//! The weight planes (w_plus, w_minus) are f32 arrays where each f32 is reinterpreted as u32.
+//! This is a temporary workaround until proper u32 tensor support is available.
 
 use cubecl::prelude::*;
 
@@ -42,6 +49,8 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
     #[comptime] config: TernaryMatmulConfig,
 ) {
     // Thread indices: each thread handles one (batch, out_feature) element
+    // Grid layout: X=batch, Y=blocks of features
+    // Block layout: X=threads (256), Y=1, Z=1
     let batch_idx = CUBE_POS_X;
     let out_idx = CUBE_POS_Y * CUBE_DIM_X + UNIT_POS_X;
 

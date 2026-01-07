@@ -14,9 +14,12 @@
 //! - Task 2.3: Tiled kernel with shared memory ✅
 //! - Task 2.4: Vectorized Line<u32> loads ✅
 //! - Task 2.5: Plane skipping with sparsity metadata ✅
+//! - Task 2.6: GPU dispatch integration ✅
 //!
-//! ## Future Tasks
-//! - Task 2.6: GPU dispatch integration
+//! ## Phase 2 Complete!
+//!
+//! All Phase 2 tasks are implemented. The kernels are ready for GPU validation
+//! when hardware becomes available.
 //!
 //! ## Note on Array Types
 //!
@@ -25,6 +28,10 @@
 //! This approach works with CubeCL's current type system.
 
 use cubecl::prelude::*;
+
+// Constants for bitsliced operations
+const BITS_PER_U32: u32 = 32;
+const CHUNKS_PER_U64: u32 = 64;
 
 /// Compile-time configuration for basic ternary matmul kernel.
 /// Renamed from TernaryMatmulConfig to distinguish from the tiled version in matmul.rs.
@@ -724,10 +731,9 @@ pub fn ternary_matmul_kernel_sparse<F: Float>(
         // Calculate chunk parameters
         let words_per_chunk = config.words_per_chunk();
         let num_chunks = (config.base.k_words + words_per_chunk - 1) / words_per_chunk;
-        let chunks_per_u64 = 64u32;
         
         // Sparsity bitmap offset for this output feature
-        let bitmap_words = (num_chunks + chunks_per_u64 - 1) / chunks_per_u64;
+        let bitmap_words = (num_chunks + CHUNKS_PER_U64 - 1) / CHUNKS_PER_U64;
         let bitmap_offset = out_idx * bitmap_words;
 
         // Number of K tiles
@@ -811,8 +817,8 @@ pub fn ternary_matmul_kernel_sparse<F: Float>(
             for chunk_idx in chunk_start..chunk_end {
                 // Check if this chunk is active via bitmap
                 if config.enable_plane_skipping {
-                    let bitmap_word_idx = chunk_idx / chunks_per_u64;
-                    let bit_idx = chunk_idx % chunks_per_u64;
+                    let bitmap_word_idx = chunk_idx / CHUNKS_PER_U64;
+                    let bit_idx = chunk_idx % CHUNKS_PER_U64;
                     let bitmap = sparsity_bitmap[bitmap_offset + bitmap_word_idx];
                     let is_active = (bitmap & (1u64 << bit_idx)) != 0u64;
 

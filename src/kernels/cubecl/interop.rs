@@ -24,6 +24,10 @@
 use crate::error::{Result, UnslothError};
 use candle_core::{DType, Device, Tensor};
 
+// Constants for bitsliced operations
+const BITS_PER_U32: usize = 32;
+const BITS_PER_U64: usize = 64;
+
 /// Check if CubeCL CUDA runtime support is available.
 ///
 /// This checks:
@@ -290,9 +294,9 @@ pub fn create_sparsity_bitmap_for_tensor(
 ) -> Vec<u8> {
     let (out_features, _in_features) = tensor.shape;
     let k_words = tensor.k_words;
-    let words_per_chunk = chunk_size / 32;
+    let words_per_chunk = chunk_size / BITS_PER_U32;
     let num_chunks = (k_words + words_per_chunk - 1) / words_per_chunk;
-    let bitmap_words = (num_chunks + 63) / 64;
+    let bitmap_words = (num_chunks + BITS_PER_U64 - 1) / BITS_PER_U64;
     
     let mut bitmap = vec![0u64; out_features * bitmap_words];
     
@@ -312,8 +316,8 @@ pub fn create_sparsity_bitmap_for_tensor(
             }
             
             if is_active {
-                let bitmap_idx = row * bitmap_words + chunk_idx / 64;
-                let bit_idx = chunk_idx % 64;
+                let bitmap_idx = row * bitmap_words + chunk_idx / BITS_PER_U64;
+                let bit_idx = chunk_idx % BITS_PER_U64;
                 bitmap[bitmap_idx] |= 1u64 << bit_idx;
             }
         }

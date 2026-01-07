@@ -1,100 +1,65 @@
 # unsloth-rs Task List
 
 **Base Branch**: `experimental` (commit: ff87fec)  
-**Last Updated**: 2026-01-06
+**Last Updated**: 2026-01-06  
+**CubeCL Version**: v0.8.1 (Validated)
 
 This document provides a prioritized, actionable task list for implementing the features outlined in [ROADMAP.md](ROADMAP.md).
 
 ---
 
-## 🚀 High Priority Tasks (Start Here)
-
-These tasks provide the most value and should be completed first.
-
-### Task 1: Implement Gradient Checkpointing
-**Branch**: `experimental/gradient-checkpointing`  
-**Estimated Time**: 3-5 days  
-**Files**: `src/training.rs`
-
-**Current State**: Function stub exists that returns `unimplemented!()`
-
-**Subtasks**:
-1. [ ] Design checkpointing strategy for transformer layers
-2. [ ] Implement forward pass with selective activation storage
-3. [ ] Implement backward pass with activation recomputation
-4. [ ] Add unit tests to verify gradient correctness
-5. [ ] Add integration test comparing with/without checkpointing
-6. [ ] Benchmark memory usage reduction
-7. [ ] Update documentation with usage examples
-8. [ ] Add example to demonstrate checkpointing
-
-**Success Criteria**:
-- Function `compute_gradient_checkpointed()` works correctly
-- Tests verify gradients match non-checkpointed version
-- Memory usage reduced by 50-80% for checkpointed layers
-- Documentation updated
-
-**Entry Point**: `src/training.rs:36-47`
-
----
-
-### Task 2: Add Mixed Precision Support
-**Branch**: `experimental/mixed-precision`  
-**Estimated Time**: 5-7 days  
-**Files**: `src/training.rs`, `src/kernels/*.rs`
-
-**Current State**: Boolean flag in config but no functionality
-
-**Subtasks**:
-1. [ ] Design mixed precision configuration API
-2. [ ] Add dtype enum (F32, F16, BF16)
-3. [ ] Implement dtype conversion utilities
-4. [ ] Add loss scaling for numerical stability
-5. [ ] Update attention kernel to support FP16/BF16
-6. [ ] Update RoPE to support FP16/BF16
-7. [ ] Update RMSNorm to support FP16/BF16
-8. [ ] Update SwiGLU to support FP16/BF16
-9. [ ] Add numerical accuracy tests
-10. [ ] Benchmark performance improvements
-11. [ ] Document mixed precision usage
-
-**Success Criteria**:
-- All kernels support F32, F16, BF16
-- Numerical accuracy within tolerance (1e-3)
-- Tests verify stability
-- 2x+ speedup on GPU demonstrated
-
-**Entry Point**: `src/training.rs:29` (mixed_precision field)
-
----
+## 🚧 Currently In Progress
 
 ### Task 3: Implement Flash Attention CubeCL Kernel
-**Branch**: `experimental/flash-attention-cubecl`  
-**Estimated Time**: 7-10 days  
-**Files**: `src/kernels/attention.rs`, new `src/kernels/attention_cubecl.rs`
+**Branch**: `feature/flash-attention-cubecl`  
+**Estimated Time**: 7-14 weeks (revised from 7-10 days based on research)  
+**Status**: 🚧 Phase 1 - In Progress
 
-**Current State**: Uses Candle's CUDA backend, not custom fused kernel
+**Current Progress (2026-01-06):**
+- [x] CubeCL v0.8.1 API research completed (`docs/cubecl-context.md`, `docs/cubecl-guide.md`)
+- [x] Module structure created (`src/kernels/cubecl/`)
+- [x] Candle ↔ CubeCL tensor interop (`interop.rs`)
+- [x] Kernel configuration (`config.rs`)
+- [x] Kernel scaffolding (`kernel.rs`)
+- [ ] Implement actual CubeCL kernel launch
+- [ ] Add numerical equivalence tests
+- [ ] Profile on RTX 5080
+- [ ] Validate on RTX 3090 Ti
 
-**Subtasks**:
-1. [ ] Study Flash Attention paper (Dao et al., 2022)
-2. [ ] Design tiling strategy for shared memory
-3. [ ] Implement block-wise softmax computation
-4. [ ] Write CubeCL kernel for attention
-5. [ ] Add GQA support to fused kernel
-6. [ ] Integrate kernel with existing attention API
-7. [ ] Add numerical accuracy tests
-8. [ ] Benchmark performance vs baseline
-9. [ ] Verify memory usage reduction
-10. [ ] Document Flash Attention implementation
+**Phase Breakdown:**
 
-**Success Criteria**:
-- 2-5x speedup vs current implementation
-- 70-80% VRAM reduction
-- >50% GPU occupancy
-- Numerical accuracy within 1e-4
-- GQA support verified
+| Phase | Description | Hardware | Est. Time |
+|-------|-------------|----------|----------|
+| 1 | Minimal Viable Kernel (f32, non-masked) | RTX 5080 | 1-3 weeks |
+| 2 | Cross-GPU Validation + Causal Mask | RTX 3090 Ti | 1-2 weeks |
+| 3 | f16/bf16, GQA/MQA support | Both | 2-4 weeks |
+| 4 | Testing & Validation | Both | 1-2 weeks |
+| 5 | Benchmarking | Both | 1-2 weeks |
 
-**Entry Point**: `src/kernels/attention.rs:195-213` (forward_cuda method)
+**Key CubeCL v0.8.1 APIs (Validated):**
+```rust
+// Kernel definition
+#[cube(launch_unchecked)]
+fn kernel<F: Float>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) { ... }
+
+// Launch configuration
+let cube_count = CubeCount::Static(batch_heads, num_tiles, 1);
+let cube_dim = CubeDim::new(256, 1, 1);
+kernel::launch_unchecked::<F, Runtime>(&client, cube_count, cube_dim, args...);
+
+// Shared memory (1D only)
+let mut tile = SharedMemory::<F>::new(TILE_SIZE * HEAD_DIM);
+sync_units();  // Barrier
+```
+
+**Next Steps:**
+1. Implement CubeCL kernel launch in `src/kernels/cubecl/kernel.rs`
+2. Add small-size test cases (batch=2, heads=4, seq=8-64)
+3. Profile on RTX 5080
+
+---
+
+## 🚀 High Priority Tasks (After Flash Attention)
 
 ---
 
@@ -365,8 +330,8 @@ For each task:
 - [ ] Task 2: Mixed Precision
 - [ ] Task 7: Memory Pool CubeCL
 
-### Phase 2: GPU Optimizations (0/4 complete)
-- [ ] Task 3: Flash Attention
+### Phase 2: GPU Optimizations (1/4 in progress)
+- [🚧] Task 3: Flash Attention (In Progress - Phase 1)
 - [ ] Task 4: RoPE Optimization
 - [ ] Task 5: RMSNorm Optimization
 - [ ] Task 6: SwiGLU Optimization
@@ -383,19 +348,17 @@ For each task:
 - [ ] Task 12: KV Cache
 - [ ] Task 13: Distributed Training
 
-**Overall Progress**: 0/13 tasks complete (0%)
+**Overall Progress**: 1/13 tasks in progress (Flash Attention Phase 1)
 
 ---
 
-## 🎯 Recommended Order
+## 🎯 Recommended Order (Revised 2026-01-06)
 
-For a single developer working sequentially:
-
-1. **Start with Task 1** (Gradient Checkpointing) - Immediate value, not GPU-dependent
-2. **Then Task 2** (Mixed Precision) - Builds on Task 1, enables faster GPU work
-3. **Then Task 3** (Flash Attention) - Highest impact GPU optimization
-4. **Then Task 8** (Benchmark Expansion) - Validate optimizations
-5. **Then Tasks 4-6** (Other kernel optimizations) - Incremental improvements
+1. **🚧 Task 3** (Flash Attention) - Currently in progress, highest impact GPU optimization
+2. **Then Task 8** (Benchmark Expansion) - Validate Flash Attention performance
+3. **Then Task 1** (Gradient Checkpointing) - Memory optimization
+4. **Then Task 2** (Mixed Precision) - Performance optimization
+5. **Then Tasks 4-6** (Other kernel optimizations) - Apply Flash Attention patterns
 6. **Then Task 9** (Integration Tests) - Ensure stability
 7. **Then Tasks 10-11** (Documentation/Examples) - Improve usability
 8. **Finally Tasks 12-13** (Advanced features) - Nice-to-have features

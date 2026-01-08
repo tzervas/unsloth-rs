@@ -283,17 +283,165 @@ fn ternary_matmul_cuda(
     weights: &TernaryTensor,
     config: &TernaryConfig,
 ) -> Result<Tensor> {
-    // For Phase 1, we use the CPU implementation as reference
-    // GPU kernel will be implemented in Phase 2 after validation
+    use crate::kernels::cubecl::interop::*;
+    use super::matmul_cubecl::*;
 
-    // TODO: Implement CubeCL kernel dispatch
-    // 1. Upload weight planes to GPU (reinterpret u32 as bytes)
-    // 2. Launch tiled matmul kernel
-    // 3. Download result
+    // Get dimensions
+    let input_shape = input.shape().dims();
+    let (out_features, in_features) = weights.dims();
+    let batch_size = input_shape[0];
+    let k_words = weights.k_words as u32;
 
-    // Fallback to CPU for now
-    log::debug!("CUDA ternary matmul: falling back to CPU (kernel not yet implemented)");
+    // Calculate sparsity
+    let sparsity = weights.sparsity();
+    
+    // Select kernel based on sparsity
+    let use_sparse_kernel = sparsity >= 0.90;
+    
+    // Detect GPU (placeholder - will be improved when GPU hardware available)
+    let device = input.device();
+    let gpu_name = detect_gpu_name_placeholder();
+    
+    log::debug!(
+        "CUDA ternary matmul: batch={}, out={}, in={}, sparsity={:.2}, kernel={}",
+        batch_size, out_features, in_features, sparsity,
+        if use_sparse_kernel { "sparse" } else { "vectorized" }
+    );
+
+    // For now, use fallback until we can properly test GPU dispatch
+    // TODO: Enable when GPU hardware available for testing
+    log::debug!("CUDA ternary matmul: falling back to CPU (GPU dispatch under development)");
     ternary_matmul_cpu(input, weights)
+    
+    /* GPU dispatch code - to be enabled after hardware testing:
+    
+    // Initialize CubeCL runtime
+    let device_id = match device {
+        Device::Cuda(id) => id.ordinal(),
+        _ => return Err(UnslothError::InvalidConfig("Expected CUDA device".into())),
+    };
+    
+    let client = CudaRuntime::client(device_id);
+    
+    // Convert input to CubeCL handle
+    let (input_bytes, input_shape_vec, _) = candle_to_cubecl_handle(input)?;
+    let input_handle = client.create(&input_bytes);
+    
+    // Convert weight planes to CubeCL handles (reinterpret u32 as f32)
+    let w_plus_bytes: Vec<u8> = weights.plus_plane
+        .iter()
+        .flat_map(|&word| {
+            let f = f32::from_bits(word);
+            f.to_le_bytes()
+        })
+        .collect();
+    let w_plus_handle = client.create(&w_plus_bytes);
+    
+    let w_minus_bytes: Vec<u8> = weights.minus_plane
+        .iter()
+        .flat_map(|&word| {
+            let f = f32::from_bits(word);
+            f.to_le_bytes()
+        })
+        .collect();
+    let w_minus_handle = client.create(&w_minus_bytes);
+    
+    // Convert scales
+    let scales_bytes: Vec<u8> = weights.scales
+        .iter()
+        .flat_map(|&s| s.to_le_bytes())
+        .collect();
+    let scales_handle = client.create(&scales_bytes);
+    
+    // Allocate output
+    let output_size = batch_size * out_features;
+    let output_bytes = allocate_output_buffer(output_size);
+    let output_handle = client.create(&output_bytes);
+    
+    // Dispatch to appropriate kernel
+    if use_sparse_kernel {
+        // Use sparse-optimized kernel
+        let kernel_config = if gpu_name.contains("5080") {
+            SparseOptimizedConfig::rtx_5080_sparse(
+                batch_size as u32,
+                out_features as u32,
+                k_words,
+                in_features as u32,
+                sparsity,
+            )
+        } else {
+            SparseOptimizedConfig::rtx_3090ti_sparse(
+                batch_size as u32,
+                out_features as u32,
+                k_words,
+                in_features as u32,
+                sparsity,
+            )
+        };
+        
+        // Create sparsity bitmap
+        let bitmap_bytes = create_sparsity_bitmap_for_tensor(weights, 64);
+        let bitmap_handle = client.create(&bitmap_bytes);
+        
+        let (cube_count, cube_dim) = get_sparse_launch_config(&kernel_config);
+        
+        ternary_matmul_kernel_sparse::launch_unchecked::<F32, CudaRuntime>(
+            &client,
+            cube_count,
+            cube_dim,
+            input_handle,
+            w_plus_handle,
+            w_minus_handle,
+            scales_handle,
+            bitmap_handle,
+            output_handle,
+            kernel_config,
+        );
+    } else {
+        // Use vectorized kernel (best for dense)
+        let kernel_config = if gpu_name.contains("5080") {
+            VectorizedTernaryMatmulConfig::rtx_5080_preset(
+                batch_size as u32,
+                out_features as u32,
+                k_words,
+                in_features as u32,
+            )
+        } else {
+            VectorizedTernaryMatmulConfig::rtx_3090ti_preset(
+                batch_size as u32,
+                out_features as u32,
+                k_words,
+                in_features as u32,
+            )
+        };
+        
+        let (cube_count, cube_dim) = get_vectorized_launch_config(&kernel_config);
+        
+        ternary_matmul_kernel_vectorized::launch_unchecked::<F32, CudaRuntime>(
+            &client,
+            cube_count,
+            cube_dim,
+            input_handle,
+            w_plus_handle,
+            w_minus_handle,
+            scales_handle,
+            output_handle,
+            kernel_config,
+        );
+    }
+    
+    // Convert output back to Candle tensor
+    let output_bytes = client.read(&output_handle);
+    cubecl_to_candle_tensor(&output_bytes, &[batch_size, out_features], device)
+    */
+}
+
+/// Detect GPU name from device (placeholder until GPU hardware available)
+#[cfg(feature = "cuda")]
+fn detect_gpu_name_placeholder() -> String {
+    // TODO: Use CUDA device properties when GPU available
+    // For now, return a default that will use conservative settings
+    "RTX 3090 Ti".to_string()
 }
 
 /// CubeCL kernel for ternary matmul (stub for Phase 2).
@@ -464,5 +612,70 @@ mod tests {
         assert_eq!(mean_std.signum(), mean_packed.signum());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_ternary_matmul_dispatch_cpu() -> Result<()> {
+        // Verify CPU dispatch works correctly
+        let device = Device::Cpu;
+        
+        // Create simple weights and input
+        let weight_data = vec![1.0f32, -1.0, 0.0, 1.0];
+        let weights_fp = Tensor::from_vec(weight_data, (2, 2), &device)?;
+        
+        let config = TernaryConfig {
+            calibration_method: super::super::config::CalibrationMethodConfig::Manual(0.1),
+            ..Default::default()
+        };
+        let (ternary_weights, _) = quantize_tensor(&weights_fp, &config)?;
+        
+        let input_data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let input = Tensor::from_vec(input_data, (2, 2), &device)?;
+        
+        // Should automatically dispatch to CPU
+        let output = ternary_matmul(&input, &ternary_weights, &config)?;
+        
+        assert_eq!(output.shape().dims(), &[2, 2]);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn test_ternary_matmul_dispatch_gpu() -> Result<()> {
+        // Verify GPU dispatch routing works (will use fallback until GPU available)
+        if let Ok(device) = Device::cuda_if_available(0) {
+            if !matches!(device, Device::Cuda(_)) {
+                return Ok(()); // Skip if no GPU
+            }
+            
+            let weight_data = vec![1.0f32, -1.0, 0.0, 1.0];
+            let weights_fp = Tensor::from_vec(weight_data, (2, 2), &Device::Cpu)?;
+            
+            let config = TernaryConfig {
+                calibration_method: super::super::config::CalibrationMethodConfig::Manual(0.1),
+                ..Default::default()
+            };
+            let (ternary_weights, _) = quantize_tensor(&weights_fp, &config)?;
+            
+            let input_data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let input = Tensor::from_vec(input_data, (2, 2), &device)?;
+            
+            // Should route through CUDA path (currently falls back to CPU)
+            let output = ternary_matmul(&input, &ternary_weights, &config)?;
+            
+            assert_eq!(output.shape().dims(), &[2, 2]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_gpu_name_detection() {
+        #[cfg(feature = "cuda")]
+        {
+            let name = detect_gpu_name_placeholder();
+            // Should return a valid GPU name
+            assert!(!name.is_empty());
+            assert!(name.contains("RTX") || name.contains("GPU"));
+        }
     }
 }

@@ -50,6 +50,8 @@
 //! - **Accuracy**: <2% perplexity degradation post-calibration
 
 pub mod attention;
+#[cfg(feature = "cuda")]
+pub mod attention_cubecl;
 pub mod config;
 pub mod linear;
 pub mod matmul;

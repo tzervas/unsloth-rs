@@ -53,7 +53,6 @@ pub mod attention;
 pub mod config;
 pub mod linear;
 pub mod matmul;
-pub mod model;
 #[cfg(feature = "cuda")]
 pub mod matmul_cubecl;
 pub mod model;

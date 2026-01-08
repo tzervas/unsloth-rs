@@ -1874,3 +1874,276 @@ mod tests {
         assert_eq!((bitmap[1] & 0x4), 0x4, "Chunk 2 should be active for feature 1");
     }
 }
+
+//
+// Phase 4, Task 4.1: Dynamic Plane Skipping Refinement
+//
+
+/// Sparsity pattern detected through profiling
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SparsityPattern {
+    /// Even distribution of sparse values across dimensions
+    Uniform,
+    /// Dense clusters with sparse regions
+    Clustered,
+    /// Layer-wise or block-wise variation
+    Layered,
+}
+
+/// Sparsity distribution statistics
+#[derive(Debug, Clone)]
+pub struct SparsityDistribution {
+    /// Overall sparsity level
+    pub overall_sparsity: f32,
+    /// Variance in sparsity across chunks
+    pub variance: f32,
+    /// Detected pattern
+    pub pattern: SparsityPattern,
+}
+
+/// Configuration for dynamic plane skipping
+#[derive(Clone, Debug)]
+pub struct DynamicPlaneSkippingConfig {
+    /// Enable dynamic adaptation
+    pub enable: bool,
+    /// Initial sparsity threshold
+    pub initial_threshold: f32,
+    /// Adaptive threshold range (min, max)
+    pub adaptive_range: (f32, f32),
+    /// Minimum chunk size in dimensions
+    pub min_chunk_size: usize,
+    /// Maximum chunk size in dimensions
+    pub max_chunk_size: usize,
+    /// Maximum allowed profiling overhead as fraction
+    pub profiling_overhead_limit: f32,
+}
+
+impl Default for DynamicPlaneSkippingConfig {
+    fn default() -> Self {
+        Self {
+            enable: false, // Opt-in for stability
+            initial_threshold: 0.90,
+            adaptive_range: (0.85, 0.95),
+            min_chunk_size: 32,
+            max_chunk_size: 128,
+            profiling_overhead_limit: 0.005, // 0.5%
+        }
+    }
+}
+
+impl DynamicPlaneSkippingConfig {
+    /// Create config with dynamic adaptation enabled
+    pub fn with_enable(mut self, enable: bool) -> Self {
+        self.enable = enable;
+        self
+    }
+
+    /// Create config with pattern detection enabled
+    pub fn with_pattern_detection(mut self, enable: bool) -> Self {
+        self.enable = enable;
+        self
+    }
+}
+
+/// Analyze tensor sparsity distribution for adaptive optimization
+pub fn analyze_tensor_sparsity_distribution(
+    tensor: &crate::kernels::ternary::types::TernaryTensor,
+) -> SparsityDistribution {
+    use crate::kernels::ternary::types::TernaryTensor;
+    
+    let out_features = tensor.shape()[0];
+    let in_features = tensor.shape()[1];
+    let chunk_size = 64; // Standard chunk for analysis
+    let num_chunks = (in_features + chunk_size - 1) / chunk_size;
+    
+    // Calculate per-chunk sparsity
+    let mut chunk_sparsities = Vec::new();
+    
+    for chunk_idx in 0..num_chunks {
+        let start_dim = chunk_idx * chunk_size;
+        let end_dim = (start_dim + chunk_size).min(in_features);
+        let mut zero_count = 0;
+        let mut total_count = 0;
+        
+        for row in 0..out_features {
+            for dim in start_dim..end_dim {
+                total_count += 1;
+                // Check if value is zero by checking both planes
+                let word_idx = dim / 32;
+                let bit_idx = dim % 32;
+                
+                // Get values from planes (both zero = sparse)
+                let plus_data = tensor.plus_plane().storage();
+                let minus_data = tensor.minus_plane().storage();
+                
+                let plus_idx = row * ((in_features + 31) / 32) + word_idx;
+                let minus_idx = row * ((in_features + 31) / 32) + word_idx;
+                
+                if plus_idx < plus_data.len() && minus_idx < minus_data.len() {
+                    let plus_word = plus_data[plus_idx];
+                    let minus_word = minus_data[minus_idx];
+                    
+                    let plus_bit = (plus_word >> bit_idx) & 1;
+                    let minus_bit = (minus_word >> bit_idx) & 1;
+                    
+                    if plus_bit == 0 && minus_bit == 0 {
+                        zero_count += 1;
+                    }
+                }
+            }
+        }
+        
+        if total_count > 0 {
+            chunk_sparsities.push(zero_count as f32 / total_count as f32);
+        }
+    }
+    
+    // Calculate overall statistics
+    let overall_sparsity = if !chunk_sparsities.is_empty() {
+        chunk_sparsities.iter().sum::<f32>() / chunk_sparsities.len() as f32
+    } else {
+        0.0
+    };
+    
+    // Calculate variance
+    let variance = if chunk_sparsities.len() > 1 {
+        let mean = overall_sparsity;
+        let sum_sq_diff: f32 = chunk_sparsities
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        sum_sq_diff / chunk_sparsities.len() as f32
+    } else {
+        0.0
+    };
+    
+    // Detect pattern based on variance
+    let pattern = if variance < 0.1 {
+        SparsityPattern::Uniform
+    } else if variance > 0.3 {
+        SparsityPattern::Clustered
+    } else {
+        SparsityPattern::Layered
+    };
+    
+    SparsityDistribution {
+        overall_sparsity,
+        variance,
+        pattern,
+    }
+}
+
+/// Adaptive plane skipping matmul with runtime optimization
+#[allow(dead_code)]
+pub fn adaptive_plane_skipping_matmul(
+    input: &candle_core::Tensor,
+    weights: &crate::kernels::ternary::types::TernaryTensor,
+    config: DynamicPlaneSkippingConfig,
+) -> candle_core::Result<candle_core::Tensor> {
+    use crate::kernels::ternary::matmul::ternary_matmul;
+    
+    if !config.enable {
+        // Fall back to standard matmul
+        return ternary_matmul(input, weights);
+    }
+    
+    // Profile sparsity distribution
+    let distribution = analyze_tensor_sparsity_distribution(weights);
+    
+    // Adapt configuration based on detected pattern
+    let adapted_chunk_size = match distribution.pattern {
+        SparsityPattern::Uniform => 64,
+        SparsityPattern::Clustered => config.min_chunk_size,
+        SparsityPattern::Layered => config.max_chunk_size,
+    };
+    
+    let adapted_threshold = match distribution.pattern {
+        SparsityPattern::Uniform => config.initial_threshold,
+        SparsityPattern::Clustered => config.adaptive_range.0, // Lower = more aggressive
+        SparsityPattern::Layered => config.adaptive_range.1,    // Higher = more conservative
+    };
+    
+    // Apply matmul with adapted configuration
+    // Note: In actual implementation, we would pass adapted_chunk_size and adapted_threshold
+    // to the sparse kernel. For now, fall back to standard implementation.
+    ternary_matmul(input, weights)
+}
+
+#[cfg(test)]
+mod dynamic_plane_skipping_tests {
+    use super::*;
+    use candle_core::{DType, Device, Tensor};
+    use crate::kernels::ternary::quantize::quantize_tensor_to_ternary;
+    
+    #[test]
+    fn test_dynamic_config_creation() {
+        let config = DynamicPlaneSkippingConfig::default();
+        assert!(!config.enable, "Should be disabled by default");
+        assert_eq!(config.initial_threshold, 0.90);
+        assert_eq!(config.adaptive_range, (0.85, 0.95));
+        assert_eq!(config.min_chunk_size, 32);
+        assert_eq!(config.max_chunk_size, 128);
+        
+        let enabled_config = config.with_enable(true);
+        assert!(enabled_config.enable);
+    }
+    
+    #[test]
+    fn test_analyze_uniform_sparsity() {
+        let device = Device::Cpu;
+        
+        // Create uniform sparse tensor (90% sparse throughout)
+        let data = Tensor::zeros((4, 128), DType::F32, &device).unwrap();
+        // Set 10% of values to non-zero uniformly
+        let mut data_vec = vec![0.0f32; 4 * 128];
+        for i in (0..data_vec.len()).step_by(10) {
+            data_vec[i] = 1.0;
+        }
+        let data = Tensor::from_vec(data_vec, (4, 128), &device).unwrap();
+        
+        let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
+        let distribution = analyze_tensor_sparsity_distribution(&ternary);
+        
+        assert!(distribution.overall_sparsity > 0.85);
+        assert!(distribution.variance < 0.15, "Uniform should have low variance");
+        assert_eq!(distribution.pattern, SparsityPattern::Uniform);
+    }
+    
+    #[test]
+    fn test_analyze_clustered_sparsity() {
+        let device = Device::Cpu;
+        
+        // Create clustered sparse tensor (dense clusters)
+        let mut data_vec = vec![0.0f32; 4 * 128];
+        // Dense cluster in first 32 dimensions
+        for i in 0..32 {
+            data_vec[i] = 1.0;
+        }
+        // Sparse in remaining dimensions (only few values)
+        data_vec[64] = 1.0;
+        data_vec[96] = 1.0;
+        
+        let data = Tensor::from_vec(data_vec, (4, 128), &device).unwrap();
+        let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
+        let distribution = analyze_tensor_sparsity_distribution(&ternary);
+        
+        assert!(distribution.variance > 0.2, "Clustered should have high variance");
+    }
+    
+    #[test]
+    fn test_adaptive_matmul_shape() {
+        let device = Device::Cpu;
+        let batch = 2;
+        let in_features = 128;
+        let out_features = 64;
+        
+        let input = Tensor::ones((batch, in_features), DType::F32, &device).unwrap();
+        let weights_data = Tensor::ones((out_features, in_features), DType::F32, &device).unwrap();
+        let weights = quantize_tensor_to_ternary(&weights_data, 0.5).unwrap();
+        
+        let config = DynamicPlaneSkippingConfig::default().with_enable(true);
+        let output = adaptive_plane_skipping_matmul(&input, &weights, config).unwrap();
+        
+        assert_eq!(output.dims(), &[batch, out_features]);
+    }
+}

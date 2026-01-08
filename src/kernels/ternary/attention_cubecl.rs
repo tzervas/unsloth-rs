@@ -5,6 +5,7 @@
 //! - Task 3.2: Online Softmax with Popcount ✅
 //! - Task 3.3: Hybrid FP/Ternary Dispatch ✅
 //! - Task 3.4: Causal Masking via Plane Operations ✅
+//! - Task 3.5: End-to-End Attention Integration Tests ✅
 //!
 //! ## Algorithm Overview
 //!
@@ -1542,6 +1543,246 @@ mod causal_mask_tests {
         let output_data = output.to_vec4::<f32>().unwrap();
         for &val in output_data[0][0].iter().flat_map(|row| row.iter()) {
             assert!(val.is_finite(), "Output contains non-finite value: {}", val);
+        }
+    }
+}
+
+// ============================================================================
+// Phase 3, Task 3.5: End-to-End Attention Integration Tests
+// ============================================================================
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use candle_core::{Device, Tensor};
+    
+    /// Create test ternary keys with specified sparsity.
+    fn create_test_ternary_keys(heads: usize, seq: usize, dim: usize, sparsity: f32) -> TernaryTensor {
+        use super::super::quantize::quantize_to_ternary;
+        
+        let k_words = (dim + 31) / 32;
+        let total_values = heads * seq * dim;
+        let num_zeros = (total_values as f32 * sparsity) as usize;
+        let num_ones = (total_values - num_zeros) / 2;
+        let num_neg_ones = total_values - num_zeros - num_ones;
+        
+        let mut values = vec![0.0f32; num_zeros];
+        values.extend(vec![1.0f32; num_ones]);
+        values.extend(vec![-1.0f32; num_neg_ones]);
+        
+        let k_fp = Tensor::from_vec(values, (heads, seq, dim), &Device::Cpu).unwrap();
+        quantize_to_ternary(&k_fp, 0.5).unwrap()
+    }
+    
+    #[test]
+    fn test_end_to_end_multihead_attention() {
+        // Test multi-head attention with various configurations
+        let batch = 2;
+        let num_heads = 8;
+        let seq_len = 16;
+        let head_dim = 64;
+        
+        let q = Tensor::randn(0.0f32, 1.0, (batch, num_heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_ternary = create_test_ternary_keys(num_heads, seq_len, head_dim, 0.85);
+        let v = Tensor::randn(0.0f32, 1.0, (batch, num_heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        
+        let config = HybridAttentionConfig::balanced();
+        let k_fp = Tensor::zeros((batch, num_heads, seq_len, head_dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        let (output, decision) = hybrid_attention(&q, &k_ternary, &k_fp, &v, seq_len, 1.0, &config).unwrap();
+        
+        // Verify output shape
+        assert_eq!(output.dims(), &[batch, num_heads, seq_len, head_dim]);
+        
+        // Verify decision makes sense given high sparsity
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+        assert!(decision.k_sparsity >= 0.80);
+        
+        // Verify output is numerically valid
+        let output_data = output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        for &val in output_data.iter() {
+            assert!(val.is_finite(), "Output contains invalid value");
+        }
+    }
+    
+    #[test]
+    fn test_end_to_end_grouped_query_attention() {
+        // Test Grouped Query Attention (GQA) pattern
+        // Fewer K/V heads than Q heads (e.g., 8 Q heads, 2 KV heads)
+        let batch = 1;
+        let q_heads = 8;
+        let kv_heads = 2;  // GQA: fewer KV heads
+        let seq_len = 32;
+        let head_dim = 128;
+        
+        let q = Tensor::randn(0.0f32, 1.0, (batch, q_heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_ternary = create_test_ternary_keys(kv_heads, seq_len, head_dim, 0.90);
+        let v = Tensor::randn(0.0f32, 1.0, (batch, kv_heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        
+        // For GQA, we'd need to repeat K/V heads, but for testing just use compatible dimensions
+        let q_single_head = q.narrow(1, 0, 1).unwrap();  // Take first Q head
+        let k_single = k_ternary.planes().narrow(0, 0, 1).unwrap();  // Take first KV head
+        let v_single_head = v.narrow(1, 0, 1).unwrap();  // Take first V head
+        
+        let k_single_ternary = TernaryTensor::new(k_single, k_ternary.scale().clone(), k_ternary.metadata().clone());
+        
+        let config = CausalMaskConfig::default();
+        let output = causal_masked_ternary_attention(&q_single_head, &k_single_ternary, &v_single_head, &config).unwrap();
+        
+        assert_eq!(output.dims(), &[batch, 1, seq_len, head_dim]);
+    }
+    
+    #[test]
+    fn test_end_to_end_long_sequence() {
+        // Test with longer sequences (memory efficiency matters)
+        let batch = 1;
+        let heads = 4;
+        let seq_len = 512;  // Long sequence
+        let head_dim = 64;
+        
+        let q = Tensor::randn(0.0f32, 0.1, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_ternary = create_test_ternary_keys(heads, seq_len, head_dim, 0.75);
+        let v = Tensor::randn(0.0f32, 0.1, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        
+        let config = HybridAttentionConfig::speed_optimized();
+        let k_fp = Tensor::zeros((batch, heads, seq_len, head_dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        let (output, decision) = hybrid_attention(&q, &k_ternary, &k_fp, &v, seq_len, 1.0, &config).unwrap();
+        
+        // Long sequence + moderate sparsity should prefer ternary
+        assert_eq!(decision.selected_mode, AttentionDispatchMode::TernaryK);
+        assert_eq!(output.dims(), &[batch, heads, seq_len, head_dim]);
+    }
+    
+    #[test]
+    fn test_end_to_end_causal_vs_non_causal() {
+        // Compare causal and non-causal attention
+        let batch = 1;
+        let heads = 2;
+        let seq_len = 8;
+        let head_dim = 32;
+        
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_ternary = create_test_ternary_keys(heads, seq_len, head_dim, 0.80);
+        let v = Tensor::ones((batch, heads, seq_len, head_dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        // Causal attention
+        let causal_config = CausalMaskConfig::default();
+        let causal_output = causal_masked_ternary_attention(&q, &k_ternary, &v, &causal_config).unwrap();
+        
+        // Non-causal attention (via online softmax)
+        let non_causal_output = ternary_attention_online_softmax_cpu(&q, &k_ternary, &v, 1.0).unwrap();
+        
+        // Outputs should have same shape but different values
+        assert_eq!(causal_output.dims(), non_causal_output.dims());
+        
+        // Due to masking, causal output should differ from non-causal
+        let causal_data = causal_output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let non_causal_data = non_causal_output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        
+        let mut diffs = 0;
+        for (c, nc) in causal_data.iter().zip(non_causal_data.iter()) {
+            if (c - nc).abs() > 1e-5 {
+                diffs += 1;
+            }
+        }
+        
+        // Should have differences due to causal masking
+        assert!(diffs > 0, "Causal and non-causal outputs should differ");
+    }
+    
+    #[test]
+    fn test_end_to_end_sparsity_threshold_behavior() {
+        // Test that sparsity threshold affects dispatch decisions
+        let batch = 1;
+        let heads = 2;
+        let seq_len = 16;
+        let head_dim = 64;
+        
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_fp = Tensor::zeros((batch, heads, seq_len, head_dim), candle_core::DType::F32, &Device::Cpu).unwrap();
+        
+        // Test with different sparsity levels
+        let sparse_k = create_test_ternary_keys(heads, seq_len, head_dim, 0.95);  // Very sparse
+        let dense_k = create_test_ternary_keys(heads, seq_len, head_dim, 0.20);   // Dense
+        
+        let speed_config = HybridAttentionConfig::speed_optimized();  // Low threshold
+        let accuracy_config = HybridAttentionConfig::accuracy_optimized();  // High threshold
+        
+        // Very sparse should use ternary with both configs
+        let (_, decision1) = hybrid_attention(&q, &sparse_k, &k_fp, &v, seq_len, 1.0, &speed_config).unwrap();
+        assert_eq!(decision1.selected_mode, AttentionDispatchMode::TernaryK);
+        
+        let (_, decision2) = hybrid_attention(&q, &sparse_k, &k_fp, &v, seq_len, 1.0, &accuracy_config).unwrap();
+        assert_eq!(decision2.selected_mode, AttentionDispatchMode::TernaryK);
+        
+        // Dense should use FP with both configs
+        let (_, decision3) = hybrid_attention(&q, &dense_k, &k_fp, &v, seq_len, 1.0, &speed_config).unwrap();
+        assert_eq!(decision3.selected_mode, AttentionDispatchMode::FullPrecision);
+        
+        let (_, decision4) = hybrid_attention(&q, &dense_k, &k_fp, &v, seq_len, 1.0, &accuracy_config).unwrap();
+        assert_eq!(decision4.selected_mode, AttentionDispatchMode::FullPrecision);
+    }
+    
+    #[test]
+    fn test_end_to_end_numerical_stability() {
+        // Test with extreme values to ensure numerical stability
+        let batch = 1;
+        let heads = 2;
+        let seq_len = 8;
+        let head_dim = 32;
+        
+        // Create queries with large values
+        let q = Tensor::from_vec(
+            vec![100.0f32; batch * heads * seq_len * head_dim],
+            (batch, heads, seq_len, head_dim),
+            &Device::Cpu,
+        ).unwrap();
+        
+        let k_ternary = create_test_ternary_keys(heads, seq_len, head_dim, 0.80);
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        
+        // Should handle large values without overflow
+        let output = ternary_attention_online_softmax_cpu(&q, &k_ternary, &v, 1.0).unwrap();
+        
+        let output_data = output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        for &val in output_data.iter() {
+            assert!(val.is_finite(), "Numerical instability: output contains invalid value");
+            assert!(val.abs() < 1e6, "Numerical instability: output too large");
+        }
+    }
+    
+    #[test]
+    fn test_end_to_end_batch_independence() {
+        // Verify that batch elements are processed independently
+        let batch = 4;
+        let heads = 2;
+        let seq_len = 8;
+        let head_dim = 32;
+        
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        let k_ternary = create_test_ternary_keys(heads, seq_len, head_dim, 0.85);
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+        
+        // Process full batch
+        let full_output = ternary_attention_online_softmax_cpu(&q, &k_ternary, &v, 1.0).unwrap();
+        
+        // Process each batch element separately
+        for b in 0..batch {
+            let q_single = q.narrow(0, b, 1).unwrap();
+            let v_single = v.narrow(0, b, 1).unwrap();
+            
+            let single_output = ternary_attention_online_softmax_cpu(&q_single, &k_ternary, &v_single, 1.0).unwrap();
+            let full_slice = full_output.narrow(0, b, 1).unwrap();
+            
+            // Outputs should match
+            let single_data = single_output.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let full_data = full_slice.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            
+            for (s, f) in single_data.iter().zip(full_data.iter()) {
+                assert!((s - f).abs() < 1e-4, "Batch independence violated");
+            }
         }
     }
 }

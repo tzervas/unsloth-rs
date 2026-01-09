@@ -1,34 +1,43 @@
 [package]
 name = "unsloth-rs"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-description = "Memory-optimized LLM fine-tuning with custom GPU kernels (2-5x speedup)"
-repository = "https://github.com/youruser/unsloth-rs"
-keywords = ["gpu", "cuda", "llm", "fine-tuning", "memory-optimization"]
-categories = ["science", "machine-learning"]
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.92"
+license = "MIT"
+authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
+description = "Rust implementations of transformer building blocks for LLM inference"
+repository = "https://github.com/tzervas/unsloth-rs"
+keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
+categories = ["science", "mathematics"]
 
 [dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
+thiserror = "2.0"
+tracing = "0.1"
+bytemuck = { version = "1.21", features = ["derive"] }
 
-# GPU compute
-cubecl.workspace = true
+# GPU compute - CubeCL for cross-platform GPU kernels (v0.8.1 validated Jan 2026)
+cubecl = "0.8.1"
+cubecl-cuda = { version = "0.8.1", optional = true }
+# Tensor-core accelerated matmul for Q@K^T and Attn@V operations
+# Note: Fallback to manual implementation initially; integrate once validated
+# cubek-matmul = { git = "https://github.com/tracel-ai/cubek" }
 
 [dev-dependencies]
-criterion.workspace = true
-proptest.workspace = true
-anyhow.workspace = true
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.9"
+anyhow = "1.0"
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "cubecl/cuda"]
+cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
 
-[lints]
-workspace = true
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = "warn"
 
 [[bench]]
 name = "kernels"

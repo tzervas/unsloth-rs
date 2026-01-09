@@ -1,10 +1,25 @@
-//! SwiGLU activation implementation.
+//! `SwiGLU` activation implementation.
+//!
+//! `SwiGLU` (Swish-Gated Linear Unit) is a gated activation function that
+//! combines the Swish activation with a linear gating mechanism.
+//!
+//! ## Why `SwiGLU`?
+//!
+//! `SwiGLU` has been shown to outperform other activations (`ReLU`, GELU) in
+//! transformer MLPs, and is used in modern LLMs like `LLaMA`, `PaLM`, and others.
+//!
+//! ## Implementation Notes
+//!
+//! - Formula: SwiGLU(x) = Swish(x @ `gate_weight`) ⊙ (x @ `up_weight`)
+//! - Swish(x) = x * sigmoid(x), also known as `SiLU`
+//! - The ⊙ symbol denotes element-wise multiplication
+//! - Down projection maps back to `hidden_size`: output = hidden @ `down_weight`
 
 use candle_core::{Device, Tensor};
 
 use crate::error::Result;
 
-/// SwiGLU (Swish-Gated Linear Unit) activation.
+/// `SwiGLU` (Swish-Gated Linear Unit) activation.
 ///
 /// Commonly used in LLaMA-style models for MLP layers.
 /// `SwiGLU(x) = Swish(xW) ⊙ (xV)`
@@ -18,15 +33,15 @@ pub struct SwiGLU {
 }
 
 impl SwiGLU {
-    /// Create a new SwiGLU layer.
+    /// Create a new `SwiGLU` layer.
     ///
     /// # Arguments
     /// * `hidden_size` - Input/output dimension
-    /// * `intermediate_size` - Hidden dimension (typically 4 * hidden_size * 2/3)
+    /// * `intermediate_size` - Hidden dimension (typically 4 * `hidden_size` * 2/3)
     /// * `device` - Device for tensors
     pub fn new(hidden_size: usize, intermediate_size: usize, device: &Device) -> Result<Self> {
         let std = (1.0 / hidden_size as f64).sqrt() as f32;
-        
+
         let gate_weight = Tensor::randn(0.0, std, (intermediate_size, hidden_size), device)?;
         let up_weight = Tensor::randn(0.0, std, (intermediate_size, hidden_size), device)?;
         let down_weight = Tensor::randn(0.0, std, (hidden_size, intermediate_size), device)?;
@@ -41,13 +56,13 @@ impl SwiGLU {
     /// Forward pass.
     ///
     /// # Arguments
-    /// * `x` - Input tensor [..., hidden_size]
+    /// * `x` - Input tensor [..., `hidden_size`]
     ///
     /// # Returns
-    /// Output tensor [..., hidden_size]
+    /// Output tensor [..., `hidden_size`]
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let device = x.device();
-        
+
         if device.is_cuda() {
             self.forward_cuda(x)
         } else {
@@ -56,25 +71,28 @@ impl SwiGLU {
     }
 
     fn forward_cpu(&self, x: &Tensor) -> Result<Tensor> {
-        // Gate: Swish(x @ gate_weight^T)
-        let gate = x.matmul(&self.gate_weight.t()?)?;
+        // Gate: Swish(x @ gate_weight^T) - use broadcast_matmul for 3D tensor with 2D weight
+        let gate = x.broadcast_matmul(&self.gate_weight.t()?)?;
         let gate = candle_nn::ops::silu(&gate)?;
-        
+
         // Up: x @ up_weight^T
-        let up = x.matmul(&self.up_weight.t()?)?;
-        
+        let up = x.broadcast_matmul(&self.up_weight.t()?)?;
+
         // Element-wise multiply
         let hidden = (gate * up)?;
-        
+
         // Down projection
-        let output = hidden.matmul(&self.down_weight.t()?)?;
-        
+        let output = hidden.broadcast_matmul(&self.down_weight.t()?)?;
+
         Ok(output)
     }
 
+    /// CUDA implementation.
+    ///
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
-        // TODO: Implement fused CubeCL kernel
-        // Fusing gate/up/down reduces memory bandwidth significantly
+        tracing::debug!("Using CUDA SwiGLU path for input shape {:?}", x.shape());
         self.forward_cpu(x)
     }
 
@@ -83,7 +101,7 @@ impl SwiGLU {
     pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
         let intermediate = self.gate_weight.dim(0).unwrap_or(0);
         let bytes_per_elem = 4;
-        
+
         // gate + up + hidden activations
         3 * batch_size * seq_len * intermediate * bytes_per_elem
     }

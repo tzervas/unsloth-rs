@@ -201,7 +201,7 @@ pub struct TernaryModel {
 
 impl TernaryModel {
     /// Create a new empty ternary model.
-    #[must_use] 
+    #[must_use]
     pub fn new(config: ModelQuantizationConfig) -> Self {
         Self {
             layers: HashMap::new(),
@@ -265,7 +265,7 @@ impl TernaryModel {
     }
 
     /// Get a preserved tensor by name.
-    #[must_use] 
+    #[must_use]
     pub fn get_preserved(&self, name: &str) -> Option<&Tensor> {
         self.preserved_tensors.get(name)
     }

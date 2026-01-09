@@ -79,18 +79,17 @@ impl FusedAttention {
     pub fn new(config: FusedAttentionConfig, device: &Device) -> Result<Self> {
         let hidden = config.hidden_size;
         let num_kv_heads = config.num_kv_heads.unwrap_or(config.num_heads);
-        
+
         // QKV: Q has num_heads, K and V have num_kv_heads
-        let qkv_size = config.num_heads * config.head_dim 
-            + 2 * num_kv_heads * config.head_dim;
-        
+        let qkv_size = config.num_heads * config.head_dim + 2 * num_kv_heads * config.head_dim;
+
         let qkv_weight = Tensor::randn(
             0.0f32,
             (1.0 / (hidden as f64).sqrt()) as f32,
             (qkv_size, hidden),
             device,
         )?;
-        
+
         let o_weight = Tensor::randn(
             0.0f32,
             (1.0 / (hidden as f64).sqrt()) as f32,
@@ -108,12 +107,12 @@ impl FusedAttention {
     /// Forward pass with optional KV cache.
     ///
     /// # Arguments
-    /// * `hidden_states` - Input tensor [batch, seq_len, hidden]
+    /// * `hidden_states` - Input tensor [batch, `seq_len`, hidden]
     /// * `attention_mask` - Optional attention mask
     /// * `kv_cache` - Optional KV cache for inference
     ///
     /// # Returns
-    /// Output tensor [batch, seq_len, hidden]
+    /// Output tensor [batch, `seq_len`, hidden]
     pub fn forward(
         &self,
         hidden_states: &Tensor,
@@ -121,7 +120,7 @@ impl FusedAttention {
         _kv_cache: Option<(&Tensor, &Tensor)>,
     ) -> Result<Tensor> {
         let device = hidden_states.device();
-        
+
         // Use optimized GPU path if available
         if device.is_cuda() {
             self.forward_cuda(hidden_states, attention_mask)
@@ -142,24 +141,37 @@ impl FusedAttention {
 
         // QKV projection - use broadcast_matmul for 3D tensor with 2D weight
         let qkv = hidden_states.broadcast_matmul(&self.qkv_weight.t()?)?;
-        
+
         // Split into Q, K, V
         let q_size = num_heads * head_dim;
         let kv_size = self.config.num_kv_heads.unwrap_or(num_heads) * head_dim;
-        
+
         let q = qkv.narrow(2, 0, q_size)?;
         let k = qkv.narrow(2, q_size, kv_size)?;
         let v = qkv.narrow(2, q_size + kv_size, kv_size)?;
 
         // Reshape for attention: [batch, num_heads, seq_len, head_dim]
         // Make contiguous after transpose for matmul compatibility
-        let q = q.reshape((batch, seq_len, num_heads, head_dim))?
+        let q = q
+            .reshape((batch, seq_len, num_heads, head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let k = k.reshape((batch, seq_len, self.config.num_kv_heads.unwrap_or(num_heads), head_dim))?
+        let k = k
+            .reshape((
+                batch,
+                seq_len,
+                self.config.num_kv_heads.unwrap_or(num_heads),
+                head_dim,
+            ))?
             .transpose(1, 2)?
             .contiguous()?;
-        let v = v.reshape((batch, seq_len, self.config.num_kv_heads.unwrap_or(num_heads), head_dim))?
+        let v = v
+            .reshape((
+                batch,
+                seq_len,
+                self.config.num_kv_heads.unwrap_or(num_heads),
+                head_dim,
+            ))?
             .transpose(1, 2)?
             .contiguous()?;
 
@@ -181,10 +193,11 @@ impl FusedAttention {
         let attn_output = attn_weights.matmul(&v)?;
 
         // Reshape back: [batch, seq_len, hidden]
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch, seq_len, num_heads * head_dim))?;
+        let attn_output = attn_output.transpose(1, 2)?.contiguous()?.reshape((
+            batch,
+            seq_len,
+            num_heads * head_dim,
+        ))?;
 
         // Output projection - use broadcast_matmul for 3D tensor with 2D weight
         let output = attn_output.broadcast_matmul(&self.o_weight.t()?)?;
@@ -194,7 +207,7 @@ impl FusedAttention {
 
     /// CUDA implementation.
     ///
-    /// Uses CubeCL fused Flash Attention kernel when available, otherwise
+    /// Uses `CubeCL` fused Flash Attention kernel when available, otherwise
     /// falls back to Candle's CUDA backend.
     fn forward_cuda(
         &self,
@@ -215,7 +228,7 @@ impl FusedAttention {
         self.forward_cpu(hidden_states, attention_mask)
     }
 
-    /// Flash Attention implementation using CubeCL.
+    /// Flash Attention implementation using `CubeCL`.
     fn forward_flash_attention(
         &self,
         hidden_states: &Tensor,
@@ -228,23 +241,26 @@ impl FusedAttention {
 
         // QKV projection
         let qkv = hidden_states.broadcast_matmul(&self.qkv_weight.t()?)?;
-        
+
         // Split into Q, K, V
         let q_size = num_heads * head_dim;
         let kv_size = num_kv_heads * head_dim;
-        
+
         let q = qkv.narrow(2, 0, q_size)?;
         let k = qkv.narrow(2, q_size, kv_size)?;
         let v = qkv.narrow(2, q_size + kv_size, kv_size)?;
 
         // Reshape for attention: [batch, num_heads, seq_len, head_dim]
-        let q = q.reshape((batch, seq_len, num_heads, head_dim))?
+        let q = q
+            .reshape((batch, seq_len, num_heads, head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let k = k.reshape((batch, seq_len, num_kv_heads, head_dim))?
+        let k = k
+            .reshape((batch, seq_len, num_kv_heads, head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let v = v.reshape((batch, seq_len, num_kv_heads, head_dim))?
+        let v = v
+            .reshape((batch, seq_len, num_kv_heads, head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
 
@@ -253,14 +269,19 @@ impl FusedAttention {
 
         // Call Flash Attention CubeCL kernel
         let attn_output = crate::kernels::attention_cubecl::flash_attention_cubecl(
-            &q, &k, &v, scale, attention_mask
+            &q,
+            &k,
+            &v,
+            scale,
+            attention_mask,
         )?;
 
         // Reshape back: [batch, seq_len, hidden]
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((batch, seq_len, num_heads * head_dim))?;
+        let attn_output = attn_output.transpose(1, 2)?.contiguous()?.reshape((
+            batch,
+            seq_len,
+            num_heads * head_dim,
+        ))?;
 
         // Output projection
         let output = attn_output.broadcast_matmul(&self.o_weight.t()?)?;
@@ -329,11 +350,11 @@ mod tests {
         // Random input
         let input = Tensor::randn(0.0f32, 1.0, (1, 8, 256), &device).unwrap();
         let output = attn.forward(&input, None, None);
-        
+
         assert!(output.is_ok());
         let output = output.unwrap();
         assert_eq!(output.shape().dims(), &[1, 8, 256]);
-        
+
         // Output should not have NaN values
         let sum = output.sum_all().unwrap().to_scalar::<f32>().unwrap();
         assert!(!sum.is_nan(), "Output contains NaN values");
@@ -353,10 +374,10 @@ mod tests {
         // Test with larger values that could cause overflow
         let input = Tensor::randn(0.0f32, 10.0, (1, 4, 128), &device).unwrap();
         let output = attn.forward(&input, None, None);
-        
+
         assert!(output.is_ok());
         let output = output.unwrap();
-        
+
         // Check for NaN and Inf
         let values: Vec<f32> = output.flatten_all().unwrap().to_vec1().unwrap();
         for v in values {
@@ -377,7 +398,7 @@ mod tests {
         let attn = FusedAttention::new(config, &device).unwrap();
 
         let vram = attn.vram_estimate(4, 2048);
-        
+
         // Should be substantial (several GB for this config)
         assert!(vram > 100 * 1024 * 1024); // > 100 MB
         assert!(vram < 100 * 1024 * 1024 * 1024); // < 100 GB (sanity check)

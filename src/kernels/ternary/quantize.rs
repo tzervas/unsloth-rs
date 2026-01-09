@@ -17,9 +17,9 @@
 //!
 //! ## Calibration Methods
 //!
-//! - **AbsMax**: Δ = α × max(|W|), where α ∈ [0, 1] (typically 0.7)
+//! - **`AbsMax`**: Δ = α × max(|W|), where α ∈ [0, 1] (typically 0.7)
 //! - **Percentile**: Δ = percentile(|W|, p), e.g., p=99.5
-//! - **MeanStd**: Δ = mean(|W|) + k × std(|W|)
+//! - **`MeanStd`**: Δ = mean(|W|) + k × std(|W|)
 //!
 //! ## References
 //!
@@ -108,12 +108,12 @@ pub struct QuantizationStats {
 ///
 /// # Arguments
 ///
-/// * `tensor` - Input tensor [out_features, in_features] (must be 2D, f32)
+/// * `tensor` - Input tensor [`out_features`, `in_features`] (must be 2D, f32)
 /// * `config` - Ternary configuration with calibration settings
 ///
 /// # Returns
 ///
-/// Tuple of (TernaryTensor, QuantizationStats)
+/// Tuple of (`TernaryTensor`, `QuantizationStats`)
 ///
 /// # Errors
 ///
@@ -160,7 +160,7 @@ pub fn quantize_tensor(
     let calibration = CalibrationMethod::from(config.calibration_method);
 
     // Quantize per row (per output channel)
-    let k_words = (in_features + 31) / 32;
+    let k_words = in_features.div_ceil(32);
     let mut plus_plane = vec![0u32; out_features * k_words];
     let mut minus_plane = vec![0u32; out_features * k_words];
     let mut scales = vec![0.0f32; out_features];
@@ -177,7 +177,7 @@ pub fn quantize_tensor(
         let row_data = &data[row_start..row_start + in_features];
 
         // Compute threshold for this row
-        let threshold = compute_threshold(row_data, &calibration);
+        let threshold = compute_threshold(row_data, calibration);
         thresholds[row] = threshold;
 
         // Quantize and compute scale
@@ -212,18 +212,20 @@ pub fn quantize_tensor(
             };
 
             let error = (val - reconstructed).abs();
-            total_error += error as f64;
+            total_error += f64::from(error);
             max_error = max_error.max(error);
         }
     }
 
     let total_elements = out_features * in_features;
+    #[allow(clippy::cast_precision_loss)] // Sparsity calculations for statistics only
     let stats = QuantizationStats {
         sparsity: total_zero as f32 / total_elements as f32,
         positive_ratio: total_positive as f32 / total_elements as f32,
         negative_ratio: total_negative as f32 / total_elements as f32,
         thresholds,
         scales: scales.clone(),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)] // Error statistics approximation
         mean_error: (total_error / total_elements as f64) as f32,
         max_error,
     };
@@ -234,7 +236,7 @@ pub fn quantize_tensor(
 }
 
 /// Compute quantization threshold using specified calibration method.
-fn compute_threshold(data: &[f32], method: &CalibrationMethod) -> f32 {
+fn compute_threshold(data: &[f32], method: CalibrationMethod) -> f32 {
     match method {
         CalibrationMethod::AbsMax { factor } => {
             let max_abs = data.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
@@ -245,28 +247,39 @@ fn compute_threshold(data: &[f32], method: &CalibrationMethod) -> f32 {
             let mut abs_values: Vec<f32> = data.iter().map(|x| x.abs()).collect();
             abs_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            // Percentile calculation: precision loss acceptable for threshold approximation
             let idx = ((percentile / 100.0) * (abs_values.len() - 1) as f32) as usize;
             abs_values[idx.min(abs_values.len() - 1)]
         }
 
         CalibrationMethod::MeanStd { k } => {
+            #[allow(clippy::cast_precision_loss)]
+            // Precision loss acceptable for statistical calculations
             let n = data.len() as f64;
-            let abs_values: Vec<f64> = data.iter().map(|x| x.abs() as f64).collect();
+            let abs_values: Vec<f64> = data.iter().map(|x| f64::from(x.abs())).collect();
 
             let mean = abs_values.iter().sum::<f64>() / n;
             let variance = abs_values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
             let std = variance.sqrt();
 
-            (mean + (*k as f64) * std) as f32
+            // Truncation acceptable for threshold calculation
+            #[allow(clippy::cast_possible_truncation)]
+            let threshold_value = (mean + f64::from(k) * std) as f32;
+            threshold_value
         }
 
-        CalibrationMethod::Manual { threshold } => *threshold,
+        CalibrationMethod::Manual { threshold } => threshold,
     }
 }
 
 /// Quantize a single row to ternary planes.
 ///
-/// Returns (plus_plane, minus_plane, scale, positive_count, negative_count, zero_count)
+/// Returns (`plus_plane`, `minus_plane`, `scale`, `positive_count`, `negative_count`, `zero_count`)
 fn quantize_row(
     data: &[f32],
     threshold: f32,
@@ -288,11 +301,11 @@ fn quantize_row(
 
         if val > threshold {
             plus[word_idx] |= mask;
-            positive_sum += val.abs() as f64;
+            positive_sum += f64::from(val.abs());
             positive_count += 1;
         } else if val < -threshold {
             minus[word_idx] |= mask;
-            negative_sum += val.abs() as f64;
+            negative_sum += f64::from(val.abs());
             negative_count += 1;
         } else {
             zero_count += 1;
@@ -302,7 +315,10 @@ fn quantize_row(
     // Scale is mean of non-zero absolute values
     let nonzero_count = positive_count + negative_count;
     let scale = if nonzero_count > 0 {
-        ((positive_sum + negative_sum) / nonzero_count as f64) as f32
+        // Truncation/precision loss acceptable for scale approximation
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let scale = ((positive_sum + negative_sum) / nonzero_count as f64) as f32;
+        scale
     } else {
         1.0 // Fallback for all-zero rows
     };
@@ -325,7 +341,7 @@ fn quantize_row(
 ///
 /// # Returns
 ///
-/// Candle tensor [out_features, in_features] with reconstructed f32 values.
+/// Candle tensor [`out_features`, `in_features`] with reconstructed f32 values.
 ///
 /// # Errors
 ///
@@ -340,7 +356,7 @@ pub fn dequantize_tensor(ternary: &TernaryTensor) -> Result<Tensor> {
 
         for col in 0..in_features {
             let val = planes.get(col);
-            data[row * in_features + col] = val as f32 * scale;
+            data[row * in_features + col] = f32::from(val) * scale;
         }
     }
 
@@ -352,12 +368,17 @@ pub fn dequantize_tensor(ternary: &TernaryTensor) -> Result<Tensor> {
 ///
 /// # Arguments
 ///
-/// * `weights` - Weight tensor from nn::Linear [out_features, in_features]
+/// * `weights` - Weight tensor from `nn::Linear` [`out_features`, `in_features`]
 /// * `config` - Ternary configuration
 ///
 /// # Returns
 ///
-/// Ternary tensor ready for use in TernaryLinear.
+/// Ternary tensor ready for use in `TernaryLinear`.
+///
+/// # Errors
+///
+/// Returns an error if the weight tensor cannot be accessed, has invalid dimensions,
+/// or if quantization fails due to numerical issues.
 pub fn quantize_linear_weights(weights: &Tensor, config: &TernaryConfig) -> Result<TernaryTensor> {
     let (ternary, _stats) = quantize_tensor(weights, config)?;
     Ok(ternary)
@@ -395,7 +416,15 @@ mod tests {
     #[test]
     fn test_quantize_dequantize_roundtrip() -> Result<()> {
         // Test that dequantization produces reasonable values
-        let data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 128.0).collect();
+        let data: Vec<f32> = (0..256)
+            .map(|i| {
+                // Precision loss acceptable for test data generation
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    (i as f32 - 128.0) / 128.0
+                }
+            })
+            .collect();
         let tensor = Tensor::from_vec(data.clone(), (4, 64), &Device::Cpu)?;
 
         let config = TernaryConfig::default();
@@ -410,7 +439,13 @@ mod tests {
             .zip(recon_data.iter())
             .map(|(a, b)| (a - b).powi(2))
             .sum::<f32>()
-            / data.len() as f32;
+            / {
+                // Precision loss acceptable for test metric calculation
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    data.len() as f32
+                }
+            };
 
         // MSE should be reasonable (< 0.5 for well-calibrated ternary)
         assert!(mse < 0.5, "MSE too high: {mse}");
@@ -423,11 +458,11 @@ mod tests {
         let data: Vec<f32> = vec![0.1, 0.5, 1.0, -0.3, -0.8, 2.0, -1.5, 0.0];
 
         // AbsMax: factor * max(|x|) = 0.7 * 2.0 = 1.4
-        let t1 = compute_threshold(&data, &CalibrationMethod::AbsMax { factor: 0.7 });
+        let t1 = compute_threshold(&data, CalibrationMethod::AbsMax { factor: 0.7 });
         assert!((t1 - 1.4).abs() < 0.01);
 
         // Manual
-        let t2 = compute_threshold(&data, &CalibrationMethod::Manual { threshold: 0.5 });
+        let t2 = compute_threshold(&data, CalibrationMethod::Manual { threshold: 0.5 });
         assert!((t2 - 0.5).abs() < 0.001);
     }
 

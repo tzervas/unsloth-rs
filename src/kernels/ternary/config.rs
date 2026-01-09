@@ -155,7 +155,7 @@ impl TernaryConfig {
         if !self.tile_size.is_power_of_two() {
             return Err(ConfigError::InvalidTileSize(self.tile_size));
         }
-        if self.block_size % 32 != 0 || self.block_size > 1024 {
+        if !self.block_size.is_multiple_of(32) || self.block_size > 1024 {
             return Err(ConfigError::InvalidBlockSize(self.block_size));
         }
         if !self.metadata_chunk_size.is_power_of_two() {
@@ -179,7 +179,7 @@ impl TernaryConfig {
     /// Calculate number of u32 words for K dimension.
     #[must_use]
     pub const fn k_words(k_dim: u32) -> u32 {
-        (k_dim + 31) / 32
+        k_dim.div_ceil(32)
     }
 }
 

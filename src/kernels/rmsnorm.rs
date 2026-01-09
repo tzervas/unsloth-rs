@@ -3,12 +3,12 @@
 //! Root Mean Square Layer Normalization normalizes inputs using only the RMS
 //! (root mean square) statistic, without centering (no mean subtraction).
 //!
-//! ## Why RMSNorm?
+//! ## Why `RMSNorm`?
 //!
-//! Compared to LayerNorm:
+//! Compared to `LayerNorm`:
 //! - Simpler computation (no mean calculation needed)
 //! - Empirically performs similarly in practice
-//! - Used in modern LLMs like LLaMA for efficiency
+//! - Used in modern LLMs like `LLaMA` for efficiency
 //!
 //! ## Implementation Notes
 //!
@@ -45,13 +45,13 @@ impl RmsNorm {
     /// Forward pass.
     ///
     /// # Arguments
-    /// * `x` - Input tensor [..., hidden_size]
+    /// * `x` - Input tensor [..., `hidden_size`]
     ///
     /// # Returns
     /// Normalized tensor with same shape
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let device = x.device();
-        
+
         if device.is_cuda() {
             self.forward_cuda(x)
         } else {
@@ -64,11 +64,11 @@ impl RmsNorm {
         let x_sq = x.sqr()?;
         let mean_sq = x_sq.mean_keepdim(x.rank() - 1)?;
         let rms = (mean_sq + self.eps)?.sqrt()?;
-        
+
         // Normalize and scale
         let normalized = x.broadcast_div(&rms)?;
         let output = normalized.broadcast_mul(&self.weight)?;
-        
+
         Ok(output)
     }
 
@@ -116,7 +116,7 @@ mod tests {
         // Output should have approximately unit RMS
         let output_sq = output.sqr().unwrap();
         let mean_sq = output_sq.mean_all().unwrap().to_scalar::<f32>().unwrap();
-        
+
         // RMS should be close to 1 (within tolerance)
         assert!(
             (mean_sq.sqrt() - 1.0).abs() < 0.5,
@@ -134,11 +134,11 @@ mod tests {
         let small_input = Tensor::full(1e-6f32, (1, 1, 128), &device).unwrap();
         let output = norm.forward(&small_input);
         assert!(output.is_ok());
-        
+
         // Test with larger values
         let large_input = Tensor::randn(0.0f32, 100.0, (1, 1, 128), &device).unwrap();
         let output = norm.forward(&large_input).unwrap();
-        
+
         // Check no NaN/Inf
         let values: Vec<f32> = output.flatten_all().unwrap().to_vec1().unwrap();
         for v in values {

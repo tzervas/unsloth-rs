@@ -1,14 +1,14 @@
 //! Kernel configuration for Flash Attention.
 //!
 //! This module contains compile-time and runtime configuration for the
-//! Flash Attention CubeCL kernel, including tile sizes and launch parameters.
+//! Flash Attention `CubeCL` kernel, including tile sizes and launch parameters.
 
 /// Configuration for Flash Attention kernel launch.
 ///
 /// Tile sizes are tuned per-GPU for optimal performance:
-/// - RTX 5080: tile_size=256 (primary target)
-/// - RTX 3090 Ti: tile_size=128 (validation target)
-/// - A100/H100: tile_size=256 or larger
+/// - RTX 5080: `tile_size=256` (primary target)
+/// - RTX 3090 Ti: `tile_size=128` (validation target)
+/// - A100/H100: `tile_size=256` or larger
 ///
 /// # Example
 ///
@@ -144,13 +144,13 @@ impl FlashAttentionConfig {
     /// Calculate number of Q tiles for a given sequence length.
     #[must_use]
     pub const fn num_q_tiles(&self, seq_len: u32) -> u32 {
-        (seq_len + self.tile_size - 1) / self.tile_size
+        seq_len.div_ceil(self.tile_size)
     }
 
     /// Calculate number of KV tiles for a given sequence length.
     #[must_use]
     pub const fn num_kv_tiles(&self, seq_len: u32) -> u32 {
-        (seq_len + self.tile_size - 1) / self.tile_size
+        seq_len.div_ceil(self.tile_size)
     }
 }
 

@@ -7,9 +7,9 @@
 //! This crate provides common transformer operations built on [Candle](https://github.com/huggingface/candle):
 //!
 //! - **Multi-head attention**: Core attention mechanism with grouped-query attention (GQA) support
-//! - **Rotary position embeddings (RoPE)**: Position encoding used in modern LLMs
+//! - **Rotary position embeddings (`RoPE`)**: Position encoding used in modern LLMs
 //! - **RMS normalization**: Efficient normalization layer used in LLaMA-style models
-//! - **SwiGLU activation**: Gated activation function for transformer MLPs
+//! - **`SwiGLU` activation**: Gated activation function for transformer MLPs
 //! - **Memory estimation utilities**: Tools for tracking and estimating memory usage
 //!
 //! ## Why This Crate?
@@ -22,7 +22,7 @@
 //! ## Current Status
 //!
 //! Current implementations are CPU reference implementations with GPU dispatch
-//! via Candle's CUDA backend. Fused GPU kernels using CubeCL are planned for
+//! via Candle's CUDA backend. Fused GPU kernels using `CubeCL` are planned for
 //! future versions.
 //!
 //! ## Quick Start

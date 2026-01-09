@@ -23,7 +23,7 @@ use crate::error::{Result, UnslothError};
 /// Memory pool for efficient GPU allocation.
 ///
 /// Tracks memory allocations and provides limit enforcement.
-/// Future versions will integrate with CubeCL for device-aware allocation.
+/// Future versions will integrate with `CubeCL` for device-aware allocation.
 pub struct MemoryPool {
     /// Total allocated bytes
     allocated: usize,
@@ -78,7 +78,7 @@ impl MemoryPool {
     /// Returns `OutOfMemory` if limit would be exceeded.
     pub fn allocate(&mut self, bytes: usize) -> Result<()> {
         let new_total = self.allocated + bytes;
-        
+
         if let Some(limit) = self.limit {
             if new_total > limit {
                 return Err(UnslothError::OutOfMemory {
@@ -87,7 +87,7 @@ impl MemoryPool {
                 });
             }
         }
-        
+
         self.allocated = new_total;
         self.peak = self.peak.max(self.allocated);
         Ok(())
@@ -127,7 +127,11 @@ impl MemoryPool {
         if self.peak == 0 {
             1.0
         } else {
-            self.allocated as f64 / self.peak as f64
+            // Precision loss acceptable for efficiency metric
+            #[allow(clippy::cast_precision_loss)]
+            {
+                self.allocated as f64 / self.peak as f64
+            }
         }
     }
 }
@@ -172,7 +176,11 @@ impl CheckpointConfig {
             1.0
         } else {
             let checkpointed = num_layers.div_ceil(self.checkpoint_every);
-            checkpointed as f64 / num_layers as f64
+            // Precision loss acceptable for memory reduction factor metric
+            #[allow(clippy::cast_precision_loss)]
+            {
+                checkpointed as f64 / num_layers as f64
+            }
         }
     }
 }
@@ -197,17 +205,17 @@ pub fn estimate_forward_memory(
     checkpoint_config: &CheckpointConfig,
 ) -> usize {
     let bytes_per_elem = 4; // f32
-    
+
     // Per-layer activation memory
     let activation_per_layer = batch_size * seq_len * hidden_size * bytes_per_elem;
-    
+
     // With checkpointing, only store every N layers
     let stored_layers = if checkpoint_config.enabled {
         num_layers.div_ceil(checkpoint_config.checkpoint_every)
     } else {
         num_layers
     };
-    
+
     stored_layers * activation_per_layer
 }
 
@@ -229,14 +237,14 @@ pub fn estimate_attention_vram(
     num_heads: usize,
 ) -> usize {
     let bytes_per_elem = 4; // f32
-    
+
     // QKV projection output
     let qkv_size = batch_size * seq_len * 3 * hidden_size * bytes_per_elem;
     // Attention scores: [batch, num_heads, seq_len, seq_len]
     let scores_size = batch_size * num_heads * seq_len * seq_len * bytes_per_elem;
     // Output
     let output_size = batch_size * seq_len * hidden_size * bytes_per_elem;
-    
+
     qkv_size + scores_size + output_size
 }
 
@@ -246,7 +254,9 @@ pub fn format_bytes(bytes: usize) -> String {
     const KB: usize = 1024;
     const MB: usize = KB * 1024;
     const GB: usize = MB * 1024;
-    
+
+    // Precision loss acceptable for human-readable byte formatting
+    #[allow(clippy::cast_precision_loss)]
     if bytes >= GB {
         format!("{:.2} GB", bytes as f64 / GB as f64)
     } else if bytes >= MB {
@@ -265,16 +275,16 @@ mod tests {
     #[test]
     fn test_memory_pool_allocation() {
         let mut pool = MemoryPool::new(Some(1000));
-        
+
         assert!(pool.allocate(500).is_ok());
         assert_eq!(pool.allocated(), 500);
-        
+
         assert!(pool.allocate(400).is_ok());
         assert_eq!(pool.allocated(), 900);
-        
+
         // Should fail - would exceed limit
         assert!(pool.allocate(200).is_err());
-        
+
         pool.free(300);
         assert_eq!(pool.allocated(), 600);
     }
@@ -292,13 +302,19 @@ mod tests {
         let seq = 2048;
         let hidden = 4096;
         let layers = 32;
-        
-        let no_checkpoint = CheckpointConfig { enabled: false, ..Default::default() };
-        let with_checkpoint = CheckpointConfig { enabled: true, checkpoint_every: 4 };
-        
+
+        let no_checkpoint = CheckpointConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let with_checkpoint = CheckpointConfig {
+            enabled: true,
+            checkpoint_every: 4,
+        };
+
         let mem_full = estimate_forward_memory(batch, seq, hidden, layers, &no_checkpoint);
         let mem_checkpoint = estimate_forward_memory(batch, seq, hidden, layers, &with_checkpoint);
-        
+
         // Checkpointing should reduce memory significantly
         assert!(mem_checkpoint < mem_full / 2);
     }

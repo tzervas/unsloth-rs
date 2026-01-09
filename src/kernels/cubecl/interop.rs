@@ -1,12 +1,12 @@
-//! Candle ↔ CubeCL tensor conversion utilities.
+//! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and
-//! CubeCL buffer handles, enabling seamless integration between the two frameworks.
+//! `CubeCL` buffer handles, enabling seamless integration between the two frameworks.
 //!
 //! ## Key Functions
 //!
-//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to CubeCL handle
-//! - [`cubecl_to_candle_tensor`] - Convert CubeCL output back to Candle tensor
+//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to `CubeCL` handle
+//! - [`cubecl_to_candle_tensor`] - Convert `CubeCL` output back to Candle tensor
 //! - [`has_cubecl_cuda_support`] - Check if CUDA runtime is available
 //!
 //! ## Memory Management
@@ -18,13 +18,13 @@
 //!
 //! ## Fallback Routing
 //!
-//! When CubeCL is not available, functions return appropriate errors or
+//! When `CubeCL` is not available, functions return appropriate errors or
 //! fallback implementations are used in the kernel module.
 
 use crate::error::{Result, UnslothError};
 use candle_core::{DType, Device, Tensor};
 
-/// Check if CubeCL CUDA runtime support is available.
+/// Check if `CubeCL` CUDA runtime support is available.
 ///
 /// This checks:
 /// 1. The `cuda` feature is enabled at compile time
@@ -32,7 +32,7 @@ use candle_core::{DType, Device, Tensor};
 ///
 /// # Returns
 ///
-/// `true` if CubeCL CUDA kernels can be launched, `false` otherwise.
+/// `true` if `CubeCL` CUDA kernels can be launched, `false` otherwise.
 ///
 /// # Example
 ///
@@ -65,7 +65,7 @@ pub fn has_cubecl_cuda_support() -> bool {
     }
 }
 
-/// Convert a Candle tensor to a CubeCL buffer handle.
+/// Convert a Candle tensor to a `CubeCL` buffer handle.
 ///
 /// The tensor must be contiguous in memory. If not, it will be made contiguous
 /// (which may involve a copy).
@@ -77,7 +77,7 @@ pub fn has_cubecl_cuda_support() -> bool {
 /// # Returns
 ///
 /// A tuple of `(raw_data_bytes, shape, dtype)` that can be used to create
-/// a CubeCL buffer handle via `client.create(bytes)`.
+/// a `CubeCL` buffer handle via `client.create(bytes)`.
 ///
 /// # Errors
 ///
@@ -115,8 +115,7 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
     // TODO: Add f16/bf16 support
     if dtype != DType::F32 {
         return Err(UnslothError::InvalidConfig(format!(
-            "candle_to_cubecl_handle only supports f32, got {:?}",
-            dtype
+            "candle_to_cubecl_handle only supports f32, got {dtype:?}"
         )));
     }
 
@@ -128,11 +127,11 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
     Ok((bytes, shape, dtype))
 }
 
-/// Convert a CubeCL buffer back to a Candle tensor.
+/// Convert a `CubeCL` buffer back to a Candle tensor.
 ///
 /// # Arguments
 ///
-/// * `bytes` - Raw output bytes from CubeCL kernel
+/// * `bytes` - Raw output bytes from `CubeCL` kernel
 /// * `shape` - Target tensor shape
 /// * `device` - Target Candle device (must be CUDA)
 ///
@@ -201,7 +200,7 @@ pub fn cubecl_to_candle_tensor(bytes: &[u8], shape: &[usize], device: &Device) -
 ///
 /// # Returns
 ///
-/// A byte vector suitable for CubeCL output buffer.
+/// A byte vector suitable for `CubeCL` output buffer.
 #[must_use]
 pub fn allocate_output_buffer(num_elements: usize) -> Vec<u8> {
     // Allocate without initialization for performance
@@ -209,10 +208,10 @@ pub fn allocate_output_buffer(num_elements: usize) -> Vec<u8> {
     vec![0u8; num_elements * 4]
 }
 
-/// Convert u32 plane data to raw bytes for CubeCL buffer creation.
+/// Convert u32 plane data to raw bytes for `CubeCL` buffer creation.
 ///
 /// # Arguments
-/// * `plane` - The u32 plane data (e.g., plus_plane or minus_plane from TernaryTensor)
+/// * `plane` - The u32 plane data (e.g., `plus_plane` or `minus_plane` from `TernaryTensor`)
 ///
 /// # Returns
 /// Raw bytes that can be passed to `client.create()`
@@ -221,30 +220,40 @@ pub fn u32_planes_to_cubecl_bytes(plane: &[u32]) -> Vec<u8> {
     plane.iter().flat_map(|&word| word.to_le_bytes()).collect()
 }
 
-/// Convert a TernaryTensor to CubeCL buffer handles.
+/// Convert a `TernaryTensor` to `CubeCL` buffer handles.
 ///
-/// Returns the raw bytes for plus_plane, minus_plane, and scales,
+/// Returns the raw bytes for `plus_plane`, `minus_plane`, and scales,
 /// along with shape metadata for kernel configuration.
 ///
 /// # Arguments
-/// * `tensor` - The TernaryTensor to convert
+/// * `tensor` - The `TernaryTensor` to convert
 ///
 /// # Returns
-/// Tuple of (plus_bytes, minus_bytes, scales_bytes, shape, k_words)
+/// Tuple of (`plus_bytes`, `minus_bytes`, `scales_bytes`, shape, `k_words`)
 #[must_use]
 pub fn ternary_tensor_to_cubecl_handles(
     tensor: &crate::kernels::ternary::TernaryTensor,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>, (usize, usize), usize) {
     let plus_bytes = u32_planes_to_cubecl_bytes(&tensor.plus_plane);
     let minus_bytes = u32_planes_to_cubecl_bytes(&tensor.minus_plane);
-    let scales_bytes: Vec<u8> = tensor.scales.iter().flat_map(|&s| s.to_le_bytes()).collect();
-    (plus_bytes, minus_bytes, scales_bytes, tensor.shape, tensor.k_words)
+    let scales_bytes: Vec<u8> = tensor
+        .scales
+        .iter()
+        .flat_map(|&s| s.to_le_bytes())
+        .collect();
+    (
+        plus_bytes,
+        minus_bytes,
+        scales_bytes,
+        tensor.shape,
+        tensor.k_words,
+    )
 }
 
-/// Convert CubeCL output bytes back to u32 plane.
+/// Convert `CubeCL` output bytes back to u32 plane.
 ///
 /// # Arguments
-/// * `bytes` - Raw bytes from CubeCL buffer
+/// * `bytes` - Raw bytes from `CubeCL` buffer
 ///
 /// # Returns
 /// Vec<u32> plane data

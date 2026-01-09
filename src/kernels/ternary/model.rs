@@ -29,7 +29,7 @@ pub struct QuantizationStats {
     pub average_sparsity: f32,
     /// Per-layer sparsity
     pub layer_sparsities: HashMap<String, f32>,
-    /// Flag to track if finalize_stats has been called (for idempotency)
+    /// Flag to track if `finalize_stats` has been called (for idempotency)
     finalized: bool,
 }
 
@@ -39,13 +39,17 @@ impl QuantizationStats {
     /// # Returns
     ///
     /// Returns 1.0 (no compression) if `quantized_bytes` is zero, indicating
-    /// no quantization occurred. Otherwise returns original_bytes / quantized_bytes.
+    /// no quantization occurred. Otherwise returns `original_bytes` / `quantized_bytes`.
     #[must_use]
     pub fn compression_ratio(&self) -> f32 {
         if self.quantized_bytes == 0 {
             1.0 // No compression if nothing was quantized
         } else {
-            self.original_bytes as f32 / self.quantized_bytes as f32
+            // Precision loss acceptable for compression ratio metric
+            #[allow(clippy::cast_precision_loss)]
+            {
+                self.original_bytes as f32 / self.quantized_bytes as f32
+            }
         }
     }
 
@@ -109,8 +113,8 @@ impl Default for ModelQuantizationConfig {
 ///
 /// # Arguments
 ///
-/// * `weight` - Weight tensor [out_features, in_features]
-/// * `bias` - Optional bias tensor [out_features]
+/// * `weight` - Weight tensor [`out_features`, `in_features`]
+/// * `bias` - Optional bias tensor [`out_features`]
 /// * `name` - Layer name for logging
 /// * `config` - Quantization configuration
 /// * `_device` - Target device (currently unused; weights remain on their original device).
@@ -141,7 +145,7 @@ pub fn quantize_linear_layer(
     // Check if layer should be skipped
     if num_params < config.min_layer_size {
         if config.verbose {
-            println!("Skipping {} (too small: {} params)", name, num_params);
+            println!("Skipping {name} (too small: {num_params} params)");
         }
         return Ok(None);
     }
@@ -149,7 +153,7 @@ pub fn quantize_linear_layer(
     for pattern in &config.skip_patterns {
         if name.to_lowercase().contains(&pattern.to_lowercase()) {
             if config.verbose {
-                println!("Skipping {} (matches pattern: {})", name, pattern);
+                println!("Skipping {name} (matches pattern: {pattern})");
             }
             return Ok(None);
         }
@@ -197,6 +201,7 @@ pub struct TernaryModel {
 
 impl TernaryModel {
     /// Create a new empty ternary model.
+    #[must_use] 
     pub fn new(config: ModelQuantizationConfig) -> Self {
         Self {
             layers: HashMap::new(),
@@ -239,7 +244,7 @@ impl TernaryModel {
         if self.stats.finalized {
             return;
         }
-        
+
         // Total original params = quantized + preserved
         self.stats.original_params += self.stats.quantized_params;
         // Total original bytes (FP32) = all params * 4 bytes
@@ -249,22 +254,24 @@ impl TernaryModel {
             self.stats.average_sparsity = self.stats.layer_sparsities.values().sum::<f32>()
                 / self.stats.layer_sparsities.len() as f32;
         }
-        
+
         self.stats.finalized = true;
     }
 
     /// Get a quantized layer by name.
+    #[must_use]
     pub fn get_layer(&self, name: &str) -> Option<&TernaryLinear> {
         self.layers.get(name)
     }
 
     /// Get a preserved tensor by name.
+    #[must_use] 
     pub fn get_preserved(&self, name: &str) -> Option<&Tensor> {
         self.preserved_tensors.get(name)
     }
 }
 
-/// Quantize a collection of weight tensors into a TernaryModel.
+/// Quantize a collection of weight tensors into a `TernaryModel`.
 ///
 /// # Arguments
 ///
@@ -287,16 +294,14 @@ pub fn quantize_weights_collection(
     for (name, weight) in weights {
         let bias = biases.get(&name);
 
-        match quantize_linear_layer(&weight, bias, &name, &model.config, device)? {
-            Some(quantized) => {
-                model.add_layer(quantized.name, quantized.layer, quantized.sparsity);
-            }
-            None => {
-                // Preserve the original weight with consistent naming: {name}.weight
-                model.add_preserved(format!("{}.weight", name), weight);
-                if let Some(b) = bias {
-                    model.add_preserved(format!("{}.bias", name), b.clone());
-                }
+        if let Some(quantized) = quantize_linear_layer(&weight, bias, &name, &model.config, device)?
+        {
+            model.add_layer(quantized.name, quantized.layer, quantized.sparsity);
+        } else {
+            // Preserve the original weight with consistent naming: {name}.weight
+            model.add_preserved(format!("{name}.weight"), weight);
+            if let Some(b) = bias {
+                model.add_preserved(format!("{name}.bias"), b.clone());
             }
         }
     }
@@ -316,9 +321,11 @@ mod tests {
 
     #[test]
     fn test_quantization_stats() {
-        let mut stats = QuantizationStats::default();
-        stats.original_bytes = 1000;
-        stats.quantized_bytes = 100;
+        let mut stats = QuantizationStats {
+            original_bytes: 1000,
+            quantized_bytes: 100,
+            ..Default::default()
+        };
 
         assert!((stats.compression_ratio() - 10.0).abs() < 0.001);
     }

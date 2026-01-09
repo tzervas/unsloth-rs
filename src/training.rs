@@ -22,7 +22,7 @@ pub enum PrecisionMode {
 }
 
 impl PrecisionMode {
-    /// Convert precision mode to Candle DType.
+    /// Convert precision mode to Candle `DType`.
     #[must_use]
     pub fn to_dtype(&self) -> DType {
         match self {
@@ -32,7 +32,7 @@ impl PrecisionMode {
         }
     }
 
-    /// Get the precision mode from a Candle DType.
+    /// Get the precision mode from a Candle `DType`.
     ///
     /// # Errors
     /// Returns error if dtype is not a supported floating point type.
@@ -42,8 +42,7 @@ impl PrecisionMode {
             DType::F16 => Ok(Self::Half),
             DType::BF16 => Ok(Self::BFloat16),
             _ => Err(UnslothError::InvalidConfig(format!(
-                "Unsupported dtype for mixed precision: {:?}",
-                dtype
+                "Unsupported dtype for mixed precision: {dtype:?}"
             ))),
         }
     }
@@ -179,10 +178,10 @@ pub fn convert_precision(tensor: &Tensor, precision: PrecisionMode) -> Result<Te
 /// # Returns
 /// Scaled loss tensor
 pub fn scale_loss(loss: &Tensor, config: &MixedPrecisionConfig) -> Result<Tensor> {
-    if config.loss_scale == 1.0 {
+    if (config.loss_scale - 1.0).abs() < f32::EPSILON {
         Ok(loss.clone())
     } else {
-        Ok((loss * config.loss_scale as f64)?)
+        Ok((loss * f64::from(config.loss_scale))?)
     }
 }
 
@@ -196,11 +195,18 @@ pub fn scale_loss(loss: &Tensor, config: &MixedPrecisionConfig) -> Result<Tensor
 ///
 /// # Returns
 /// Unscaled gradients
-pub fn unscale_gradients(gradients: &[Tensor], config: &MixedPrecisionConfig) -> Result<Vec<Tensor>> {
-    if config.loss_scale == 1.0 {
+///
+/// # Errors
+///
+/// Returns an error if tensor operations fail.
+pub fn unscale_gradients(
+    gradients: &[Tensor],
+    config: &MixedPrecisionConfig,
+) -> Result<Vec<Tensor>> {
+    if (config.loss_scale - 1.0).abs() < f32::EPSILON {
         Ok(gradients.to_vec())
     } else {
-        let scale = 1.0 / config.loss_scale as f64;
+        let scale = 1.0 / f64::from(config.loss_scale);
         gradients
             .iter()
             .map(|g| (g * scale).map_err(Into::into))
@@ -221,7 +227,7 @@ pub fn has_inf_or_nan(gradients: &[Tensor]) -> Result<bool> {
     for grad in gradients {
         let grad_f32 = grad.to_dtype(DType::F32)?;
         let values: Vec<f32> = grad_f32.flatten_all()?.to_vec1()?;
-        
+
         for &val in &values {
             if val.is_nan() || val.is_infinite() {
                 return Ok(true);
@@ -256,18 +262,22 @@ pub fn update_loss_scale(
 
     if has_overflow {
         // Reduce loss scale on overflow
-        config.loss_scale = (config.loss_scale * config.scale_backoff_factor)
-            .max(config.min_loss_scale);
+        config.loss_scale =
+            (config.loss_scale * config.scale_backoff_factor).max(config.min_loss_scale);
     } else if steps_since_overflow >= config.scale_growth_interval {
         // Increase loss scale after many successful steps
-        config.loss_scale = (config.loss_scale * config.scale_growth_factor)
-            .min(config.max_loss_scale);
+        config.loss_scale =
+            (config.loss_scale * config.scale_growth_factor).min(config.max_loss_scale);
     }
 
     config.loss_scale
 }
 
 /// Compute gradient with optional checkpointing.
+///
+/// # Errors
+///
+/// Returns an error if gradient computation fails.
 pub fn compute_gradient_checkpointed<F>(
     _input: &Tensor,
     _forward_fn: F,
@@ -285,7 +295,7 @@ where
 pub fn scale_gradients(gradients: &[Tensor], scale: f32) -> Result<Vec<Tensor>> {
     gradients
         .iter()
-        .map(|g| (g * scale as f64).map_err(Into::into))
+        .map(|g| (g * f64::from(scale)).map_err(Into::into))
         .collect()
 }
 
@@ -310,10 +320,19 @@ mod tests {
 
     #[test]
     fn test_precision_mode_from_dtype() {
-        assert_eq!(PrecisionMode::from_dtype(DType::F32).unwrap(), PrecisionMode::Full);
-        assert_eq!(PrecisionMode::from_dtype(DType::F16).unwrap(), PrecisionMode::Half);
-        assert_eq!(PrecisionMode::from_dtype(DType::BF16).unwrap(), PrecisionMode::BFloat16);
-        
+        assert_eq!(
+            PrecisionMode::from_dtype(DType::F32).unwrap(),
+            PrecisionMode::Full
+        );
+        assert_eq!(
+            PrecisionMode::from_dtype(DType::F16).unwrap(),
+            PrecisionMode::Half
+        );
+        assert_eq!(
+            PrecisionMode::from_dtype(DType::BF16).unwrap(),
+            PrecisionMode::BFloat16
+        );
+
         // Test unsupported dtype
         assert!(PrecisionMode::from_dtype(DType::U8).is_err());
     }
@@ -353,15 +372,15 @@ mod tests {
     fn test_convert_precision() {
         let device = Device::Cpu;
         let tensor = Tensor::ones((2, 3), DType::F32, &device).unwrap();
-        
+
         // Convert to FP16
         let fp16 = convert_precision(&tensor, PrecisionMode::Half).unwrap();
         assert_eq!(fp16.dtype(), DType::F16);
-        
+
         // Convert to BF16
         let bf16 = convert_precision(&tensor, PrecisionMode::BFloat16).unwrap();
         assert_eq!(bf16.dtype(), DType::BF16);
-        
+
         // Convert to same precision should work
         let same = convert_precision(&tensor, PrecisionMode::Full).unwrap();
         assert_eq!(same.dtype(), DType::F32);
@@ -371,13 +390,13 @@ mod tests {
     fn test_scale_loss() {
         let device = Device::Cpu;
         let loss = Tensor::full(2.0f32, (), &device).unwrap(); // scalar tensor
-        
+
         let mut config = MixedPrecisionConfig::default();
         config.loss_scale = 4.0;
-        
+
         let scaled = scale_loss(&loss, &config).unwrap();
         let value: f32 = scaled.to_scalar().unwrap();
-        
+
         assert!((value - 8.0).abs() < 1e-5);
     }
 
@@ -386,20 +405,20 @@ mod tests {
         let device = Device::Cpu;
         let grad1 = Tensor::full(8.0f32, (2, 2), &device).unwrap();
         let grad2 = Tensor::full(16.0f32, (2, 2), &device).unwrap();
-        
+
         let gradients = vec![grad1, grad2];
-        
+
         let mut config = MixedPrecisionConfig::default();
         config.loss_scale = 4.0;
-        
+
         let unscaled = unscale_gradients(&gradients, &config).unwrap();
-        
+
         // Check first gradient: 8.0 / 4.0 = 2.0
         let vals1: Vec<f32> = unscaled[0].flatten_all().unwrap().to_vec1().unwrap();
         for val in vals1 {
             assert!((val - 2.0).abs() < 1e-5);
         }
-        
+
         // Check second gradient: 16.0 / 4.0 = 4.0
         let vals2: Vec<f32> = unscaled[1].flatten_all().unwrap().to_vec1().unwrap();
         for val in vals2 {
@@ -410,16 +429,16 @@ mod tests {
     #[test]
     fn test_has_inf_or_nan() {
         let device = Device::Cpu;
-        
+
         // Test normal gradients
         let grad1 = Tensor::ones((2, 2), DType::F32, &device).unwrap();
         let grad2 = Tensor::full(2.0f32, (2, 2), &device).unwrap();
         assert!(!has_inf_or_nan(&[grad1, grad2]).unwrap());
-        
+
         // Test with NaN
         let nan_grad = Tensor::full(f32::NAN, (2, 2), &device).unwrap();
         assert!(has_inf_or_nan(&[nan_grad]).unwrap());
-        
+
         // Test with Inf
         let inf_grad = Tensor::full(f32::INFINITY, (2, 2), &device).unwrap();
         assert!(has_inf_or_nan(&[inf_grad]).unwrap());
@@ -427,10 +446,12 @@ mod tests {
 
     #[test]
     fn test_update_loss_scale_on_overflow() {
-        let mut config = MixedPrecisionConfig::default();
-        config.loss_scale = 1000.0;
-        config.scale_backoff_factor = 0.5;
-        
+        let mut config = MixedPrecisionConfig {
+            loss_scale: 1000.0,
+            scale_backoff_factor: 0.5,
+            ..Default::default()
+        };
+
         // Test backoff on overflow
         let new_scale = update_loss_scale(&mut config, true, 0);
         assert_eq!(new_scale, 500.0);
@@ -439,11 +460,13 @@ mod tests {
 
     #[test]
     fn test_update_loss_scale_growth() {
-        let mut config = MixedPrecisionConfig::default();
-        config.loss_scale = 100.0;
-        config.scale_growth_factor = 2.0;
-        config.scale_growth_interval = 100;
-        
+        let mut config = MixedPrecisionConfig {
+            loss_scale: 100.0,
+            scale_growth_factor: 2.0,
+            scale_growth_interval: 100,
+            ..Default::default()
+        };
+
         // Test growth after many successful steps
         let new_scale = update_loss_scale(&mut config, false, 100);
         assert_eq!(new_scale, 200.0);
@@ -454,7 +477,7 @@ mod tests {
     fn test_update_loss_scale_no_change() {
         let mut config = MixedPrecisionConfig::default();
         config.loss_scale = 100.0;
-        
+
         // No change if not enough steps and no overflow
         let new_scale = update_loss_scale(&mut config, false, 10);
         assert_eq!(new_scale, 100.0);
@@ -465,13 +488,13 @@ mod tests {
         let mut config = MixedPrecisionConfig::default();
         config.min_loss_scale = 1.0;
         config.max_loss_scale = 1000.0;
-        
+
         // Test min bound
         config.loss_scale = 2.0;
         config.scale_backoff_factor = 0.5;
         update_loss_scale(&mut config, true, 0);
         assert_eq!(config.loss_scale, 1.0); // Should hit min
-        
+
         // Test max bound
         config.loss_scale = 600.0;
         config.scale_growth_factor = 2.0;
@@ -485,18 +508,18 @@ mod tests {
         let device = Device::Cpu;
         let grad1 = Tensor::ones((2, 3), DType::F32, &device).unwrap();
         let grad2 = Tensor::full(2.0f32, (2, 3), &device).unwrap();
-        
+
         let gradients = vec![grad1, grad2];
         let scale = 0.5;
-        
+
         let scaled = scale_gradients(&gradients, scale).unwrap();
-        
+
         // Check first gradient: 1.0 * 0.5 = 0.5
         let vals1: Vec<f32> = scaled[0].flatten_all().unwrap().to_vec1().unwrap();
         for val in vals1 {
             assert!((val - 0.5).abs() < 1e-5);
         }
-        
+
         // Check second gradient: 2.0 * 0.5 = 1.0
         let vals2: Vec<f32> = scaled[1].flatten_all().unwrap().to_vec1().unwrap();
         for val in vals2 {

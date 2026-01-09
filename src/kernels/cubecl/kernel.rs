@@ -1,6 +1,6 @@
-//! Flash Attention CubeCL kernel implementation.
+//! Flash Attention `CubeCL` kernel implementation.
 //!
-//! This module contains the actual CubeCL kernel for Flash Attention 2.
+//! This module contains the actual `CubeCL` kernel for Flash Attention 2.
 //! The implementation uses tiled computation with online softmax for
 //! O(N) memory complexity.
 //!
@@ -31,7 +31,7 @@
 //!     Store O_i to global memory
 //! ```
 //!
-//! ## CubeCL API (v0.8.1)
+//! ## `CubeCL` API (v0.8.1)
 //!
 //! Key constructs used:
 //! - `#[cube(launch_unchecked)]` - Kernel definition (unchecked for performance)
@@ -54,11 +54,11 @@ use candle_core::Tensor;
 
 // CubeCL imports for kernel implementation
 #[cfg(feature = "cuda")]
+use bytemuck;
+#[cfg(feature = "cuda")]
 use cubecl::prelude::*;
 #[cfg(feature = "cuda")]
 use cubecl_cuda::CudaRuntime;
-#[cfg(feature = "cuda")]
-use bytemuck;
 
 // ============================================================================
 // CubeCL Kernel Definition (v0.8.1 API)
@@ -343,9 +343,9 @@ fn flash_attention_tiled<F: Float>(
     }
 }
 
-/// Launch Flash Attention CubeCL kernel.
+/// Launch Flash Attention `CubeCL` kernel.
 ///
-/// This is the main entry point for the CubeCL Flash Attention implementation.
+/// This is the main entry point for the `CubeCL` Flash Attention implementation.
 /// It handles device detection, tensor conversion, kernel launch, and result
 /// conversion back to Candle tensors.
 ///
@@ -365,7 +365,7 @@ fn flash_attention_tiled<F: Float>(
 /// # Errors
 ///
 /// Returns error if:
-/// - CubeCL CUDA is not available (falls back to Candle)
+/// - `CubeCL` CUDA is not available (falls back to Candle)
 /// - Tensor shapes are incompatible
 /// - Kernel launch fails
 ///
@@ -518,8 +518,7 @@ fn validate_attention_inputs(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<()> {
     // Check 4D
     if q_dims.len() != 4 || k_dims.len() != 4 || v_dims.len() != 4 {
         return Err(UnslothError::InvalidConfig(format!(
-            "Expected 4D tensors [batch, heads, seq, dim], got Q: {:?}, K: {:?}, V: {:?}",
-            q_dims, k_dims, v_dims
+            "Expected 4D tensors [batch, heads, seq, dim], got Q: {q_dims:?}, K: {k_dims:?}, V: {v_dims:?}"
         )));
     }
 
@@ -542,8 +541,7 @@ fn validate_attention_inputs(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<()> {
     // Check K and V have same shape (for now; GQA handled later)
     if k_dims != v_dims {
         return Err(UnslothError::InvalidConfig(format!(
-            "K and V shape mismatch: K={:?}, V={:?}",
-            k_dims, v_dims
+            "K and V shape mismatch: K={k_dims:?}, V={v_dims:?}"
         )));
     }
 
@@ -552,7 +550,7 @@ fn validate_attention_inputs(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<()> {
 
 /// Fallback attention using Candle operations.
 ///
-/// This provides correct results while the CubeCL kernel is being developed.
+/// This provides correct results while the `CubeCL` kernel is being developed.
 /// Uses O(N²) memory but serves as a reference for validation.
 fn fallback_attention(
     q: &Tensor,

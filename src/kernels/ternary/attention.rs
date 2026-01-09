@@ -59,8 +59,8 @@ pub struct TernaryAttentionWeights {
 
 /// Compute ternary attention score between Q and K planes via popcount.
 ///
-/// Score = (popcount(Q+ & K+) + popcount(Q- & K-) 
-///        - popcount(Q+ & K-) - popcount(Q- & K+)) * scale_q * scale_k
+/// Score = (popcount(Q+ & K+) + popcount(Q- & K-)
+///        - popcount(Q+ & K-) - popcount(Q- & K+)) * `scale_q` * `scale_k`
 ///
 /// # Arguments
 ///
@@ -87,7 +87,7 @@ pub fn ternary_attention_score(
 ///
 /// Maintains running max and sum for the online softmax algorithm.
 /// This implements the online softmax algorithm to avoid storing the full
-/// O(seq_len²) attention matrix, enabling memory-efficient attention computation.
+/// `O(seq_len²)` attention matrix, enabling memory-efficient attention computation.
 ///
 /// # Note on CPU Implementation
 ///
@@ -136,7 +136,7 @@ impl OnlineSoftmaxState {
             // New maximum: rescale existing accumulator
             let correction = (self.max - score).exp();
             self.sum *= correction;
-            for o in self.output.iter_mut() {
+            for o in &mut self.output {
                 *o *= correction;
             }
             self.max = score;
@@ -169,7 +169,7 @@ impl OnlineSoftmaxState {
 
 /// Apply causal masking to ternary planes by zeroing future positions.
 ///
-/// For position `query_pos`, zeros out all key positions > query_pos
+/// For position `query_pos`, zeros out all key positions > `query_pos`
 /// in both +plane and -plane. This implements Task 3.3 from the ternary GPU
 /// implementation plan: causal masking via bitplane zeroing.
 ///
@@ -185,18 +185,14 @@ impl OnlineSoftmaxState {
 /// * `planes` - Ternary planes to mask (modified in place)
 /// * `query_pos` - Current query position
 /// * `seq_len` - Total sequence length
-pub fn apply_causal_mask_to_planes(
-    planes: &mut TernaryPlanes,
-    query_pos: usize,
-    seq_len: usize,
-) {
+pub fn apply_causal_mask_to_planes(planes: &mut TernaryPlanes, query_pos: usize, seq_len: usize) {
     // Zero out positions after query_pos
     for pos in (query_pos + 1)..seq_len {
         if pos < planes.num_dims {
             let word_idx = pos / 32;
             let bit_idx = pos % 32;
             let mask = !(1u32 << bit_idx);
-            
+
             if word_idx < planes.plus.len() {
                 planes.plus[word_idx] &= mask;
                 planes.minus[word_idx] &= mask;
@@ -223,13 +219,13 @@ pub fn apply_causal_mask_to_planes(
 ///
 /// # Arguments
 ///
-/// * `hidden_states` - Input tensor [batch, seq_len, hidden]
+/// * `hidden_states` - Input tensor [batch, `seq_len`, hidden]
 /// * `weights` - Ternary attention weights
 /// * `config` - Attention configuration
 ///
 /// # Returns
 ///
-/// Output tensor [batch, seq_len, hidden]
+/// Output tensor [batch, `seq_len`, hidden]
 ///
 /// # Errors
 ///
@@ -260,11 +256,14 @@ pub fn ternary_attention_cpu(
     let v = ternary_matmul_cpu(hidden_states, &weights.v_proj)?;
 
     // Reshape: [batch, seq, num_heads * head_dim] -> [batch, num_heads, seq, head_dim]
-    let q = q.reshape((batch, seq_len, num_heads, head_dim))?
+    let q = q
+        .reshape((batch, seq_len, num_heads, head_dim))?
         .transpose(1, 2)?;
-    let k = k.reshape((batch, seq_len, num_heads, head_dim))?
+    let k = k
+        .reshape((batch, seq_len, num_heads, head_dim))?
         .transpose(1, 2)?;
-    let v = v.reshape((batch, seq_len, num_heads, head_dim))?
+    let v = v
+        .reshape((batch, seq_len, num_heads, head_dim))?
         .transpose(1, 2)?;
 
     // Compute attention scores: Q @ K^T / sqrt(head_dim)
@@ -289,9 +288,10 @@ pub fn ternary_attention_cpu(
     let attn_output = attn_weights.matmul(&v)?;
 
     // Reshape back: [batch, num_heads, seq, head_dim] -> [batch, seq, hidden]
-    let attn_output = attn_output
-        .transpose(1, 2)?
-        .reshape((batch, seq_len, num_heads * head_dim))?;
+    let attn_output =
+        attn_output
+            .transpose(1, 2)?
+            .reshape((batch, seq_len, num_heads * head_dim))?;
 
     // Output projection
     let output = ternary_matmul_cpu(&attn_output, &weights.o_proj)?;
@@ -325,7 +325,7 @@ pub fn should_use_ternary_attention(
         + weights.v_proj.sparsity()
         + weights.o_proj.sparsity())
         / 4.0;
-    
+
     avg_sparsity >= config.sparsity_threshold
 }
 
@@ -352,14 +352,14 @@ mod tests {
     #[test]
     fn test_online_softmax() {
         let mut state = OnlineSoftmaxState::new(4);
-        
+
         // Add some scores and values
         state.update(1.0, &[1.0, 0.0, 0.0, 0.0]);
         state.update(2.0, &[0.0, 1.0, 0.0, 0.0]);
         state.update(1.0, &[0.0, 0.0, 1.0, 0.0]);
-        
+
         let output = state.finalize();
-        
+
         // Check output is normalized (sums to 1 per "head")
         let sum: f32 = output.iter().sum();
         assert!((sum - 1.0).abs() < 0.001);
@@ -368,19 +368,19 @@ mod tests {
     #[test]
     fn test_causal_mask_planes() {
         let mut planes = TernaryPlanes::new(8);
-        
+
         // Set all to +1
         for i in 0..8 {
             planes.set(i, 1);
         }
-        
+
         // Apply causal mask at position 3
         apply_causal_mask_to_planes(&mut planes, 3, 8);
-        
+
         // Positions 0-3 should still be +1
         assert_eq!(planes.get(0), 1);
         assert_eq!(planes.get(3), 1);
-        
+
         // Positions 4-7 should be 0
         assert_eq!(planes.get(4), 0);
         assert_eq!(planes.get(7), 0);
@@ -402,7 +402,7 @@ mod tests {
         let plus = vec![0u32; 64 * k_words];
         let minus = vec![0u32; 64 * k_words];
         let scales = vec![1.0f32; 64];
-        
+
         let weights = TernaryAttentionWeights {
             q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
             k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
@@ -411,12 +411,12 @@ mod tests {
             q_scales: vec![1.0; 12],
             k_scales: vec![1.0; 12],
         };
-        
+
         let config = TernaryAttentionConfig {
             sparsity_threshold: 0.8,
             ..Default::default()
         };
-        
+
         // 100% sparsity should exceed 0.8 threshold
         assert!(should_use_ternary_attention(&weights, &config));
     }
@@ -429,7 +429,7 @@ mod tests {
         let plus = vec![u32::MAX; 64 * k_words];
         let minus = vec![0u32; 64 * k_words];
         let scales = vec![1.0f32; 64];
-        
+
         let weights = TernaryAttentionWeights {
             q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
             k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
@@ -438,12 +438,12 @@ mod tests {
             q_scales: vec![1.0; 12],
             k_scales: vec![1.0; 12],
         };
-        
+
         let config = TernaryAttentionConfig {
             sparsity_threshold: 0.8,
             ..Default::default()
         };
-        
+
         // Low sparsity should not exceed 0.8 threshold
         assert!(!should_use_ternary_attention(&weights, &config));
     }
@@ -456,7 +456,7 @@ mod tests {
         let plus = vec![0u32; 64 * k_words];
         let minus = vec![0u32; 64 * k_words];
         let scales = vec![1.0f32; 64];
-        
+
         let weights = TernaryAttentionWeights {
             q_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
             k_proj: TernaryTensor::new(plus.clone(), minus.clone(), scales.clone(), shape),
@@ -465,12 +465,12 @@ mod tests {
             q_scales: vec![1.0; 12],
             k_scales: vec![1.0; 12],
         };
-        
+
         let config = TernaryAttentionConfig {
             sparsity_threshold: 1.0, // Exact threshold
             ..Default::default()
         };
-        
+
         // At exactly 100% sparsity with 1.0 threshold, should use ternary
         assert!(should_use_ternary_attention(&weights, &config));
     }
@@ -479,10 +479,10 @@ mod tests {
     fn test_online_softmax_all_masked() {
         // Test behavior when sum == 0.0 (all masked)
         let state = OnlineSoftmaxState::new(4);
-        
+
         // Don't update with any scores - simulates all masked case
         let output = state.finalize();
-        
+
         // Should return zeros without division by zero
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
     }

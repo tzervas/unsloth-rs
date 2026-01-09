@@ -1,4 +1,4 @@
-//! Drop-in TernaryLinear layer for ternary weight inference.
+//! Drop-in `TernaryLinear` layer for ternary weight inference.
 //!
 //! This module provides a `TernaryLinear` layer that can replace
 //! `candle_nn::Linear` for memory-efficient inference with ternary weights.
@@ -31,7 +31,7 @@ use candle_core::{Module, Tensor};
 /// # Memory Layout
 ///
 /// - Weights: `TernaryTensor` with +plane/-plane u32 arrays + f32 scales
-/// - Bias: Optional f32 tensor [out_features]
+/// - Bias: Optional f32 tensor [`out_features`]
 ///
 /// # Forward Pass
 ///
@@ -41,10 +41,10 @@ use candle_core::{Module, Tensor};
 /// ```
 #[derive(Debug, Clone)]
 pub struct TernaryLinear {
-    /// Ternary quantized weight matrix [out_features, in_features].
+    /// Ternary quantized weight matrix [`out_features`, `in_features`].
     weights: TernaryTensor,
 
-    /// Optional bias vector [out_features].
+    /// Optional bias vector [`out_features`].
     bias: Option<Tensor>,
 
     /// Configuration for ternary operations.
@@ -52,16 +52,16 @@ pub struct TernaryLinear {
 }
 
 impl TernaryLinear {
-    /// Create a new TernaryLinear layer.
+    /// Create a new `TernaryLinear` layer.
     ///
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [out_features]
+    /// * `bias` - Optional bias tensor [`out_features`]
     ///
     /// # Errors
     ///
-    /// Returns error if bias shape doesn't match weight out_features.
+    /// Returns error if bias shape doesn't match weight `out_features`.
     pub fn new(weights: TernaryTensor, bias: Option<Tensor>) -> Result<Self> {
         Self::with_config(weights, bias, TernaryConfig::default())
     }
@@ -71,12 +71,12 @@ impl TernaryLinear {
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [out_features]
+    /// * `bias` - Optional bias tensor [`out_features`]
     /// * `config` - Ternary configuration
     ///
     /// # Errors
     ///
-    /// Returns error if bias shape doesn't match weight out_features.
+    /// Returns error if bias shape doesn't match weight `out_features`.
     pub fn with_config(
         weights: TernaryTensor,
         bias: Option<Tensor>,
@@ -106,13 +106,13 @@ impl TernaryLinear {
         self.weights.dims()
     }
 
-    /// Get the input features (in_features).
+    /// Get the input features (`in_features`).
     #[must_use]
     pub fn in_features(&self) -> usize {
         self.weights.dims().1
     }
 
-    /// Get the output features (out_features).
+    /// Get the output features (`out_features`).
     #[must_use]
     pub fn out_features(&self) -> usize {
         self.weights.dims().0
@@ -134,7 +134,7 @@ impl TernaryLinear {
     #[must_use]
     pub fn memory_bytes(&self) -> usize {
         let weight_bytes = self.weights.memory_bytes();
-        let bias_bytes = self.bias.as_ref().map(|b| b.elem_count() * 4).unwrap_or(0);
+        let bias_bytes = self.bias.as_ref().map_or(0, |b| b.elem_count() * 4);
         weight_bytes + bias_bytes
     }
 
@@ -160,11 +160,11 @@ impl TernaryLinear {
     ///
     /// # Arguments
     ///
-    /// * `input` - Input tensor [..., in_features]
+    /// * `input` - Input tensor [..., `in_features`]
     ///
     /// # Returns
     ///
-    /// Output tensor [..., out_features]
+    /// Output tensor [..., `out_features`]
     ///
     /// # Errors
     ///
@@ -189,7 +189,7 @@ impl Module for TernaryLinear {
     }
 }
 
-/// Builder for creating TernaryLinear from FP weights.
+/// Builder for creating `TernaryLinear` from FP weights.
 #[derive(Debug, Clone)]
 pub struct TernaryLinearBuilder {
     config: TernaryConfig,
@@ -230,8 +230,8 @@ impl TernaryLinearBuilder {
     ///
     /// # Arguments
     ///
-    /// * `weights` - FP32 weight tensor [out_features, in_features]
-    /// * `bias` - Optional bias tensor [out_features]
+    /// * `weights` - FP32 weight tensor [`out_features`, `in_features`]
+    /// * `bias` - Optional bias tensor [`out_features`]
     ///
     /// # Errors
     ///
@@ -252,7 +252,7 @@ impl TernaryLinearBuilder {
     ///
     /// # Arguments
     ///
-    /// * `linear` - Candle nn::Linear layer to convert
+    /// * `linear` - Candle `nn::Linear` layer to convert
     ///
     /// # Errors
     ///
@@ -263,17 +263,17 @@ impl TernaryLinearBuilder {
     }
 }
 
-/// Convert a Candle nn::Linear to TernaryLinear.
+/// Convert a Candle `nn::Linear` to `TernaryLinear`.
 ///
 /// Convenience function using default configuration.
 ///
 /// # Arguments
 ///
-/// * `linear` - Candle nn::Linear layer
+/// * `linear` - Candle `nn::Linear` layer
 ///
 /// # Returns
 ///
-/// TernaryLinear with quantized weights.
+/// `TernaryLinear` with quantized weights.
 ///
 /// # Errors
 ///
@@ -301,15 +301,14 @@ mod tests {
     fn test_ternary_linear_basic() -> Result<()> {
         // Create simple ternary weights manually
         let shape = (4, 8);
-        let _k_words = 1; // 8 / 32 rounded up = 1
+        let k_words = 1; // 8 / 32 rounded up = 1
 
         // Simple pattern: alternating +1, -1, 0
         let plus = vec![0b00010001u32; 4]; // Bits 0, 4 are +1
         let minus = vec![0b00100010u32; 4]; // Bits 1, 5 are -1
         let scales = vec![1.0f32; 4];
 
-        let ternary_weights =
-            super::super::types::TernaryTensor::new(plus, minus, scales, shape);
+        let ternary_weights = super::super::types::TernaryTensor::new(plus, minus, scales, shape);
 
         let layer = TernaryLinear::new(ternary_weights, None)?;
 
@@ -354,7 +353,15 @@ mod tests {
     #[test]
     fn test_builder_pattern() -> Result<()> {
         // Use larger tensor to get meaningful compression ratio
-        let weight_data: Vec<f32> = (0..4096).map(|i| (i as f32 - 2048.0) / 2048.0).collect();
+        let weight_data: Vec<f32> = (0..4096)
+            .map(|i| {
+                // Precision loss acceptable for test data generation
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    (i as f32 - 2048.0) / 2048.0
+                }
+            })
+            .collect();
         let weights = Tensor::from_vec(weight_data, (64, 64), &Device::Cpu)?;
 
         let layer = TernaryLinearBuilder::new()
@@ -364,7 +371,11 @@ mod tests {
 
         assert_eq!(layer.dims(), (64, 64));
         // Compression should be meaningful for larger tensors
-        assert!(layer.compression_ratio() > 5.0, "Got ratio: {}", layer.compression_ratio());
+        assert!(
+            layer.compression_ratio() > 5.0,
+            "Got ratio: {}",
+            layer.compression_ratio()
+        );
 
         Ok(())
     }

@@ -17,6 +17,5 @@ pub use swiglu::SwiGLU;
 
 // Ternary bitsliced operations
 pub use ternary::{
-    CalibrationMethod, SparsityMetadata, TernaryConfig, TernaryLinear, TernaryPlanes,
-    TernaryTensor,
+    CalibrationMethod, SparsityMetadata, TernaryConfig, TernaryLinear, TernaryPlanes, TernaryTensor,
 };

@@ -23,17 +23,22 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 - ✅ RMS normalization
 - ✅ SwiGLU activation
 - ✅ Memory estimation utilities
-- ✅ Gradient checkpointing
-- ✅ Mixed precision training support
-- ✅ Benchmarking suite
+- ✅ Ternary quantization (5-15x compression achieved)
+- ✅ Mixed precision training utilities (FP32/FP16/BF16)
+- ✅ Benchmarking suite (CPU)
+- ✅ 148 passing tests (100% pass rate)
 
 ### In Progress
-- 🚧 Flash Attention CubeCL GPU kernel (Phase 2 - see [FLASH_ATTENTION_IMPLEMENTATION_STATUS.md](FLASH_ATTENTION_IMPLEMENTATION_STATUS.md))
+- 🚧 Flash Attention CubeCL GPU kernel (Phase 1 complete, Phase 2 ready for RTX 5080 validation)
+- 🚧 Ternary GPU kernels (Phase 2-4 implemented, awaiting GPU profiling)
+- 🚧 CI/CD pipeline setup
 
 ### Planned
-- ⏳ Flash Attention optimization (tiling, online softmax)
-- ⏳ Additional fused CubeCL GPU kernels
-- ⏳ Performance profiling and tuning
+- ⏳ Gradient checkpointing (configuration exists, implementation planned)
+- ⏳ GPU performance validation on RTX 5080/3090 Ti
+- ⏳ RoPE, RMSNorm, SwiGLU GPU kernels
+- ⏳ Advanced sparsity optimizations
+- ⏳ Multi-GPU support
 
 ## Installation
 

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Gradient checkpointing stub now returns proper error instead of panicking
+- Updated documentation to accurately reflect implemented vs planned features
+- All source files now include SPDX license identifiers (MIT)
+
+### Added
+- CI/CD pipeline via GitHub Actions
+  - Automated testing on push and pull requests
+  - Clippy linting and rustfmt checks
+  - Documentation build validation
+  - Dependabot for dependency updates
+- Large-scale integration tests
+  - Multi-layer transformer stack testing
+  - Long sequence attention (1024+ tokens)
+  - Large batch processing validation
+  - Gradient checkpointing configuration tests
+  - Mixed precision mode validation
+- Branch management and merge deconfliction strategy (BRANCH_STRATEGY.md)
+- Local build script for GPU testing and Docker builds (scripts/local-build.sh)
+
+### Changed
+- CI configured for local-only GPU builds and benchmarks
+- Documentation updated to reflect RTX 5080 GPU availability
+- Performance targets marked as "pending validation" until GPU profiling complete
+- Test count updated from 65 to 148 tests
+
 ## [0.1.0-alpha.1] - 2026-01-09
 
 ### Added

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Training utilities.
 //!
 //! This module provides training utilities including:
@@ -278,6 +281,10 @@ pub fn update_loss_scale(
 /// # Errors
 ///
 /// Returns an error if gradient computation fails.
+///
+/// # Note
+/// This is currently unimplemented and will return an error.
+/// Gradient checkpointing is planned for a future release.
 pub fn compute_gradient_checkpointed<F>(
     _input: &Tensor,
     _forward_fn: F,
@@ -288,7 +295,9 @@ where
 {
     // TODO: Implement gradient checkpointing
     // This would recompute forward pass during backward instead of storing activations
-    unimplemented!("Gradient checkpointing not yet implemented")
+    Err(UnslothError::InvalidConfig(
+        "Gradient checkpointing is not yet implemented. This feature is planned for a future release.".to_string()
+    ))
 }
 
 /// Scale gradients for mixed precision training.

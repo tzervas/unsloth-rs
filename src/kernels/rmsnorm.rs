@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! RMS Normalization implementation.
 //!
 //! Root Mean Square Layer Normalization normalizes inputs using only the RMS

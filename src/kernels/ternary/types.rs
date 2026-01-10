@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Core types for ternary bitsliced representation.
 //!
 //! This module defines the fundamental data structures for storing

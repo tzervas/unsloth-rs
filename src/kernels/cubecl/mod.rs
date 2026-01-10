@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! `CubeCL` GPU kernel implementations for Flash Attention.
 //!
 //! This module provides memory-efficient GPU kernels using `CubeCL` v0.8.1.

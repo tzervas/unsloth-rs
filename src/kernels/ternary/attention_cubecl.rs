@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! CubeCL GPU kernel implementation for Ternary Attention.
 //!
 //! This module implements Phase 3 tasks for ternary attention:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Multi-head attention implementation.
 //!
 //! This module provides a multi-head attention layer commonly used in transformer

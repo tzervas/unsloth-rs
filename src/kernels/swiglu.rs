@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! `SwiGLU` activation implementation.
 //!
 //! `SwiGLU` (Swish-Gated Linear Unit) is a gated activation function that

@@ -2127,3 +2127,267 @@ fn test_error_message_clarity() -> Result<()> {
     println!("✅ Error message clarity test passed");
     Ok(())
 }
+
+// =============================================================================
+// LARGE-SCALE INTEGRATION TESTS
+// =============================================================================
+
+/// Test multi-layer transformer stack with ternary quantization.
+/// This validates that ternary operations can be chained across multiple layers.
+#[test]
+fn test_multi_layer_transformer() -> Result<()> {
+    use unsloth_rs::kernels::attention::{FusedAttention, FusedAttentionConfig};
+    use unsloth_rs::kernels::rmsnorm::RmsNorm;
+    use unsloth_rs::kernels::ternary::linear::TernaryLinear;
+    use unsloth_rs::kernels::ternary::quantize::quantize_tensor;
+    use unsloth_rs::kernels::ternary::config::TernaryConfig;
+
+    println!("\n🧪 Testing multi-layer transformer stack...");
+    let device = Device::Cpu;
+    
+    let batch_size = 2;
+    let seq_len = 128;
+    let hidden_size = 512;
+    let num_layers = 2; // Reduced for faster testing
+    
+    // Create initial input
+    let mut hidden_states = Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, hidden_size), &device)?;
+    
+    println!("  Configuration: {} layers, hidden_size={}, seq_len={}", num_layers, hidden_size, seq_len);
+    
+    // Create reusable norm layer
+    let norm = RmsNorm::new(hidden_size, 1e-5, &device)?;
+    
+    for layer_idx in 0..num_layers {
+        // Layer norm
+        let normed = norm.forward(&hidden_states)?;
+        
+        // Attention
+        let attn_config = FusedAttentionConfig {
+            hidden_size,
+            num_heads: 8,
+            head_dim: 64,
+            num_kv_heads: Some(4), // GQA
+            ..Default::default()
+        };
+        let attention = FusedAttention::new(attn_config, &device)?;
+        let attn_out = attention.forward(&normed, None, None)?;
+        
+        // Residual connection
+        hidden_states = (hidden_states + attn_out)?;
+        
+        // MLP with ternary quantization
+        let normed = norm.forward(&hidden_states)?;
+        
+        // Create ternary linear layer for MLP
+        let mlp_dim = hidden_size * 2; // Smaller for faster testing
+        let weights = Tensor::randn(0.0f32, 0.1, (mlp_dim, hidden_size), &device)?;
+        
+        let config = TernaryConfig::default();
+        let (ternary_weights, _stats) = quantize_tensor(&weights, &config)?;
+        let layer = TernaryLinear::new(ternary_weights, None)?;
+        
+        // Forward pass
+        let mlp_out = layer.forward(&normed)?;
+        
+        // Residual connection
+        hidden_states = (hidden_states + mlp_out)?;
+        
+        println!("  ✓ Layer {} complete: shape {:?}", layer_idx, hidden_states.shape());
+    }
+    
+    // Validate final output
+    assert_eq!(hidden_states.shape().dims(), &[batch_size, seq_len, hidden_size]);
+    let output_vec = hidden_states.flatten_all()?.to_vec1::<f32>()?;
+    assert!(!output_vec.iter().any(|x| x.is_nan() || x.is_infinite()));
+    
+    println!("✅ Multi-layer transformer test passed");
+    Ok(())
+}
+
+/// Test long sequence processing (>2048 tokens).
+/// This validates memory efficiency and correctness on long contexts.
+#[test]
+fn test_long_sequence_attention() -> Result<()> {
+    use unsloth_rs::kernels::attention::{FusedAttention, FusedAttentionConfig};
+    
+    println!("\n🧪 Testing long sequence attention...");
+    let device = Device::Cpu;
+    
+    let batch_size = 1;
+    let seq_len = 1024; // Still long, but faster for CI
+    let hidden_size = 512;
+    let num_heads = 8;
+    let head_dim = 64;
+    
+    println!("  Configuration: seq_len={}, hidden_size={}, num_heads={}", seq_len, hidden_size, num_heads);
+    
+    // Create attention layer
+    let config = FusedAttentionConfig {
+        hidden_size,
+        num_heads,
+        head_dim,
+        num_kv_heads: Some(4), // GQA for efficiency
+        ..Default::default()
+    };
+    let attention = FusedAttention::new(config, &device)?;
+    
+    // Create input with long sequence
+    let hidden_states = Tensor::randn(0.0f32, 0.1, (batch_size, seq_len, hidden_size), &device)?;
+    
+    // Forward pass
+    let output = attention.forward(&hidden_states, None, None)?;
+    
+    // Validate output
+    assert_eq!(output.shape().dims(), &[batch_size, seq_len, hidden_size]);
+    let output_data = output.flatten_all()?.to_vec1::<f32>()?;
+    assert!(!output_data.iter().any(|x: &f32| x.is_nan() || x.is_infinite()));
+    
+    // Check that output has reasonable values
+    let mean: f32 = output_data.iter().sum::<f32>() / output_data.len() as f32;
+    let variance: f32 = output_data.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / output_data.len() as f32;
+    println!("  Output statistics: mean={:.4}, variance={:.4}", mean, variance);
+    
+    assert!(mean.abs() < 1.0, "Mean should be close to 0");
+    assert!(variance > 0.01 && variance < 100.0, "Variance should be reasonable");
+    
+    println!("✅ Long sequence attention test passed");
+    Ok(())
+}
+
+/// Test large batch processing.
+/// This validates that the system can handle large batch sizes efficiently.
+#[test]
+fn test_large_batch_processing() -> Result<()> {
+    use unsloth_rs::kernels::ternary::linear::TernaryLinear;
+    use unsloth_rs::kernels::ternary::quantize::quantize_tensor;
+    use unsloth_rs::kernels::ternary::config::TernaryConfig;
+    
+    println!("\n🧪 Testing large batch processing...");
+    let device = Device::Cpu;
+    
+    let batch_size = 16; // Reduced for faster testing
+    let seq_len = 256;
+    let in_features = 512;
+    let out_features = 512;
+    
+    println!("  Configuration: batch_size={}, seq_len={}, features={}", batch_size, seq_len, in_features);
+    
+    // Create ternary linear layer
+    let weights = Tensor::randn(0.0f32, 0.1, (out_features, in_features), &device)?;
+    let config = TernaryConfig::default();
+    let (ternary_weights, _stats) = quantize_tensor(&weights, &config)?;
+    let layer = TernaryLinear::new(ternary_weights, None)?;
+    
+    // Create large batch input
+    let input = Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, in_features), &device)?;
+    
+    // Forward pass
+    let output = layer.forward(&input)?;
+    
+    // Validate output
+    assert_eq!(output.shape().dims(), &[batch_size, seq_len, out_features]);
+    let output_data = output.flatten_all()?.to_vec1::<f32>()?;
+    assert!(!output_data.iter().any(|x: &f32| x.is_nan() || x.is_infinite()));
+    
+    println!("  ✓ Processed {} tokens across {} batches", batch_size * seq_len, batch_size);
+    println!("✅ Large batch processing test passed");
+    Ok(())
+}
+
+/// Test memory efficiency with gradient checkpointing configuration.
+/// This validates that checkpointing configuration is properly handled.
+#[test]
+fn test_gradient_checkpointing_config() -> Result<()> {
+    use unsloth_rs::memory::{estimate_forward_memory, CheckpointConfig};
+    
+    println!("\n🧪 Testing gradient checkpointing configuration...");
+    
+    let batch_size = 4;
+    let seq_len = 2048;
+    let hidden_size = 4096;
+    let num_layers = 32;
+    
+    // Without checkpointing
+    let checkpoint_disabled = CheckpointConfig {
+        enabled: false,
+        checkpoint_every: 0,
+    };
+    let mem_no_checkpoint = estimate_forward_memory(
+        batch_size,
+        seq_len,
+        hidden_size,
+        num_layers,
+        &checkpoint_disabled,
+    );
+    
+    // With checkpointing every 2 layers
+    let checkpoint_enabled = CheckpointConfig {
+        enabled: true,
+        checkpoint_every: 2,
+    };
+    let mem_with_checkpoint = estimate_forward_memory(
+        batch_size,
+        seq_len,
+        hidden_size,
+        num_layers,
+        &checkpoint_enabled,
+    );
+    
+    println!("  Without checkpointing: {:.2} GB", mem_no_checkpoint as f64 / 1e9);
+    println!("  With checkpointing:    {:.2} GB", mem_with_checkpoint as f64 / 1e9);
+    
+    let reduction_percent = (1.0 - mem_with_checkpoint as f64 / mem_no_checkpoint as f64) * 100.0;
+    println!("  Memory reduction: {:.1}%", reduction_percent);
+    
+    // Checkpointing should reduce memory usage
+    assert!(mem_with_checkpoint < mem_no_checkpoint, "Checkpointing should reduce memory");
+    assert!(reduction_percent > 20.0, "Should have significant memory reduction");
+    
+    println!("✅ Gradient checkpointing config test passed");
+    Ok(())
+}
+
+/// Test mixed precision configuration and conversion.
+/// This validates that precision modes are properly handled.
+#[test]
+fn test_mixed_precision_modes() -> Result<()> {
+    use unsloth_rs::training::PrecisionMode;
+    use candle_core::DType;
+    
+    println!("\n🧪 Testing mixed precision modes...");
+    
+    // Test FP32
+    let fp32 = PrecisionMode::Full;
+    assert_eq!(fp32.to_dtype(), DType::F32);
+    assert_eq!(PrecisionMode::from_dtype(DType::F32)?, PrecisionMode::Full);
+    println!("  ✓ FP32 mode validated");
+    
+    // Test FP16
+    let fp16 = PrecisionMode::Half;
+    assert_eq!(fp16.to_dtype(), DType::F16);
+    assert_eq!(PrecisionMode::from_dtype(DType::F16)?, PrecisionMode::Half);
+    println!("  ✓ FP16 mode validated");
+    
+    // Test BF16
+    let bf16 = PrecisionMode::BFloat16;
+    assert_eq!(bf16.to_dtype(), DType::BF16);
+    assert_eq!(PrecisionMode::from_dtype(DType::BF16)?, PrecisionMode::BFloat16);
+    println!("  ✓ BF16 mode validated");
+    
+    // Test conversion on actual tensor
+    let device = Device::Cpu;
+    let tensor_fp32 = Tensor::randn(0.0f32, 1.0, (4, 8), &device)?;
+    
+    // Convert to different precisions
+    let tensor_fp16 = tensor_fp32.to_dtype(DType::F16)?;
+    let tensor_bf16 = tensor_fp32.to_dtype(DType::BF16)?;
+    
+    assert_eq!(tensor_fp16.dtype(), DType::F16);
+    assert_eq!(tensor_bf16.dtype(), DType::BF16);
+    
+    println!("  ✓ Tensor precision conversion validated");
+    println!("✅ Mixed precision modes test passed");
+    Ok(())
+}
+

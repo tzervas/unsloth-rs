@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and

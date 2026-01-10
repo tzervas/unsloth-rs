@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Memory management utilities for tracking allocations.
 //!
 //! This module provides tools for memory tracking and estimation, which are

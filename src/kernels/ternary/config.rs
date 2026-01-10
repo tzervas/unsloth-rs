@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Configuration for ternary bitsliced operations.
 //!
 //! This module provides compile-time and runtime configuration for

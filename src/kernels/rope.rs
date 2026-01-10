@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Rotary Position Embedding (`RoPE`) implementation.
 //!
 //! `RoPE` encodes position information directly into the query and key vectors

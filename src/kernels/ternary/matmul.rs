@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Bitsliced ternary matrix multiplication.
 //!
 //! This module implements popcount-based matrix multiplication for

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! CubeCL GPU kernel for ternary bitsliced matrix multiplication.
 //!
 //! ## Implementation Status

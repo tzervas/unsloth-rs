@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Error types for unsloth-rs.
 
 use thiserror::Error;
@@ -38,6 +41,14 @@ pub enum UnslothError {
     /// Invalid configuration.
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+
+    /// Quantization error.
+    #[error("quantization error: {0}")]
+    Quantization(String),
+
+    /// Ternary operation error.
+    #[error("ternary operation error: {0}")]
+    Ternary(String),
 
     /// Candle error.
     #[error("candle error: {0}")]

@@ -1,6 +1,25 @@
-//! Rotary Position Embedding (RoPE) implementation.
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
 
-use candle_core::{DType, Device, Tensor};
+//! Rotary Position Embedding (`RoPE`) implementation.
+//!
+//! `RoPE` encodes position information directly into the query and key vectors
+//! through rotation, enabling the model to learn relative position relationships.
+//!
+//! ## Why `RoPE`?
+//!
+//! Unlike absolute position embeddings, `RoPE`:
+//! - Naturally encodes relative positions through rotation
+//! - Scales well to longer sequences than seen during training
+//! - Is used by modern LLMs like `LLaMA`, Mistral, and others
+//!
+//! ## Implementation Notes
+//!
+//! - Pre-computes cos/sin caches up to `max_seq_len` for efficiency
+//! - Applies rotation in pairs: splits `head_dim` in half and rotates each pair
+//! - Uses standard rotation formula: [x1*cos - x2*sin, x2*cos + x1*sin]
+
+use candle_core::{Device, Tensor};
 
 use crate::error::Result;
 
@@ -8,9 +27,9 @@ use crate::error::Result;
 ///
 /// Applies rotary embeddings to query and key tensors for position encoding.
 pub struct RotaryEmbedding {
-    /// Cosine cache [max_seq_len, head_dim/2]
+    /// Cosine cache [`max_seq_len`, `head_dim/2`]
     cos_cache: Tensor,
-    /// Sine cache [max_seq_len, head_dim/2]  
+    /// Sine cache [`max_seq_len`, `head_dim/2`]  
     sin_cache: Tensor,
     /// Head dimension
     head_dim: usize,
@@ -24,18 +43,13 @@ impl RotaryEmbedding {
     /// * `max_seq_len` - Maximum sequence length to cache
     /// * `base` - Base for frequency computation (typically 10000)
     /// * `device` - Device for tensors
-    pub fn new(
-        head_dim: usize,
-        max_seq_len: usize,
-        base: f32,
-        device: &Device,
-    ) -> Result<Self> {
+    pub fn new(head_dim: usize, max_seq_len: usize, base: f32, device: &Device) -> Result<Self> {
         // Compute inverse frequencies
         let inv_freq: Vec<f32> = (0..head_dim)
             .step_by(2)
             .map(|i| 1.0 / base.powf(i as f32 / head_dim as f32))
             .collect();
-        
+
         let inv_freq = Tensor::from_vec(inv_freq, (head_dim / 2,), device)?;
 
         // Compute position indices
@@ -59,20 +73,31 @@ impl RotaryEmbedding {
     /// Apply rotary embedding to query and key tensors.
     ///
     /// # Arguments
-    /// * `q` - Query tensor [batch, num_heads, seq_len, head_dim]
-    /// * `k` - Key tensor [batch, num_kv_heads, seq_len, head_dim]
-    /// * `position_ids` - Position indices [batch, seq_len]
+    /// * `q` - Query tensor [batch, `num_heads`, `seq_len`, `head_dim`]
+    /// * `k` - Key tensor [batch, `num_kv_heads`, `seq_len`, `head_dim`]
+    /// * `position_ids` - Position indices [batch, `seq_len`]
     ///
     /// # Returns
-    /// Tuple of (rotated_q, rotated_k)
+    /// Tuple of (`rotated_q`, `rotated_k`)
     pub fn forward(
         &self,
         q: &Tensor,
         k: &Tensor,
-        position_ids: &Tensor,
+        _position_ids: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
+        let device = q.device();
+
+        if device.is_cuda() {
+            self.forward_cuda(q, k)
+        } else {
+            self.forward_cpu(q, k)
+        }
+    }
+
+    /// CPU reference implementation for `RoPE`.
+    fn forward_cpu(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
         let seq_len = q.dim(2)?;
-        
+
         // Get cos/sin for positions
         let cos = self.cos_cache.narrow(0, 0, seq_len)?;
         let sin = self.sin_cache.narrow(0, 0, seq_len)?;
@@ -83,16 +108,25 @@ impl RotaryEmbedding {
         Ok((q_rotated, k_rotated))
     }
 
+    /// CUDA implementation.
+    ///
+    /// Uses Candle's CUDA backend for GPU acceleration.
+    /// The algorithm is the same as the CPU implementation.
+    fn forward_cuda(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+        tracing::debug!("Using CUDA RoPE path for Q shape {:?}", q.shape());
+        self.forward_cpu(q, k)
+    }
+
     fn apply_rotary(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         let half_dim = self.head_dim / 2;
-        
+
         // Split into two halves
         let x1 = x.narrow(3, 0, half_dim)?;
         let x2 = x.narrow(3, half_dim, half_dim)?;
 
         // Apply rotation: [x1, x2] -> [x1*cos - x2*sin, x2*cos + x1*sin]
-        let rotated_x1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
-        let rotated_x2 = (x2.broadcast_mul(&cos)? + x1.broadcast_mul(&sin)?)?;
+        let rotated_x1 = (x1.broadcast_mul(cos)? - x2.broadcast_mul(sin)?)?;
+        let rotated_x2 = (x2.broadcast_mul(cos)? + x1.broadcast_mul(sin)?)?;
 
         // Concatenate
         Tensor::cat(&[&rotated_x1, &rotated_x2], 3).map_err(Into::into)
@@ -102,6 +136,7 @@ impl RotaryEmbedding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::DType;
 
     #[test]
     fn test_rope_creation() {

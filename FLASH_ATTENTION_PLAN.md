@@ -1,22 +1,23 @@
 # Flash Attention Implementation Plan
 
 **CubeCL Version**: v0.8.1 (Validated January 2026)  
-**Last Updated**: 2026-01-06  
-**Status**: Phase 1 (Minimal Viable Kernel) - ✅ Completed
+**Last Updated**: 2026-01-10  
+**Status**: ✅ Phase 1 Complete | 🔄 Phase 2 Ready (GPU Available)
 
 ## Objective
 Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-efficient LLM training.
 
 ## Hardware Targets
-- **Phase 1**: GeForce RTX 5080 (primary development/test machine)
-- **Phase 2**: GeForce RTX 3090 Ti (validation and tuning)
+- **Phase 1**: ✅ Implementation complete
+- **Phase 2**: GeForce RTX 5080 (✅ **NOW AVAILABLE** - ready for profiling and validation)
+- **Phase 3**: GeForce RTX 3090 Ti (cross-GPU validation and tuning)
 - **Future**: A100/H100 (datacenter), AMD MI series, WGPU/CPU backends
 
 ## Performance Targets
-- **Speedup:** 2-5x vs naive implementation
-- **VRAM Reduction:** 70-80% vs baseline
-- **GPU Occupancy:** >50%
-- **Numerical Accuracy:** Within 1e-5 tolerance vs CPU reference (f32), 1e-3 (f16)
+- **Speedup:** 2-5x vs naive implementation (target, pending validation)
+- **VRAM Reduction:** 70-80% vs baseline (target, pending validation)
+- **GPU Occupancy:** >50% (target)
+- **Numerical Accuracy:** ✅ Within 1e-5 tolerance vs CPU reference (f32) - validated on CPU
 
 ## Implementation Phases
 
@@ -34,20 +35,20 @@ Implement Fused Flash Attention GPU Kernel (Issue #5) using CubeCL for memory-ef
 - [x] Implement kernel configuration (`config.rs`)
 - [x] Implement basic tiled kernel with improved tiling (tile_size=256)
 - [x] Add causal masking support
-- [x] Add small-test equivalence suite (tolerance 1e-5) - 65 tests passing
-- [ ] Profile on RTX 5080 (target >2x speedup vs Candle fallback) - **BLOCKED: Requires CUDA hardware**
-- [ ] Validate VRAM reduction on seq=2048 - **BLOCKED: Requires CUDA hardware**
+- [x] Add small-test equivalence suite (tolerance 1e-5) - 148 tests passing
+- [ ] Profile on RTX 5080 (target >2x speedup vs Candle fallback) - **🔄 READY: GPU now available**
+- [ ] Validate VRAM reduction on seq=2048 - **🔄 READY: GPU now available**
 
 **Deliverables:**
 - ✅ `src/kernels/cubecl/` module with kernel, interop, config
 - ✅ Working Flash Attention kernel (f32, with causal masking)
-- ✅ Test suite with numerical equivalence validation (65 tests)
+- ✅ Test suite with numerical equivalence validation (148 tests)
 
 **Acceptance Criteria:**
-- ✅ All small tests pass (65/65)
+- ✅ All tests pass (148/148)
 - ✅ No NaN/Inf in outputs
 - ✅ Matches Candle fallback within 1e-5 tolerance
-- ⏸️ Measurable speedup on RTX 5080 - **BLOCKED: Requires CUDA hardware**
+- 🔄 Measurable speedup on RTX 5080 - **READY FOR TESTING**
 
 **Merged PRs:**
 - PR #14: Phase 1 base implementation (commit e619c08)

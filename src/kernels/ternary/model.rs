@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! End-to-end model quantization for ternary inference.
 //!
 //! Provides utilities to convert pretrained FP models to ternary format

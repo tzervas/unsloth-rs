@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Ternary attention scoring for memory-efficient transformer inference.
 //!
 //! This module provides ternary bitsliced attention computation using

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Ternary bitsliced operations for memory-efficient inference.
 //!
 //! This module implements single-trit {-1, 0, +1} bitsliced operations

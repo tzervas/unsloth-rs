@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! # unsloth-rs
 //!
 //! Rust implementations of transformer building blocks for LLM inference and fine-tuning.

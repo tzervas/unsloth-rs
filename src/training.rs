@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Training utilities.
 //!
 //! This module provides training utilities including:
@@ -278,6 +281,10 @@ pub fn update_loss_scale(
 /// # Errors
 ///
 /// Returns an error if gradient computation fails.
+///
+/// # Note
+/// This is currently unimplemented and will return an error.
+/// Gradient checkpointing is planned for a future release.
 pub fn compute_gradient_checkpointed<F>(
     _input: &Tensor,
     _forward_fn: F,
@@ -288,7 +295,9 @@ where
 {
     // TODO: Implement gradient checkpointing
     // This would recompute forward pass during backward instead of storing activations
-    unimplemented!("Gradient checkpointing not yet implemented")
+    Err(UnslothError::InvalidConfig(
+        "Gradient checkpointing is not yet implemented. This feature is planned for a future release.".to_string()
+    ))
 }
 
 /// Scale gradients for mixed precision training.
@@ -485,22 +494,24 @@ mod tests {
 
     #[test]
     fn test_update_loss_scale_bounds() {
-        let mut config = MixedPrecisionConfig::default();
-        config.min_loss_scale = 1.0;
-        config.max_loss_scale = 1000.0;
+        let mut config = MixedPrecisionConfig {
+            min_loss_scale: 1.0,
+            max_loss_scale: 1000.0,
+            loss_scale: 2.0,
+            scale_backoff_factor: 0.5,
+            ..Default::default()
+        };
 
         // Test min bound
-        config.loss_scale = 2.0;
-        config.scale_backoff_factor = 0.5;
         update_loss_scale(&mut config, true, 0);
-        assert_eq!(config.loss_scale, 1.0); // Should hit min
+        assert!((config.loss_scale - 1.0).abs() < f32::EPSILON); // Should hit min
 
         // Test max bound
         config.loss_scale = 600.0;
         config.scale_growth_factor = 2.0;
         config.scale_growth_interval = 10;
         update_loss_scale(&mut config, false, 10);
-        assert_eq!(config.loss_scale, 1000.0); // Should hit max
+        assert!((config.loss_scale - 1000.0).abs() < f32::EPSILON); // Should hit max
     }
 
     #[test]

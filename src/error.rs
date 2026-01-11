@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Error types for unsloth-rs.
 
 use thiserror::Error;

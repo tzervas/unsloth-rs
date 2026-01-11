@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Kernel configuration for Flash Attention.
 //!
 //! This module contains compile-time and runtime configuration for the

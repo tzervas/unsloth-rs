@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Multi-head attention implementation.
 //!
 //! This module provides a multi-head attention layer commonly used in transformer
@@ -156,7 +159,7 @@ impl FusedAttention {
             .reshape((batch, seq_len, num_heads, head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let k = k
+        let mut k = k
             .reshape((
                 batch,
                 seq_len,
@@ -165,7 +168,7 @@ impl FusedAttention {
             ))?
             .transpose(1, 2)?
             .contiguous()?;
-        let v = v
+        let mut v = v
             .reshape((
                 batch,
                 seq_len,
@@ -174,6 +177,40 @@ impl FusedAttention {
             ))?
             .transpose(1, 2)?
             .contiguous()?;
+
+        // For GQA: repeat K and V heads to match Q
+        let num_kv_heads = self.config.num_kv_heads.unwrap_or(num_heads);
+        if num_kv_heads < num_heads {
+            let repeat_factor = num_heads / num_kv_heads;
+            // k shape: [batch, num_kv_heads, seq_len, head_dim]
+            // Expand to: [batch, num_kv_heads, repeat_factor, seq_len, head_dim]
+            // Then reshape to: [batch, num_heads, seq_len, head_dim]
+            let k_shape = k.shape().dims();
+            k = k
+                .unsqueeze(2)? // [batch, num_kv_heads, 1, seq_len, head_dim]
+                .expand((
+                    k_shape[0],
+                    k_shape[1],
+                    repeat_factor,
+                    k_shape[2],
+                    k_shape[3],
+                ))?
+                .reshape((k_shape[0], num_heads, k_shape[2], k_shape[3]))?
+                .contiguous()?;
+
+            let v_shape = v.shape().dims();
+            v = v
+                .unsqueeze(2)?
+                .expand((
+                    v_shape[0],
+                    v_shape[1],
+                    repeat_factor,
+                    v_shape[2],
+                    v_shape[3],
+                ))?
+                .reshape((v_shape[0], num_heads, v_shape[2], v_shape[3]))?
+                .contiguous()?;
+        }
 
         // Scaled dot-product attention
         let scale = (head_dim as f64).sqrt();

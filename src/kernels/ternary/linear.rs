@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Drop-in `TernaryLinear` layer for ternary weight inference.
 //!
 //! This module provides a `TernaryLinear` layer that can replace

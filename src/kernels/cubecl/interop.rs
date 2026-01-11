@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and
@@ -278,9 +281,10 @@ pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
 /// Raw bytes for CubeCL u64 array
 #[must_use]
 pub fn sparsity_metadata_to_cubecl_bytes(
-    metadata: &crate::kernels::ternary::SparsityMetadata
+    metadata: &crate::kernels::ternary::SparsityMetadata,
 ) -> Vec<u8> {
-    metadata.active_chunks
+    metadata
+        .active_chunks
         .iter()
         .flat_map(|&word| word.to_le_bytes())
         .collect()
@@ -306,15 +310,15 @@ pub fn create_sparsity_bitmap_for_tensor(
     let words_per_chunk = chunk_size / BITS_PER_U32;
     let num_chunks = (k_words + words_per_chunk - 1) / words_per_chunk;
     let bitmap_words = (num_chunks + BITS_PER_U64 - 1) / BITS_PER_U64;
-    
+
     let mut bitmap = vec![0u64; out_features * bitmap_words];
-    
+
     // Build bitmap for each output feature
     for row in 0..out_features {
         for chunk_idx in 0..num_chunks {
             let word_start = row * k_words + chunk_idx * words_per_chunk;
             let word_end = std::cmp::min(word_start + words_per_chunk, (row + 1) * k_words);
-            
+
             // Check if chunk has any non-zero bits
             let mut is_active = false;
             for word_idx in word_start..word_end {
@@ -323,7 +327,7 @@ pub fn create_sparsity_bitmap_for_tensor(
                     break;
                 }
             }
-            
+
             if is_active {
                 let bitmap_idx = row * bitmap_words + chunk_idx / BITS_PER_U64;
                 let bit_idx = chunk_idx % BITS_PER_U64;
@@ -331,7 +335,7 @@ pub fn create_sparsity_bitmap_for_tensor(
             }
         }
     }
-    
+
     // Convert to bytes
     bitmap.iter().flat_map(|&word| word.to_le_bytes()).collect()
 }
@@ -531,12 +535,7 @@ mod tests {
     fn test_u32_bytes_roundtrip() {
         // Test u32 bytes conversion roundtrip
         let original: Vec<u32> = vec![
-            0x12345678,
-            0xABCDEF01,
-            0xDEADBEEF,
-            0xCAFEBABE,
-            0xFFFFFFFF,
-            0x00000000,
+            0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
         ];
         let bytes = u32_planes_to_cubecl_bytes(&original);
         let recovered = cubecl_bytes_to_u32_plane(&bytes);
@@ -557,9 +556,9 @@ mod tests {
         let mut plus = vec![0u32; 4 * k_words];
         for row in 0..4 {
             plus[row * k_words] = 0xFFFFFFFF; // Word 0: active
-            plus[row * k_words + 1] = 0x0;     // Word 1: inactive
+            plus[row * k_words + 1] = 0x0; // Word 1: inactive
             plus[row * k_words + 2] = 0xFFFFFFFF; // Word 2: active
-            plus[row * k_words + 3] = 0x0;     // Word 3: inactive
+            plus[row * k_words + 3] = 0x0; // Word 3: inactive
         }
         let minus = vec![0u32; 4 * k_words];
         let scales = vec![1.0f32; 4];
@@ -576,19 +575,30 @@ mod tests {
         // Convert back to u64 for validation
         let bitmap: Vec<u64> = bitmap_bytes
             .chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3],
-                chunk[4], chunk[5], chunk[6], chunk[7],
-            ]))
+            .map(|chunk| {
+                u64::from_le_bytes([
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ])
+            })
             .collect();
 
         // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
         for row in 0..4 {
             let row_bitmap = bitmap[row];
             // Chunk 0 (words 0-1): word 0 is active, so chunk is active
-            assert_ne!(row_bitmap & 0x1, 0, "Chunk 0 should be active for row {}", row);
+            assert_ne!(
+                row_bitmap & 0x1,
+                0,
+                "Chunk 0 should be active for row {}",
+                row
+            );
             // Chunk 1 (words 2-3): word 2 is active, so chunk is active
-            assert_ne!(row_bitmap & 0x2, 0, "Chunk 1 should be active for row {}", row);
+            assert_ne!(
+                row_bitmap & 0x2,
+                0,
+                "Chunk 1 should be active for row {}",
+                row
+            );
         }
     }
 
@@ -609,15 +619,19 @@ mod tests {
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
             .chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3],
-                chunk[4], chunk[5], chunk[6], chunk[7],
-            ]))
+            .map(|chunk| {
+                u64::from_le_bytes([
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ])
+            })
             .collect();
 
         // All chunks should be inactive
         for &word in &bitmap {
-            assert_eq!(word, 0, "Fully sparse tensor should have all chunks inactive");
+            assert_eq!(
+                word, 0,
+                "Fully sparse tensor should have all chunks inactive"
+            );
         }
     }
 
@@ -638,17 +652,22 @@ mod tests {
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
             .chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3],
-                chunk[4], chunk[5], chunk[6], chunk[7],
-            ]))
+            .map(|chunk| {
+                u64::from_le_bytes([
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ])
+            })
             .collect();
 
         // All chunks should be active
         let num_chunks = 2; // 4 words / 2 words per chunk
         for (row, &word) in bitmap.iter().enumerate() {
             let expected = (1u64 << num_chunks) - 1; // All bits set
-            assert_eq!(word, expected, "Fully dense tensor should have all chunks active for row {}", row);
+            assert_eq!(
+                word, expected,
+                "Fully dense tensor should have all chunks active for row {}",
+                row
+            );
         }
     }
 
@@ -686,14 +705,8 @@ mod tests {
                 if matches!(device, Device::Cuda(_)) {
                     // Create u32 tensor with known pattern
                     let data: Vec<u32> = vec![
-                        0x12345678,
-                        0xABCDEF01,
-                        0xDEADBEEF,
-                        0xCAFEBABE,
-                        0xFFFFFFFF,
-                        0x00000000,
-                        0xAAAAAAAA,
-                        0x55555555,
+                        0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
+                        0xAAAAAAAA, 0x55555555,
                     ];
                     let shape = (2, 4); // 2 rows, 4 columns
                     let original = Tensor::from_vec(data.clone(), shape, &device).unwrap();
@@ -735,12 +748,12 @@ mod tests {
                         .map(|i| if i % 2 == 0 { 0xAAAAAAAA } else { 0x55555555 })
                         .collect();
 
-                    let original = Tensor::from_vec(data.clone(), (rows, k_words), &device).unwrap();
+                    let original =
+                        Tensor::from_vec(data.clone(), (rows, k_words), &device).unwrap();
 
                     // Roundtrip conversion
                     let (bytes, shape, _) = u32_tensor_to_cubecl_handle(&original).unwrap();
-                    let recovered =
-                        cubecl_to_u32_candle_tensor(&bytes, &shape, &device).unwrap();
+                    let recovered = cubecl_to_u32_candle_tensor(&bytes, &shape, &device).unwrap();
 
                     // Verify
                     assert_eq!(recovered.dims(), &[rows, k_words]);

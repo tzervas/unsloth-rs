@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! FP → Ternary quantization with scale calibration.
 //!
 //! This module implements TWN-style (Ternary Weight Networks) quantization

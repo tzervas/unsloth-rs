@@ -1,12 +1,13 @@
 # unsloth-rs Handoff - Phase 2: GPU Profiling & Optimization
 
-**Date**: 2026-01-06  
+**Date**: 2026-01-10  
 **Target Environment**: akula-prime (RTX 5080 + RTX 3090 Ti, 28C/56T)  
-**Branch**: `feature/unsloth-rs/flash-attention-completion` off `experimental`
+**Status**: ✅ **GPU Hardware Available** - Ready for validation  
+**Branch**: `experimental`
 
 ## Executive Summary
 
-Phase 1 Flash Attention-2 CubeCL kernel is complete with 65 passing tests. Ready for GPU profiling and validation on akula-prime hardware.
+Phase 1 Flash Attention CubeCL kernel is complete with 148 passing tests. GPU hardware (RTX 5080) is now available for profiling and performance validation.
 
 ## Current State
 
@@ -22,19 +23,19 @@ Phase 1 Flash Attention-2 CubeCL kernel is complete with 65 passing tests. Ready
 | Numerical Validation | ✅ Complete | - | MAE < 1e-5 vs CPU |
 | Test Suite | ✅ 65/65 | - | All passing |
 
-### Performance Targets (To Validate)
+### Performance Targets (Ready for Validation)
 
 | Metric | Target | Validation Status |
 |--------|--------|-------------------|
-| Speedup vs Candle | 2-5x | ⏳ Pending GPU profiling |
-| VRAM Reduction | 70-80% | ⏳ Pending GPU profiling |
+| Speedup vs Candle | 2-5x | 🔄 **Ready for GPU profiling with RTX 5080** |
+| VRAM Reduction | 70-80% | 🔄 **Ready for GPU profiling with RTX 5080** |
 | Numerical Accuracy | MAE < 1e-5 | ✅ Verified on CPU |
 
 ### Test Results
 
 ```
 cargo test -p unsloth-rs
-# 65 passed, 0 failed
+# 148 passed, 0 failed (updated 2026-01-10)
 # Doc-tests: 2 passed, 6 ignored (require CUDA)
 ```
 

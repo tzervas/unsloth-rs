@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright 2026 Tyler Zervas
+
 //! Flash Attention `CubeCL` kernel implementation.
 //!
 //! This module contains the actual `CubeCL` kernel for Flash Attention 2.

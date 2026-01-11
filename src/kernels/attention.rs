@@ -187,15 +187,27 @@ impl FusedAttention {
             // Then reshape to: [batch, num_heads, seq_len, head_dim]
             let k_shape = k.shape().dims();
             k = k
-                .unsqueeze(2)?  // [batch, num_kv_heads, 1, seq_len, head_dim]
-                .expand((k_shape[0], k_shape[1], repeat_factor, k_shape[2], k_shape[3]))?
+                .unsqueeze(2)? // [batch, num_kv_heads, 1, seq_len, head_dim]
+                .expand((
+                    k_shape[0],
+                    k_shape[1],
+                    repeat_factor,
+                    k_shape[2],
+                    k_shape[3],
+                ))?
                 .reshape((k_shape[0], num_heads, k_shape[2], k_shape[3]))?
                 .contiguous()?;
-            
+
             let v_shape = v.shape().dims();
             v = v
                 .unsqueeze(2)?
-                .expand((v_shape[0], v_shape[1], repeat_factor, v_shape[2], v_shape[3]))?
+                .expand((
+                    v_shape[0],
+                    v_shape[1],
+                    repeat_factor,
+                    v_shape[2],
+                    v_shape[3],
+                ))?
                 .reshape((v_shape[0], num_heads, v_shape[2], v_shape[3]))?
                 .contiguous()?;
         }

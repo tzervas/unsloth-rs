@@ -294,8 +294,8 @@ fn ternary_matmul_cuda(
     weights: &TernaryTensor,
     config: &TernaryConfig,
 ) -> Result<Tensor> {
-    use crate::kernels::cubecl::interop::*;
     use super::matmul_cubecl::*;
+    use crate::kernels::cubecl::interop::*;
 
     // Get dimensions
     let input_shape = input.shape().dims();
@@ -305,39 +305,46 @@ fn ternary_matmul_cuda(
 
     // Calculate sparsity
     let sparsity = weights.sparsity();
-    
+
     // Select kernel based on sparsity
     let use_sparse_kernel = sparsity >= 0.90;
-    
+
     // Detect GPU (placeholder - will be improved when GPU hardware available)
     let device = input.device();
     let gpu_name = detect_gpu_name_placeholder();
-    
+
     log::debug!(
         "CUDA ternary matmul: batch={}, out={}, in={}, sparsity={:.2}, kernel={}",
-        batch_size, out_features, in_features, sparsity,
-        if use_sparse_kernel { "sparse" } else { "vectorized" }
+        batch_size,
+        out_features,
+        in_features,
+        sparsity,
+        if use_sparse_kernel {
+            "sparse"
+        } else {
+            "vectorized"
+        }
     );
 
     // For now, use fallback until we can properly test GPU dispatch
     // TODO: Enable when GPU hardware available for testing
     log::debug!("CUDA ternary matmul: falling back to CPU (GPU dispatch under development)");
     ternary_matmul_cpu(input, weights)
-    
+
     /* GPU dispatch code - to be enabled after hardware testing:
-    
+
     // Initialize CubeCL runtime
     let device_id = match device {
         Device::Cuda(id) => id.ordinal(),
         _ => return Err(UnslothError::InvalidConfig("Expected CUDA device".into())),
     };
-    
+
     let client = CudaRuntime::client(device_id);
-    
+
     // Convert input to CubeCL handle
     let (input_bytes, input_shape_vec, _) = candle_to_cubecl_handle(input)?;
     let input_handle = client.create(&input_bytes);
-    
+
     // Convert weight planes to CubeCL handles (reinterpret u32 as f32)
     let w_plus_bytes: Vec<u8> = weights.plus_plane
         .iter()
@@ -347,7 +354,7 @@ fn ternary_matmul_cuda(
         })
         .collect();
     let w_plus_handle = client.create(&w_plus_bytes);
-    
+
     let w_minus_bytes: Vec<u8> = weights.minus_plane
         .iter()
         .flat_map(|&word| {
@@ -356,19 +363,19 @@ fn ternary_matmul_cuda(
         })
         .collect();
     let w_minus_handle = client.create(&w_minus_bytes);
-    
+
     // Convert scales
     let scales_bytes: Vec<u8> = weights.scales
         .iter()
         .flat_map(|&s| s.to_le_bytes())
         .collect();
     let scales_handle = client.create(&scales_bytes);
-    
+
     // Allocate output
     let output_size = batch_size * out_features;
     let output_bytes = allocate_output_buffer(output_size);
     let output_handle = client.create(&output_bytes);
-    
+
     // Dispatch to appropriate kernel
     if use_sparse_kernel {
         // Use sparse-optimized kernel
@@ -389,13 +396,13 @@ fn ternary_matmul_cuda(
                 sparsity,
             )
         };
-        
+
         // Create sparsity bitmap
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(weights, 64);
         let bitmap_handle = client.create(&bitmap_bytes);
-        
+
         let (cube_count, cube_dim) = get_sparse_launch_config(&kernel_config);
-        
+
         ternary_matmul_kernel_sparse::launch_unchecked::<F32, CudaRuntime>(
             &client,
             cube_count,
@@ -425,9 +432,9 @@ fn ternary_matmul_cuda(
                 in_features as u32,
             )
         };
-        
+
         let (cube_count, cube_dim) = get_vectorized_launch_config(&kernel_config);
-        
+
         ternary_matmul_kernel_vectorized::launch_unchecked::<F32, CudaRuntime>(
             &client,
             cube_count,
@@ -440,7 +447,7 @@ fn ternary_matmul_cuda(
             kernel_config,
         );
     }
-    
+
     // Convert output back to Candle tensor
     let output_bytes = client.read(&output_handle);
     cubecl_to_candle_tensor(&output_bytes, &[batch_size, out_features], device)
@@ -654,23 +661,23 @@ mod tests {
     fn test_ternary_matmul_dispatch_cpu() -> Result<()> {
         // Verify CPU dispatch works correctly
         let device = Device::Cpu;
-        
+
         // Create simple weights and input
         let weight_data = vec![1.0f32, -1.0, 0.0, 1.0];
         let weights_fp = Tensor::from_vec(weight_data, (2, 2), &device)?;
-        
+
         let config = TernaryConfig {
             calibration_method: super::super::config::CalibrationMethodConfig::Manual(0.1),
             ..Default::default()
         };
         let (ternary_weights, _) = quantize_tensor(&weights_fp, &config)?;
-        
+
         let input_data = vec![1.0f32, 2.0, 3.0, 4.0];
         let input = Tensor::from_vec(input_data, (2, 2), &device)?;
-        
+
         // Should automatically dispatch to CPU
         let output = ternary_matmul(&input, &ternary_weights, &config)?;
-        
+
         assert_eq!(output.shape().dims(), &[2, 2]);
         Ok(())
     }
@@ -683,22 +690,22 @@ mod tests {
             if !matches!(device, Device::Cuda(_)) {
                 return Ok(()); // Skip if no GPU
             }
-            
+
             let weight_data = vec![1.0f32, -1.0, 0.0, 1.0];
             let weights_fp = Tensor::from_vec(weight_data, (2, 2), &Device::Cpu)?;
-            
+
             let config = TernaryConfig {
                 calibration_method: super::super::config::CalibrationMethodConfig::Manual(0.1),
                 ..Default::default()
             };
             let (ternary_weights, _) = quantize_tensor(&weights_fp, &config)?;
-            
+
             let input_data = vec![1.0f32, 2.0, 3.0, 4.0];
             let input = Tensor::from_vec(input_data, (2, 2), &device)?;
-            
+
             // Should route through CUDA path (currently falls back to CPU)
             let output = ternary_matmul(&input, &ternary_weights, &config)?;
-            
+
             assert_eq!(output.shape().dims(), &[2, 2]);
         }
         Ok(())

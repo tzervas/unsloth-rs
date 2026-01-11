@@ -103,35 +103,35 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
     // Quantize input row to bitsliced planes
     // This converts FP values to ternary {-1, 0, +1} representation
     let input_offset = batch_idx * config.in_features;
-    
+
     // Allocate local arrays for input planes (on registers)
     let mut input_plus = Array::<u32>::new(config.k_words);
     let mut input_minus = Array::<u32>::new(config.k_words);
-    
+
     // Quantize input to planes
     for k in 0..config.k_words {
         let mut plus_word = 0u32;
         let mut minus_word = 0u32;
-        
+
         // Process 32 dimensions per word
         let base_dim = k * 32;
         let end_dim = u32::min(base_dim + 32, config.in_features);
-        
+
         for bit in 0u32..(end_dim - base_dim) {
             let dim_idx = base_dim + bit;
             let val = input[input_offset + dim_idx];
-            
+
             // Simple threshold quantization: >0.5 → +1, <-0.5 → -1, else 0
             let threshold = F::new(0.5);
             let neg_threshold = F::new(-0.5);
-            
+
             if val > threshold {
                 plus_word = plus_word | (1u32 << bit);
             } else if val < neg_threshold {
                 minus_word = minus_word | (1u32 << bit);
             }
         }
-        
+
         input_plus[k] = plus_word;
         input_minus[k] = minus_word;
     }
@@ -140,25 +140,25 @@ pub fn ternary_matmul_kernel_basic<F: Float>(
     let weight_offset = out_idx * config.k_words;
     let mut pos_sum = 0u32;
     let mut neg_sum = 0u32;
-    
+
     for k in 0..config.k_words {
         // Reinterpret f32 as u32 bits for weight planes
         let wp_f32 = w_plus[weight_offset + k];
         let wm_f32 = w_minus[weight_offset + k];
         let wp_bits = u32::reinterpret(wp_f32);
         let wm_bits = u32::reinterpret(wm_f32);
-        
+
         let ip = input_plus[k];
         let im = input_minus[k];
-        
+
         // Popcount-based ternary dot product:
         // pos_matches = (+1 weights × +1 inputs) + (-1 weights × -1 inputs)
         // neg_matches = (+1 weights × -1 inputs) + (-1 weights × +1 inputs)
         // dot = pos_matches - neg_matches
-        
+
         pos_sum = pos_sum + (wp_bits & ip).count_ones();
         pos_sum = pos_sum + (wm_bits & im).count_ones();
-        
+
         neg_sum = neg_sum + (wp_bits & im).count_ones();
         neg_sum = neg_sum + (wm_bits & ip).count_ones();
     }
@@ -196,7 +196,7 @@ impl TiledTernaryMatmulConfig {
             m,
             n,
             in_features,
-            tile_k: 64,  // 64 u32 words = 2048 dimensions
+            tile_k: 64, // 64 u32 words = 2048 dimensions
             outputs_per_thread: 2,
             block_size: 256,
         }
@@ -209,7 +209,7 @@ impl TiledTernaryMatmulConfig {
             m,
             n,
             in_features,
-            tile_k: 32,  // 32 u32 words = 1024 dimensions
+            tile_k: 32, // 32 u32 words = 1024 dimensions
             outputs_per_thread: 2,
             block_size: 256,
         }
@@ -380,7 +380,7 @@ impl VectorizedTernaryMatmulConfig {
             m,
             n,
             in_features,
-            tile_k_lines: 16,  // 16 Line<u32> = 64 u32 words = 2048 dimensions
+            tile_k_lines: 16, // 16 Line<u32> = 64 u32 words = 2048 dimensions
             outputs_per_thread: 2,
             block_size: 256,
         }
@@ -393,7 +393,7 @@ impl VectorizedTernaryMatmulConfig {
             m,
             n,
             in_features,
-            tile_k_lines: 8,  // 8 Line<u32> = 32 u32 words = 1024 dimensions
+            tile_k_lines: 8, // 8 Line<u32> = 32 u32 words = 1024 dimensions
             outputs_per_thread: 2,
             block_size: 256,
         }
@@ -420,10 +420,7 @@ pub struct SparseOptimizedConfig {
 
 impl SparseOptimizedConfig {
     /// Create from sparsity level
-    pub fn from_sparsity(
-        base: VectorizedTernaryMatmulConfig,
-        sparsity: f32,
-    ) -> Self {
+    pub fn from_sparsity(base: VectorizedTernaryMatmulConfig, sparsity: f32) -> Self {
         Self {
             base,
             enable_plane_skipping: sparsity >= 0.90,
@@ -433,22 +430,20 @@ impl SparseOptimizedConfig {
     }
 
     /// RTX 5080 preset with sparsity optimization
-    pub fn rtx_5080_sparse(
-        m: u32, n: u32, k_words: u32, in_features: u32, sparsity: f32
-    ) -> Self {
-        let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(
-            m, n, k_words, in_features
-        );
+    pub fn rtx_5080_sparse(m: u32, n: u32, k_words: u32, in_features: u32, sparsity: f32) -> Self {
+        let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(m, n, k_words, in_features);
         Self::from_sparsity(base, sparsity)
     }
 
     /// RTX 3090 Ti preset with sparsity optimization
     pub fn rtx_3090ti_sparse(
-        m: u32, n: u32, k_words: u32, in_features: u32, sparsity: f32
+        m: u32,
+        n: u32,
+        k_words: u32,
+        in_features: u32,
+        sparsity: f32,
     ) -> Self {
-        let base = VectorizedTernaryMatmulConfig::rtx_3090ti_preset(
-            m, n, k_words, in_features
-        );
+        let base = VectorizedTernaryMatmulConfig::rtx_3090ti_preset(m, n, k_words, in_features);
         Self::from_sparsity(base, sparsity)
     }
 
@@ -740,7 +735,7 @@ pub fn ternary_matmul_kernel_sparse<F: Float>(
         // Calculate chunk parameters
         let words_per_chunk = config.words_per_chunk();
         let num_chunks = (config.base.k_words + words_per_chunk - 1) / words_per_chunk;
-        
+
         // Sparsity bitmap offset for this output feature
         let bitmap_words = (num_chunks + CHUNKS_PER_U64 - 1) / CHUNKS_PER_U64;
         let bitmap_offset = out_idx * bitmap_words;
@@ -839,10 +834,7 @@ pub fn ternary_matmul_kernel_sparse<F: Float>(
 
                 // Process active chunk
                 let chunk_word_start = chunk_idx * words_per_chunk;
-                let chunk_word_end = u32::min(
-                    chunk_word_start + words_per_chunk,
-                    k_end
-                );
+                let chunk_word_end = u32::min(chunk_word_start + words_per_chunk, k_end);
 
                 for k_word in chunk_word_start..chunk_word_end {
                     if k_word < k_start || k_word >= k_end {
@@ -881,16 +873,12 @@ pub fn ternary_matmul_kernel_sparse<F: Float>(
 }
 
 /// Launch configuration for sparse kernel (same as vectorized)
-pub fn get_sparse_launch_config(
-    config: &SparseOptimizedConfig,
-) -> (CubeCount, CubeDim) {
+pub fn get_sparse_launch_config(config: &SparseOptimizedConfig) -> (CubeCount, CubeDim) {
     get_vectorized_launch_config(&config.base)
 }
 
 /// Launch configuration for the tiled kernel
-pub fn get_tiled_launch_config(
-    config: &TiledTernaryMatmulConfig,
-) -> (CubeCount, CubeDim) {
+pub fn get_tiled_launch_config(config: &TiledTernaryMatmulConfig) -> (CubeCount, CubeDim) {
     // Number of output blocks needed
     let outputs_per_block = config.block_size * config.outputs_per_thread;
     let grid_y = (config.n + outputs_per_block - 1) / outputs_per_block;
@@ -905,13 +893,13 @@ pub fn get_tiled_launch_config(
 pub fn get_basic_launch_config(batch_size: u32, out_features: u32) -> (CubeCount, CubeDim) {
     // Block size: 256 threads (warp-aligned)
     let block_size = 256u32;
-    
+
     // Grid: (batch_size, ceil(out_features / block_size), 1)
     let grid_y = (out_features + block_size - 1) / block_size;
-    
+
     let cube_count = CubeCount::Static(batch_size, grid_y, 1);
     let cube_dim = CubeDim::new(block_size, 1, 1);
-    
+
     (cube_count, cube_dim)
 }
 
@@ -938,7 +926,7 @@ mod tests {
         assert_eq!(cube_dim.x, 256);
         assert_eq!(cube_dim.y, 1);
         assert_eq!(cube_dim.z, 1);
-        
+
         // Verify grid dimensions
         if let CubeCount::Static(x, y, z) = cube_count {
             assert_eq!(x, 4, "Grid X dimension should match batch size");
@@ -950,19 +938,19 @@ mod tests {
     }
 
     /// Functional test: validates kernel algorithm with known ternary weights.
-    /// 
+    ///
     /// This test verifies the ternary matrix multiplication logic by simulating
     /// the kernel computation on CPU with popcount-based operations.
     #[test]
     fn test_ternary_matmul_kernel_correctness() {
         // Simple test case: 2 batches, 3 output features, 64 input features (2 words)
         // Weights pattern: each output uses different ternary pattern
-        
+
         let batch_size = 2;
         let in_features = 64;
         let out_features = 3;
-        let k_words = 2;  // 64 / 32 = 2
-        
+        let k_words = 2; // 64 / 32 = 2
+
         // Input: values that will quantize clearly: >0.5 → +1, <-0.5 → -1, else 0
         // For batch 0: alternating pattern [1.0, -1.0, 1.0, -1.0, ...]
         // For batch 1: all positive [1.0, 1.0, 1.0, ...]
@@ -970,156 +958,184 @@ mod tests {
         for b in 0..batch_size {
             for i in 0..in_features {
                 input_data[b * in_features + i] = if b == 0 {
-                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                    if i % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
                 } else {
                     1.0
                 };
             }
         }
-        
+
         // Quantize inputs to planes (simulating kernel quantization)
         let mut input_plus = vec![0u32; batch_size * k_words];
         let mut input_minus = vec![0u32; batch_size * k_words];
-        
+
         for b in 0..batch_size {
             for k in 0..k_words {
                 let mut plus_word = 0u32;
                 let mut minus_word = 0u32;
-                
+
                 for bit in 0..32 {
                     let dim_idx = k * 32 + bit;
                     let val = input_data[b * in_features + dim_idx];
-                    
+
                     if val > 0.5 {
                         plus_word |= 1u32 << bit;
                     } else if val < -0.5 {
                         minus_word |= 1u32 << bit;
                     }
                 }
-                
+
                 input_plus[b * k_words + k] = plus_word;
                 input_minus[b * k_words + k] = minus_word;
             }
         }
-        
+
         // Weights: Create simple ternary patterns
         // Out feature 0: all +1 in both words
         // Out feature 1: all -1 in both words
         // Out feature 2: alternating +1/-1 pattern
         let mut w_plus = vec![0u32; out_features * k_words];
         let mut w_minus = vec![0u32; out_features * k_words];
-        
+
         // Feature 0: all positive
         w_plus[0] = 0xFFFFFFFF;
         w_plus[1] = 0xFFFFFFFF;
-        
+
         // Feature 1: all negative
         w_minus[2] = 0xFFFFFFFF;
         w_minus[3] = 0xFFFFFFFF;
-        
+
         // Feature 2: alternating (0xAAAAAAAA = 10101...2)
         w_plus[4] = 0xAAAAAAAA;
         w_plus[5] = 0xAAAAAAAA;
         w_minus[4] = 0x55555555;
         w_minus[5] = 0x55555555;
-        
+
         // Scales: all 1.0 for simplicity
         let scales = vec![1.0f32; out_features];
-        
+
         // Simulate popcount-based kernel computation
         let mut output = vec![0.0f32; batch_size * out_features];
-        
+
         for batch_idx in 0..batch_size {
             for out_idx in 0..out_features {
                 let weight_offset = out_idx * k_words;
                 let input_offset = batch_idx * k_words;
                 let mut pos_sum = 0u32;
                 let mut neg_sum = 0u32;
-                
+
                 for k in 0..k_words {
                     let wp_bits = w_plus[weight_offset + k];
                     let wm_bits = w_minus[weight_offset + k];
                     let ip = input_plus[input_offset + k];
                     let im = input_minus[input_offset + k];
-                    
+
                     // Popcount-based dot product
                     pos_sum += (wp_bits & ip).count_ones();
                     pos_sum += (wm_bits & im).count_ones();
                     neg_sum += (wp_bits & im).count_ones();
                     neg_sum += (wm_bits & ip).count_ones();
                 }
-                
+
                 let dot = (pos_sum as i32 - neg_sum as i32) as f32;
                 output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
             }
         }
-        
+
         // Batch 0 input quantizes to: +plane = 0xAAAAAAAA (even bits), -plane = 0x55555555 (odd bits)
         // Batch 1 input quantizes to: +plane = 0xFFFFFFFF (all bits), -plane = 0x00000000 (no bits)
-        
+
         // Batch 0, Feature 0 (all +1 weights):
         //   pos_sum = popcount(0xFFFF... & 0xAAAA...) + popcount(0x0 & 0x5555...) = 32 + 0 = 32 (per word) = 64 total
         //   neg_sum = popcount(0xFFFF... & 0x5555...) + popcount(0x0 & 0xAAAA...) = 32 + 0 = 32 (per word) = 64 total
         //   dot = 64 - 64 = 0
         let expected_b0_f0 = 0.0;
-        
+
         // Batch 0, Feature 1 (all -1 weights):
         //   pos_sum = popcount(0x0 & 0xAAAA...) + popcount(0xFFFF... & 0x5555...) = 0 + 32 = 32 (per word) = 64 total
         //   neg_sum = popcount(0x0 & 0x5555...) + popcount(0xFFFF... & 0xAAAA...) = 0 + 32 = 32 (per word) = 64 total
         //   dot = 64 - 64 = 0
         let expected_b0_f1 = 0.0;
-        
+
         // Batch 0, Feature 2 (alternating):
         //   pos_sum = popcount(0xAAAA... & 0xAAAA...) + popcount(0x5555... & 0x5555...) = 16 + 16 = 32 (per word) = 64 total
         //   neg_sum = popcount(0xAAAA... & 0x5555...) + popcount(0x5555... & 0xAAAA...) = 0 + 0 = 0
         //   dot = 64 - 0 = 64
         let expected_b0_f2 = 64.0;
-        
+
         // Batch 1, Feature 0 (all +1 weights, all +1 input):
         //   pos_sum = popcount(0xFFFF... & 0xFFFF...) + popcount(0x0 & 0x0) = 64 + 0 = 64
         //   neg_sum = popcount(0xFFFF... & 0x0) + popcount(0x0 & 0xFFFF...) = 0 + 0 = 0
         //   dot = 64 - 0 = 64
         let expected_b1_f0 = 64.0;
-        
+
         // Batch 1, Feature 1 (all -1 weights, all +1 input):
         //   pos_sum = popcount(0x0 & 0xFFFF...) + popcount(0xFFFF... & 0x0) = 0 + 0 = 0
         //   neg_sum = popcount(0x0 & 0x0) + popcount(0xFFFF... & 0xFFFF...) = 0 + 64 = 64
         //   dot = 0 - 64 = -64
         let expected_b1_f1 = -64.0;
-        
+
         // Batch 1, Feature 2 (alternating, all +1 input):
         //   pos_sum = popcount(0xAAAA... & 0xFFFF...) + popcount(0x5555... & 0x0) = 32 + 0 = 32 (per word) = 64 total
         //   neg_sum = popcount(0xAAAA... & 0x0) + popcount(0x5555... & 0xFFFF...) = 0 + 32 = 32 (per word) = 64 total
         //   dot = 64 - 64 = 0
         let expected_b1_f2 = 0.0;
-        
-        assert!((output[0] - expected_b0_f0).abs() < 0.01, 
-                "B0F0 mismatch: expected {}, got {}", expected_b0_f0, output[0]);
-        assert!((output[1] - expected_b0_f1).abs() < 0.01,
-                "B0F1 mismatch: expected {}, got {}", expected_b0_f1, output[1]);
-        assert!((output[2] - expected_b0_f2).abs() < 0.01,
-                "B0F2 mismatch: expected {}, got {}", expected_b0_f2, output[2]);
-        
-        assert!((output[3] - expected_b1_f0).abs() < 0.01,
-                "B1F0 mismatch: expected {}, got {}", expected_b1_f0, output[3]);
-        assert!((output[4] - expected_b1_f1).abs() < 0.01,
-                "B1F1 mismatch: expected {}, got {}", expected_b1_f1, output[4]);
-        assert!((output[5] - expected_b1_f2).abs() < 0.01,
-                "B1F2 mismatch: expected {}, got {}", expected_b1_f2, output[5]);
+
+        assert!(
+            (output[0] - expected_b0_f0).abs() < 0.01,
+            "B0F0 mismatch: expected {}, got {}",
+            expected_b0_f0,
+            output[0]
+        );
+        assert!(
+            (output[1] - expected_b0_f1).abs() < 0.01,
+            "B0F1 mismatch: expected {}, got {}",
+            expected_b0_f1,
+            output[1]
+        );
+        assert!(
+            (output[2] - expected_b0_f2).abs() < 0.01,
+            "B0F2 mismatch: expected {}, got {}",
+            expected_b0_f2,
+            output[2]
+        );
+
+        assert!(
+            (output[3] - expected_b1_f0).abs() < 0.01,
+            "B1F0 mismatch: expected {}, got {}",
+            expected_b1_f0,
+            output[3]
+        );
+        assert!(
+            (output[4] - expected_b1_f1).abs() < 0.01,
+            "B1F1 mismatch: expected {}, got {}",
+            expected_b1_f1,
+            output[4]
+        );
+        assert!(
+            (output[5] - expected_b1_f2).abs() < 0.01,
+            "B1F2 mismatch: expected {}, got {}",
+            expected_b1_f2,
+            output[5]
+        );
     }
 
     /// Test partial word bounds checking with non-multiple of 32 input features.
-    /// 
+    ///
     /// This test validates the quantization and popcount with partial words
     /// (when in_features % 32 != 0).
     #[test]
     fn test_ternary_matmul_partial_word() {
         // Test with in_features = 48 (1 full word + 16 bits in partial word)
         let batch_size = 2;
-        let in_features = 48;  // Not a multiple of 32
+        let in_features = 48; // Not a multiple of 32
         let out_features = 2;
-        let k_words = 2;  // ceil(48 / 32) = 2 words (second is partial)
-        
+        let k_words = 2; // ceil(48 / 32) = 2 words (second is partial)
+
         // Input: all +1.0 for batch 0, all -1.0 for batch 1
         let mut input_data = vec![0.0f32; batch_size * in_features];
         for b in 0..batch_size {
@@ -1127,78 +1143,78 @@ mod tests {
                 input_data[b * in_features + i] = if b == 0 { 1.0 } else { -1.0 };
             }
         }
-        
+
         // Quantize inputs
         let mut input_plus = vec![0u32; batch_size * k_words];
         let mut input_minus = vec![0u32; batch_size * k_words];
-        
+
         for b in 0..batch_size {
             for k in 0..k_words {
                 let mut plus_word = 0u32;
                 let mut minus_word = 0u32;
-                
+
                 let base_dim = k * 32;
                 let end_dim = std::cmp::min(base_dim + 32, in_features);
-                
+
                 for bit in 0..(end_dim - base_dim) {
                     let dim_idx = base_dim + bit;
                     let val = input_data[b * in_features + dim_idx];
-                    
+
                     if val > 0.5 {
                         plus_word |= 1u32 << bit;
                     } else if val < -0.5 {
                         minus_word |= 1u32 << bit;
                     }
                 }
-                
+
                 input_plus[b * k_words + k] = plus_word;
                 input_minus[b * k_words + k] = minus_word;
             }
         }
-        
+
         // Weights:
         // Feature 0: all +1 in both words (32 + 16 = 48 dimensions)
         // Feature 1: all -1 in partial second word only (16 dimensions)
         let mut w_plus = vec![0u32; out_features * k_words];
         let mut w_minus = vec![0u32; out_features * k_words];
-        
+
         // Feature 0: positive in both words
-        w_plus[0] = 0xFFFFFFFF;  // word 0 (bits 0-31, all valid)
-        w_plus[1] = 0x0000FFFF;  // word 1 (bits 0-15 valid, 16-31 should be ignored)
-        
+        w_plus[0] = 0xFFFFFFFF; // word 0 (bits 0-31, all valid)
+        w_plus[1] = 0x0000FFFF; // word 1 (bits 0-15 valid, 16-31 should be ignored)
+
         // Feature 1: negative in partial word only
-        w_minus[2] = 0x00000000;  // word 0 (no contribution)
-        w_minus[3] = 0x0000FFFF;  // word 1 (bits 0-15 valid)
-        
+        w_minus[2] = 0x00000000; // word 0 (no contribution)
+        w_minus[3] = 0x0000FFFF; // word 1 (bits 0-15 valid)
+
         let scales = vec![1.0f32; out_features];
-        
+
         // Simulate popcount computation
         let mut output = vec![0.0f32; batch_size * out_features];
-        
+
         for batch_idx in 0..batch_size {
             for out_idx in 0..out_features {
                 let weight_offset = out_idx * k_words;
                 let input_offset = batch_idx * k_words;
                 let mut pos_sum = 0u32;
                 let mut neg_sum = 0u32;
-                
+
                 for k in 0..k_words {
                     let wp_bits = w_plus[weight_offset + k];
                     let wm_bits = w_minus[weight_offset + k];
                     let ip = input_plus[input_offset + k];
                     let im = input_minus[input_offset + k];
-                    
+
                     pos_sum += (wp_bits & ip).count_ones();
                     pos_sum += (wm_bits & im).count_ones();
                     neg_sum += (wp_bits & im).count_ones();
                     neg_sum += (wm_bits & ip).count_ones();
                 }
-                
+
                 let dot = (pos_sum as i32 - neg_sum as i32) as f32;
                 output[batch_idx * out_features + out_idx] = dot * scales[out_idx];
             }
         }
-        
+
         // Batch 0 (all +1 input):
         //   input quantizes to: word0=0xFFFFFFFF, word1=0x0000FFFF
         // Feature 0 (all +1 weights):
@@ -1206,13 +1222,13 @@ mod tests {
         //   neg_sum = 0
         //   dot = 48
         let expected_b0_f0 = 48.0;
-        
+
         // Feature 1 (partial -1 weights):
         //   pos_sum = 0
         //   neg_sum = popcount(0xFFFF & 0xFFFF) = 16
         //   dot = -16
-        let expected_b0_f1 = 0.0;  // No matches since input is +1 and weight is -1
-        
+        let expected_b0_f1 = 0.0; // No matches since input is +1 and weight is -1
+
         // Batch 1 (all -1 input):
         //   input quantizes to: word0=0xFFFFFFFF, word1=0x0000FFFF in minus plane
         // Feature 0:
@@ -1220,22 +1236,38 @@ mod tests {
         //   neg_sum = popcount(0xFFFF... & 0xFFFF...) + popcount(0xFFFF & 0xFFFF) = 32 + 16 = 48
         //   dot = -48
         let expected_b1_f0 = -48.0;
-        
+
         // Feature 1:
         //   pos_sum = popcount(0xFFFF & 0xFFFF) = 16
         //   neg_sum = 0
         //   dot = 16
         let expected_b1_f1 = 16.0;
-        
-        assert!((output[0] - expected_b0_f0).abs() < 0.01,
-                "B0F0 mismatch: expected {}, got {}", expected_b0_f0, output[0]);
-        assert!((output[1] - expected_b0_f1).abs() < 0.01,
-                "B0F1 mismatch: expected {}, got {}", expected_b0_f1, output[1]);
-        
-        assert!((output[2] - expected_b1_f0).abs() < 0.01,
-                "B1F0 mismatch: expected {}, got {}", expected_b1_f0, output[2]);
-        assert!((output[3] - expected_b1_f1).abs() < 0.01,
-                "B1F1 mismatch: expected {}, got {}", expected_b1_f1, output[3]);
+
+        assert!(
+            (output[0] - expected_b0_f0).abs() < 0.01,
+            "B0F0 mismatch: expected {}, got {}",
+            expected_b0_f0,
+            output[0]
+        );
+        assert!(
+            (output[1] - expected_b0_f1).abs() < 0.01,
+            "B0F1 mismatch: expected {}, got {}",
+            expected_b0_f1,
+            output[1]
+        );
+
+        assert!(
+            (output[2] - expected_b1_f0).abs() < 0.01,
+            "B1F0 mismatch: expected {}, got {}",
+            expected_b1_f0,
+            output[2]
+        );
+        assert!(
+            (output[3] - expected_b1_f1).abs() < 0.01,
+            "B1F1 mismatch: expected {}, got {}",
+            expected_b1_f1,
+            output[3]
+        );
     }
 
     #[test]
@@ -1290,7 +1322,7 @@ mod tests {
     #[test]
     fn test_tiled_kernel_correctness() {
         let batch_size = 2;
-        let in_features = 128;  // 4 words
+        let in_features = 128; // 4 words
         let out_features = 4;
         let k_words = 4;
 
@@ -1299,7 +1331,11 @@ mod tests {
         for b in 0..batch_size {
             for i in 0..in_features {
                 input_data[b * in_features + i] = if b == 0 {
-                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                    if i % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
                 } else {
                     1.0
                 };
@@ -1402,7 +1438,7 @@ mod tests {
         // Feature 3: half +1, half -1 → dot = 0
 
         let expected = vec![
-            0.0, 0.0, 256.0, 0.0,  // Batch 0
+            0.0, 0.0, 256.0, 0.0, // Batch 0
             256.0, -256.0, 0.0, 0.0, // Batch 1 (all +1 input)
         ];
 
@@ -1466,7 +1502,7 @@ mod tests {
     #[test]
     fn test_vectorized_kernel_correctness() {
         let batch_size = 2;
-        let in_features = 128;  // 4 words (perfect for vectorization)
+        let in_features = 128; // 4 words (perfect for vectorization)
         let out_features = 4;
         let k_words = 4;
 
@@ -1475,7 +1511,11 @@ mod tests {
         for b in 0..batch_size {
             for i in 0..in_features {
                 input_data[b * in_features + i] = if b == 0 {
-                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                    if i % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
                 } else {
                     1.0
                 };
@@ -1566,7 +1606,7 @@ mod tests {
 
         // Verify results match tiled kernel results
         let expected = vec![
-            0.0, 0.0, 256.0, 0.0,  // Batch 0
+            0.0, 0.0, 256.0, 0.0, // Batch 0
             256.0, -256.0, 0.0, 0.0, // Batch 1
         ];
 
@@ -1587,7 +1627,7 @@ mod tests {
     #[test]
     fn test_vectorized_kernel_partial() {
         let batch_size = 2;
-        let in_features = 96;  // 3 words (not divisible by 4)
+        let in_features = 96; // 3 words (not divisible by 4)
         let out_features = 2;
         let k_words = 3;
 
@@ -1686,13 +1726,13 @@ mod tests {
     #[test]
     fn test_sparse_config_creation() {
         let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(8, 512, 32, 1024);
-        
+
         // High sparsity: enable skipping
         let sparse = SparseOptimizedConfig::from_sparsity(base, 0.95);
         assert!(sparse.enable_plane_skipping);
         assert_eq!(sparse.chunk_size, 64);
         assert_eq!(sparse.words_per_chunk(), 2);
-        
+
         // Low sparsity: disable skipping
         let dense = SparseOptimizedConfig::from_sparsity(base, 0.50);
         assert!(!dense.enable_plane_skipping);
@@ -1713,11 +1753,11 @@ mod tests {
     fn test_sparse_launch_config() {
         let base = VectorizedTernaryMatmulConfig::rtx_5080_preset(4, 512, 32, 1024);
         let sparse = SparseOptimizedConfig::from_sparsity(base, 0.95);
-        
+
         let (cube_count, cube_dim) = get_sparse_launch_config(&sparse);
-        
+
         assert_eq!(cube_dim.x, 256);
-        
+
         if let CubeCount::Static(x, y, z) = cube_count {
             assert_eq!(x, 4);
             assert_eq!(y, 1);
@@ -1740,7 +1780,11 @@ mod tests {
         for b in 0..batch_size {
             for i in 0..in_features {
                 input_data[b * in_features + i] = if b == 0 {
-                    if i % 2 == 0 { 1.0 } else { -1.0 }
+                    if i % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
                 } else {
                     1.0
                 };
@@ -1803,7 +1847,7 @@ mod tests {
                 // Process only active chunks
                 for chunk_idx in 0..num_chunks {
                     let is_active = (bitmap[out_idx] & (1u64 << chunk_idx)) != 0;
-                    
+
                     if !is_active {
                         continue; // Skip inactive chunk
                     }
@@ -1860,27 +1904,47 @@ mod tests {
         // Feature 0: only first chunk active (words 0-1)
         // Feature 1: second and third chunks active (words 2-5)
         let mut w_plus = vec![0u32; out_features * k_words];
-        w_plus[0 * k_words + 0] = 0xFF;  // Chunk 0
-        w_plus[1 * k_words + 2] = 0xFF;  // Chunk 1
-        w_plus[1 * k_words + 4] = 0xFF;  // Chunk 2
+        w_plus[0 * k_words + 0] = 0xFF; // Chunk 0
+        w_plus[1 * k_words + 2] = 0xFF; // Chunk 1
+        w_plus[1 * k_words + 4] = 0xFF; // Chunk 2
 
         // Build bitmap
         let num_chunks = 4;
         let mut bitmap = vec![0u64; out_features];
-        
+
         // Feature 0: chunk 0 active
         bitmap[0] = 0x1; // Bit 0
-        
+
         // Feature 1: chunks 1 and 2 active
         bitmap[1] = 0x6; // Bits 1 and 2
 
         // Verify bitmap correctly identifies active chunks
-        assert_eq!((bitmap[0] & 0x1), 0x1, "Chunk 0 should be active for feature 0");
-        assert_eq!((bitmap[0] & 0x2), 0x0, "Chunk 1 should be inactive for feature 0");
-        
-        assert_eq!((bitmap[1] & 0x1), 0x0, "Chunk 0 should be inactive for feature 1");
-        assert_eq!((bitmap[1] & 0x2), 0x2, "Chunk 1 should be active for feature 1");
-        assert_eq!((bitmap[1] & 0x4), 0x4, "Chunk 2 should be active for feature 1");
+        assert_eq!(
+            (bitmap[0] & 0x1),
+            0x1,
+            "Chunk 0 should be active for feature 0"
+        );
+        assert_eq!(
+            (bitmap[0] & 0x2),
+            0x0,
+            "Chunk 1 should be inactive for feature 0"
+        );
+
+        assert_eq!(
+            (bitmap[1] & 0x1),
+            0x0,
+            "Chunk 0 should be inactive for feature 1"
+        );
+        assert_eq!(
+            (bitmap[1] & 0x2),
+            0x2,
+            "Chunk 1 should be active for feature 1"
+        );
+        assert_eq!(
+            (bitmap[1] & 0x4),
+            0x4,
+            "Chunk 2 should be active for feature 1"
+        );
     }
 }
 
@@ -1959,73 +2023,70 @@ pub fn analyze_tensor_sparsity_distribution(
     tensor: &crate::kernels::ternary::types::TernaryTensor,
 ) -> SparsityDistribution {
     use crate::kernels::ternary::types::TernaryTensor;
-    
+
     let out_features = tensor.shape()[0];
     let in_features = tensor.shape()[1];
     let chunk_size = 64; // Standard chunk for analysis
     let num_chunks = (in_features + chunk_size - 1) / chunk_size;
-    
+
     // Calculate per-chunk sparsity
     let mut chunk_sparsities = Vec::new();
-    
+
     for chunk_idx in 0..num_chunks {
         let start_dim = chunk_idx * chunk_size;
         let end_dim = (start_dim + chunk_size).min(in_features);
         let mut zero_count = 0;
         let mut total_count = 0;
-        
+
         for row in 0..out_features {
             for dim in start_dim..end_dim {
                 total_count += 1;
                 // Check if value is zero by checking both planes
                 let word_idx = dim / 32;
                 let bit_idx = dim % 32;
-                
+
                 // Get values from planes (both zero = sparse)
                 let plus_data = tensor.plus_plane().storage();
                 let minus_data = tensor.minus_plane().storage();
-                
+
                 let plus_idx = row * ((in_features + 31) / 32) + word_idx;
                 let minus_idx = row * ((in_features + 31) / 32) + word_idx;
-                
+
                 if plus_idx < plus_data.len() && minus_idx < minus_data.len() {
                     let plus_word = plus_data[plus_idx];
                     let minus_word = minus_data[minus_idx];
-                    
+
                     let plus_bit = (plus_word >> bit_idx) & 1;
                     let minus_bit = (minus_word >> bit_idx) & 1;
-                    
+
                     if plus_bit == 0 && minus_bit == 0 {
                         zero_count += 1;
                     }
                 }
             }
         }
-        
+
         if total_count > 0 {
             chunk_sparsities.push(zero_count as f32 / total_count as f32);
         }
     }
-    
+
     // Calculate overall statistics
     let overall_sparsity = if !chunk_sparsities.is_empty() {
         chunk_sparsities.iter().sum::<f32>() / chunk_sparsities.len() as f32
     } else {
         0.0
     };
-    
+
     // Calculate variance
     let variance = if chunk_sparsities.len() > 1 {
         let mean = overall_sparsity;
-        let sum_sq_diff: f32 = chunk_sparsities
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum();
+        let sum_sq_diff: f32 = chunk_sparsities.iter().map(|&x| (x - mean).powi(2)).sum();
         sum_sq_diff / chunk_sparsities.len() as f32
     } else {
         0.0
     };
-    
+
     // Detect pattern based on variance
     let pattern = if variance < 0.1 {
         SparsityPattern::Uniform
@@ -2034,7 +2095,7 @@ pub fn analyze_tensor_sparsity_distribution(
     } else {
         SparsityPattern::Layered
     };
-    
+
     SparsityDistribution {
         overall_sparsity,
         variance,
@@ -2050,28 +2111,28 @@ pub fn adaptive_plane_skipping_matmul(
     config: DynamicPlaneSkippingConfig,
 ) -> candle_core::Result<candle_core::Tensor> {
     use crate::kernels::ternary::matmul::ternary_matmul;
-    
+
     if !config.enable {
         // Fall back to standard matmul
         return ternary_matmul(input, weights);
     }
-    
+
     // Profile sparsity distribution
     let distribution = analyze_tensor_sparsity_distribution(weights);
-    
+
     // Adapt configuration based on detected pattern
     let adapted_chunk_size = match distribution.pattern {
         SparsityPattern::Uniform => 64,
         SparsityPattern::Clustered => config.min_chunk_size,
         SparsityPattern::Layered => config.max_chunk_size,
     };
-    
+
     let adapted_threshold = match distribution.pattern {
         SparsityPattern::Uniform => config.initial_threshold,
         SparsityPattern::Clustered => config.adaptive_range.0, // Lower = more aggressive
-        SparsityPattern::Layered => config.adaptive_range.1,    // Higher = more conservative
+        SparsityPattern::Layered => config.adaptive_range.1,   // Higher = more conservative
     };
-    
+
     // Apply matmul with adapted configuration
     // Note: In actual implementation, we would pass adapted_chunk_size and adapted_threshold
     // to the sparse kernel. For now, fall back to standard implementation.
@@ -2081,9 +2142,9 @@ pub fn adaptive_plane_skipping_matmul(
 #[cfg(test)]
 mod dynamic_plane_skipping_tests {
     use super::*;
-    use candle_core::{DType, Device, Tensor};
     use crate::kernels::ternary::quantize::quantize_tensor_to_ternary;
-    
+    use candle_core::{DType, Device, Tensor};
+
     #[test]
     fn test_dynamic_config_creation() {
         let config = DynamicPlaneSkippingConfig::default();
@@ -2092,15 +2153,15 @@ mod dynamic_plane_skipping_tests {
         assert_eq!(config.adaptive_range, (0.85, 0.95));
         assert_eq!(config.min_chunk_size, 32);
         assert_eq!(config.max_chunk_size, 128);
-        
+
         let enabled_config = config.with_enable(true);
         assert!(enabled_config.enable);
     }
-    
+
     #[test]
     fn test_analyze_uniform_sparsity() {
         let device = Device::Cpu;
-        
+
         // Create uniform sparse tensor (90% sparse throughout)
         let data = Tensor::zeros((4, 128), DType::F32, &device).unwrap();
         // Set 10% of values to non-zero uniformly
@@ -2109,19 +2170,22 @@ mod dynamic_plane_skipping_tests {
             data_vec[i] = 1.0;
         }
         let data = Tensor::from_vec(data_vec, (4, 128), &device).unwrap();
-        
+
         let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
         let distribution = analyze_tensor_sparsity_distribution(&ternary);
-        
+
         assert!(distribution.overall_sparsity > 0.85);
-        assert!(distribution.variance < 0.15, "Uniform should have low variance");
+        assert!(
+            distribution.variance < 0.15,
+            "Uniform should have low variance"
+        );
         assert_eq!(distribution.pattern, SparsityPattern::Uniform);
     }
-    
+
     #[test]
     fn test_analyze_clustered_sparsity() {
         let device = Device::Cpu;
-        
+
         // Create clustered sparse tensor (dense clusters)
         let mut data_vec = vec![0.0f32; 4 * 128];
         // Dense cluster in first 32 dimensions
@@ -2131,28 +2195,31 @@ mod dynamic_plane_skipping_tests {
         // Sparse in remaining dimensions (only few values)
         data_vec[64] = 1.0;
         data_vec[96] = 1.0;
-        
+
         let data = Tensor::from_vec(data_vec, (4, 128), &device).unwrap();
         let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
         let distribution = analyze_tensor_sparsity_distribution(&ternary);
-        
-        assert!(distribution.variance > 0.2, "Clustered should have high variance");
+
+        assert!(
+            distribution.variance > 0.2,
+            "Clustered should have high variance"
+        );
     }
-    
+
     #[test]
     fn test_adaptive_matmul_shape() {
         let device = Device::Cpu;
         let batch = 2;
         let in_features = 128;
         let out_features = 64;
-        
+
         let input = Tensor::ones((batch, in_features), DType::F32, &device).unwrap();
         let weights_data = Tensor::ones((out_features, in_features), DType::F32, &device).unwrap();
         let weights = quantize_tensor_to_ternary(&weights_data, 0.5).unwrap();
-        
+
         let config = DynamicPlaneSkippingConfig::default().with_enable(true);
         let output = adaptive_plane_skipping_matmul(&input, &weights, config).unwrap();
-        
+
         assert_eq!(output.dims(), &[batch, out_features]);
     }
 }
@@ -2167,15 +2234,15 @@ pub enum SparseStorageFormat {
     /// Default bitsliced format (2 bits per element)
     /// Best for: 50-95% sparsity, uniform distribution
     Bitsliced,
-    
+
     /// Compressed Sparse Row format
     /// Best for: >95% sparsity, row-major access
     CSR,
-    
+
     /// ELLPACK format (GPU-friendly with padding)
     /// Best for: GPU execution, uniform row lengths
     ELL,
-    
+
     /// Run-length encoded format
     /// Best for: >98% sparsity, large zero runs
     Compressed,
@@ -2186,10 +2253,10 @@ pub enum SparseStorageFormat {
 pub struct ChunkOptimizationConfig {
     /// Enable automatic format selection
     pub enable_format_selection: bool,
-    
+
     /// Whether running on GPU
     pub on_gpu: bool,
-    
+
     /// Override format selection (None = auto)
     pub force_format: Option<SparseStorageFormat>,
 }
@@ -2202,7 +2269,7 @@ impl ChunkOptimizationConfig {
             force_format: None,
         }
     }
-    
+
     pub fn for_gpu() -> Self {
         Self {
             enable_format_selection: true,
@@ -2210,7 +2277,7 @@ impl ChunkOptimizationConfig {
             force_format: None,
         }
     }
-    
+
     pub fn with_format(mut self, format: SparseStorageFormat) -> Self {
         self.force_format = Some(format);
         self
@@ -2230,13 +2297,13 @@ pub struct SparsityStats {
 pub fn analyze_sparsity_stats(tensor: &TernaryTensor) -> SparsityStats {
     let out_features = tensor.plus_plane.dims()[0];
     let in_features = tensor.plus_plane.dims()[1] * BITS_PER_U32 as usize;
-    
+
     let plus_data = tensor.plus_plane.to_vec2::<u32>().unwrap();
     let minus_data = tensor.minus_plane.to_vec2::<u32>().unwrap();
-    
+
     let mut total_nonzero = 0;
     let mut nnz_per_row = Vec::new();
-    
+
     for row_idx in 0..out_features {
         let mut row_nnz = 0;
         for word_idx in 0..plus_data[row_idx].len() {
@@ -2247,18 +2314,20 @@ pub fn analyze_sparsity_stats(tensor: &TernaryTensor) -> SparsityStats {
         total_nonzero += row_nnz;
         nnz_per_row.push(row_nnz);
     }
-    
+
     let total_elements = out_features * in_features;
     let sparsity = 1.0 - (total_nonzero as f32 / total_elements as f32);
-    
+
     let avg_nnz = nnz_per_row.iter().sum::<usize>() as f32 / nnz_per_row.len() as f32;
-    let variance = nnz_per_row.iter()
+    let variance = nnz_per_row
+        .iter()
         .map(|&x| (x as f32 - avg_nnz).powi(2))
-        .sum::<f32>() / nnz_per_row.len() as f32;
+        .sum::<f32>()
+        / nnz_per_row.len() as f32;
     let row_variance = variance.sqrt() / avg_nnz.max(1.0);
-    
+
     let max_nnz_per_row = *nnz_per_row.iter().max().unwrap_or(&0);
-    
+
     SparsityStats {
         sparsity,
         row_variance,
@@ -2296,35 +2365,35 @@ pub fn format_selection_heuristic(
 pub struct CSRFormat {
     pub row_ptr: Vec<usize>,
     pub col_indices: Vec<usize>,
-    pub values: Vec<i8>,  // -1, 0, +1
+    pub values: Vec<i8>, // -1, 0, +1
 }
 
 /// Convert ternary tensor to CSR format
 pub fn convert_to_csr_format(tensor: &TernaryTensor) -> CSRFormat {
     let out_features = tensor.plus_plane.dims()[0];
     let in_features = tensor.plus_plane.dims()[1] * BITS_PER_U32 as usize;
-    
+
     let plus_data = tensor.plus_plane.to_vec2::<u32>().unwrap();
     let minus_data = tensor.minus_plane.to_vec2::<u32>().unwrap();
-    
+
     let mut row_ptr = vec![0];
     let mut col_indices = Vec::new();
     let mut values = Vec::new();
-    
+
     for row_idx in 0..out_features {
         for word_idx in 0..plus_data[row_idx].len() {
             let plus_word = plus_data[row_idx][word_idx];
             let minus_word = minus_data[row_idx][word_idx];
-            
+
             for bit in 0..BITS_PER_U32 {
                 let col = word_idx * BITS_PER_U32 as usize + bit as usize;
                 if col >= in_features {
                     break;
                 }
-                
+
                 let is_plus = (plus_word & (1u32 << bit)) != 0;
                 let is_minus = (minus_word & (1u32 << bit)) != 0;
-                
+
                 if is_plus || is_minus {
                     col_indices.push(col);
                     values.push(if is_plus { 1 } else { -1 });
@@ -2333,7 +2402,7 @@ pub fn convert_to_csr_format(tensor: &TernaryTensor) -> CSRFormat {
         }
         row_ptr.push(values.len());
     }
-    
+
     CSRFormat {
         row_ptr,
         col_indices,
@@ -2345,8 +2414,8 @@ pub fn convert_to_csr_format(tensor: &TernaryTensor) -> CSRFormat {
 #[derive(Clone, Debug)]
 pub struct ELLFormat {
     pub max_nnz_per_row: usize,
-    pub col_indices: Vec<Vec<usize>>,  // [rows][max_nnz]
-    pub values: Vec<Vec<i8>>,           // [rows][max_nnz]
+    pub col_indices: Vec<Vec<usize>>, // [rows][max_nnz]
+    pub values: Vec<Vec<i8>>,         // [rows][max_nnz]
 }
 
 /// Convert ternary tensor to ELL format
@@ -2354,30 +2423,30 @@ pub fn convert_to_ell_format(tensor: &TernaryTensor) -> ELLFormat {
     let stats = analyze_sparsity_stats(tensor);
     let out_features = tensor.plus_plane.dims()[0];
     let in_features = tensor.plus_plane.dims()[1] * BITS_PER_U32 as usize;
-    
+
     let plus_data = tensor.plus_plane.to_vec2::<u32>().unwrap();
     let minus_data = tensor.minus_plane.to_vec2::<u32>().unwrap();
-    
+
     let max_nnz = stats.max_nnz_per_row;
     let mut col_indices = vec![vec![0; max_nnz]; out_features];
     let mut values = vec![vec![0i8; max_nnz]; out_features];
-    
+
     for row_idx in 0..out_features {
         let mut nnz_count = 0;
-        
+
         for word_idx in 0..plus_data[row_idx].len() {
             let plus_word = plus_data[row_idx][word_idx];
             let minus_word = minus_data[row_idx][word_idx];
-            
+
             for bit in 0..BITS_PER_U32 {
                 let col = word_idx * BITS_PER_U32 as usize + bit as usize;
                 if col >= in_features {
                     break;
                 }
-                
+
                 let is_plus = (plus_word & (1u32 << bit)) != 0;
                 let is_minus = (minus_word & (1u32 << bit)) != 0;
-                
+
                 if is_plus || is_minus {
                     if nnz_count < max_nnz {
                         col_indices[row_idx][nnz_count] = col;
@@ -2388,7 +2457,7 @@ pub fn convert_to_ell_format(tensor: &TernaryTensor) -> ELLFormat {
             }
         }
     }
-    
+
     ELLFormat {
         max_nnz_per_row: max_nnz,
         col_indices,
@@ -2399,37 +2468,37 @@ pub fn convert_to_ell_format(tensor: &TernaryTensor) -> ELLFormat {
 /// Compressed (RLE) format representation
 #[derive(Clone, Debug)]
 pub struct CompressedFormat {
-    pub runs: Vec<Vec<(usize, i8)>>,  // [rows][(start_col, value)]
+    pub runs: Vec<Vec<(usize, i8)>>, // [rows][(start_col, value)]
 }
 
 /// Convert ternary tensor to run-length encoded format
 pub fn convert_to_compressed_format(tensor: &TernaryTensor) -> CompressedFormat {
     let out_features = tensor.plus_plane.dims()[0];
     let in_features = tensor.plus_plane.dims()[1] * BITS_PER_U32 as usize;
-    
+
     let plus_data = tensor.plus_plane.to_vec2::<u32>().unwrap();
     let minus_data = tensor.minus_plane.to_vec2::<u32>().unwrap();
-    
+
     let mut runs = Vec::new();
-    
+
     for row_idx in 0..out_features {
         let mut row_runs = Vec::new();
         let mut current_value: Option<i8> = None;
         let mut run_start = 0;
-        
+
         for word_idx in 0..plus_data[row_idx].len() {
             let plus_word = plus_data[row_idx][word_idx];
             let minus_word = minus_data[row_idx][word_idx];
-            
+
             for bit in 0..BITS_PER_U32 {
                 let col = word_idx * BITS_PER_U32 as usize + bit as usize;
                 if col >= in_features {
                     break;
                 }
-                
+
                 let is_plus = (plus_word & (1u32 << bit)) != 0;
                 let is_minus = (minus_word & (1u32 << bit)) != 0;
-                
+
                 let value = if is_plus {
                     Some(1)
                 } else if is_minus {
@@ -2437,7 +2506,7 @@ pub fn convert_to_compressed_format(tensor: &TernaryTensor) -> CompressedFormat 
                 } else {
                     None
                 };
-                
+
                 if value != current_value {
                     if let Some(v) = current_value {
                         row_runs.push((run_start, v));
@@ -2447,14 +2516,14 @@ pub fn convert_to_compressed_format(tensor: &TernaryTensor) -> CompressedFormat 
                 }
             }
         }
-        
+
         if let Some(v) = current_value {
             row_runs.push((run_start, v));
         }
-        
+
         runs.push(row_runs);
     }
-    
+
     CompressedFormat { runs }
 }
 
@@ -2466,7 +2535,7 @@ pub fn chunk_optimized_ternary_matmul(
 ) -> Result<Tensor> {
     // Analyze sparsity pattern
     let stats = analyze_sparsity_stats(weights);
-    
+
     // Select optimal format
     let format = if let Some(forced) = config.force_format {
         forced
@@ -2475,7 +2544,7 @@ pub fn chunk_optimized_ternary_matmul(
     } else {
         SparseStorageFormat::Bitsliced
     };
-    
+
     // For now, all formats use the same CPU kernel
     // In a real implementation, each format would have its own optimized kernel
     match format {
@@ -2501,33 +2570,38 @@ pub fn chunk_optimized_ternary_matmul(
 #[cfg(test)]
 mod tests_chunk_optimization {
     use super::*;
-    
+
     #[test]
     fn test_format_selection_dense() {
         // Dense tensor should use Bitsliced
         let format = format_selection_heuristic(0.30, 0.1, false);
         assert_eq!(format, SparseStorageFormat::Bitsliced);
     }
-    
+
     #[test]
     fn test_format_selection_very_sparse() {
         // Very sparse with uniform rows should use CSR
         let format = format_selection_heuristic(0.96, 0.15, false);
         assert_eq!(format, SparseStorageFormat::CSR);
     }
-    
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_convert_to_csr() {
-        use crate::ternary::TernaryTensor;
         use crate::kernels::quantization::quantize_tensor_to_ternary;
-        
+        use crate::ternary::TernaryTensor;
+
         let device = candle_core::Device::Cpu;
-        let data = Tensor::from_slice(&[1.0f32, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, -1.0], &[2, 4], &device).unwrap();
+        let data = Tensor::from_slice(
+            &[1.0f32, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, -1.0],
+            &[2, 4],
+            &device,
+        )
+        .unwrap();
         let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
-        
+
         let csr = convert_to_csr_format(&ternary);
-        
+
         // First row has 2 non-zeros (1.0, -1.0)
         // Second row has 2 non-zeros (1.0, -1.0)
         assert_eq!(csr.row_ptr[0], 0);
@@ -2535,24 +2609,24 @@ mod tests_chunk_optimization {
         assert_eq!(csr.row_ptr[2], 4);
         assert_eq!(csr.values.len(), 4);
     }
-    
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_chunk_optimized_matmul_shape() {
         use crate::kernels::quantization::quantize_tensor_to_ternary;
-        
+
         let device = candle_core::Device::Cpu;
         let batch = 2;
         let in_features = 64;
         let out_features = 32;
-        
+
         let input = Tensor::ones((batch, in_features), DType::F32, &device).unwrap();
         let weights_data = Tensor::ones((out_features, in_features), DType::F32, &device).unwrap();
         let weights = quantize_tensor_to_ternary(&weights_data, 0.5).unwrap();
-        
+
         let config = ChunkOptimizationConfig::default();
         let output = chunk_optimized_ternary_matmul(&input, &weights, config).unwrap();
-        
+
         assert_eq!(output.dims(), &[batch, out_features]);
     }
 }
@@ -2577,7 +2651,7 @@ pub struct SparsityProfile {
 pub fn profile_tensor_sparsity(tensor: &TernaryTensor, on_gpu: bool) -> SparsityProfile {
     let stats = analyze_sparsity_stats(tensor);
     let distribution = analyze_tensor_sparsity_distribution(tensor);
-    
+
     // Detect pattern
     let pattern = if distribution.variance < 0.1 {
         SparsityPattern::Uniform
@@ -2586,42 +2660,50 @@ pub fn profile_tensor_sparsity(tensor: &TernaryTensor, on_gpu: bool) -> Sparsity
     } else {
         SparsityPattern::Layered
     };
-    
+
     // Recommend format
-    let recommended_format = format_selection_heuristic(
-        stats.sparsity,
-        stats.row_variance,
-        on_gpu,
-    );
-    
+    let recommended_format = format_selection_heuristic(stats.sparsity, stats.row_variance, on_gpu);
+
     // Recommend chunk size based on pattern
     let recommended_chunk_size = match pattern {
         SparsityPattern::Uniform => 64,
         SparsityPattern::Clustered => 32,
         SparsityPattern::Layered => 128,
     };
-    
+
     // Estimate memory savings
     let estimated_memory_savings = match recommended_format {
         SparseStorageFormat::Bitsliced => 1.0,
-        SparseStorageFormat::CSR => if stats.sparsity > 0.95 { 3.0 } else { 1.5 },
+        SparseStorageFormat::CSR => {
+            if stats.sparsity > 0.95 {
+                3.0
+            } else {
+                1.5
+            }
+        }
         SparseStorageFormat::ELL => 1.2,
-        SparseStorageFormat::Compressed => if stats.sparsity > 0.98 { 5.0 } else { 2.0 },
+        SparseStorageFormat::Compressed => {
+            if stats.sparsity > 0.98 {
+                5.0
+            } else {
+                2.0
+            }
+        }
     };
-    
+
     // Estimate speedup
     let estimated_speedup = if stats.sparsity > 0.95 {
-        2.0 + (stats.sparsity - 0.95) * 10.0  // Up to 2.5x at 100% sparsity
+        2.0 + (stats.sparsity - 0.95) * 10.0 // Up to 2.5x at 100% sparsity
     } else {
-        1.0 + stats.sparsity * 0.5  // Modest gains below 95%
+        1.0 + stats.sparsity * 0.5 // Modest gains below 95%
     };
-    
+
     // Calculate per-row sparsity
     let out_features = tensor.plus_plane.dims()[0];
     let in_features = tensor.plus_plane.dims()[1] * BITS_PER_U32 as usize;
     let plus_data = tensor.plus_plane.to_vec2::<u32>().unwrap();
     let minus_data = tensor.minus_plane.to_vec2::<u32>().unwrap();
-    
+
     let mut per_row_sparsity = Vec::new();
     for row_idx in 0..out_features {
         let mut row_nnz = 0;
@@ -2633,7 +2715,7 @@ pub fn profile_tensor_sparsity(tensor: &TernaryTensor, on_gpu: bool) -> Sparsity
         let row_sparsity = 1.0 - (row_nnz as f32 / in_features as f32);
         per_row_sparsity.push(row_sparsity);
     }
-    
+
     SparsityProfile {
         overall_sparsity: stats.sparsity,
         per_row_sparsity,
@@ -2648,21 +2730,20 @@ pub fn profile_tensor_sparsity(tensor: &TernaryTensor, on_gpu: bool) -> Sparsity
 /// Generate optimization recommendations based on profile
 pub fn generate_optimization_recommendations(profile: &SparsityProfile) -> Vec<String> {
     let mut recommendations = Vec::new();
-    
+
     // Format recommendation
     recommendations.push(format!(
         "Use {:?} storage format for {:.1}% sparsity",
         profile.recommended_format,
         profile.overall_sparsity * 100.0
     ));
-    
+
     // Chunk size recommendation
     recommendations.push(format!(
         "Use chunk size of {} dimensions based on {:?} pattern",
-        profile.recommended_chunk_size,
-        profile.sparsity_pattern
+        profile.recommended_chunk_size, profile.sparsity_pattern
     ));
-    
+
     // Memory savings
     if profile.estimated_memory_savings > 1.5 {
         recommendations.push(format!(
@@ -2670,7 +2751,7 @@ pub fn generate_optimization_recommendations(profile: &SparsityProfile) -> Vec<S
             profile.estimated_memory_savings
         ));
     }
-    
+
     // Speedup potential
     if profile.estimated_speedup > 1.5 {
         recommendations.push(format!(
@@ -2678,65 +2759,67 @@ pub fn generate_optimization_recommendations(profile: &SparsityProfile) -> Vec<S
             profile.estimated_speedup
         ));
     }
-    
+
     // Pattern-specific recommendations
     match profile.sparsity_pattern {
         SparsityPattern::Uniform => {
             recommendations.push("Uniform sparsity: standard optimizations effective".to_string());
         }
         SparsityPattern::Clustered => {
-            recommendations.push("Clustered sparsity: use smaller chunks for precision".to_string());
+            recommendations
+                .push("Clustered sparsity: use smaller chunks for precision".to_string());
         }
         SparsityPattern::Layered => {
-            recommendations.push("Layered sparsity: consider per-layer format selection".to_string());
+            recommendations
+                .push("Layered sparsity: consider per-layer format selection".to_string());
         }
     }
-    
+
     // Extreme sparsity recommendations
     if profile.overall_sparsity > 0.98 {
         recommendations.push("Extreme sparsity: consider RLE compression".to_string());
     }
-    
+
     recommendations
 }
 
 #[cfg(test)]
 mod tests_sparsity_profiler {
     use super::*;
-    
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_profile_tensor_sparsity() {
         use crate::kernels::quantization::quantize_tensor_to_ternary;
-        
+
         let device = candle_core::Device::Cpu;
         // Create a 90% sparse tensor
         let mut data_vec = vec![0.0f32; 1000];
         for i in 0..100 {
-            data_vec[i * 10] = 1.0;  // 10% non-zero
+            data_vec[i * 10] = 1.0; // 10% non-zero
         }
         let data = Tensor::from_slice(&data_vec, &[10, 100], &device).unwrap();
         let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
-        
+
         let profile = profile_tensor_sparsity(&ternary, false);
-        
+
         assert!(profile.overall_sparsity > 0.85);
         assert!(profile.overall_sparsity < 0.95);
         assert!(profile.estimated_speedup > 1.0);
     }
-    
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_generate_recommendations() {
         use crate::kernels::quantization::quantize_tensor_to_ternary;
-        
+
         let device = candle_core::Device::Cpu;
         let data = Tensor::zeros(&[10, 100], DType::F32, &device).unwrap();
         let ternary = quantize_tensor_to_ternary(&data, 0.5).unwrap();
-        
+
         let profile = profile_tensor_sparsity(&ternary, false);
         let recommendations = generate_optimization_recommendations(&profile);
-        
+
         assert!(!recommendations.is_empty());
         assert!(recommendations.iter().any(|r| r.contains("storage format")));
     }

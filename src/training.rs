@@ -494,22 +494,24 @@ mod tests {
 
     #[test]
     fn test_update_loss_scale_bounds() {
-        let mut config = MixedPrecisionConfig::default();
-        config.min_loss_scale = 1.0;
-        config.max_loss_scale = 1000.0;
+        let mut config = MixedPrecisionConfig {
+            min_loss_scale: 1.0,
+            max_loss_scale: 1000.0,
+            loss_scale: 2.0,
+            scale_backoff_factor: 0.5,
+            ..Default::default()
+        };
 
         // Test min bound
-        config.loss_scale = 2.0;
-        config.scale_backoff_factor = 0.5;
         update_loss_scale(&mut config, true, 0);
-        assert_eq!(config.loss_scale, 1.0); // Should hit min
+        assert!((config.loss_scale - 1.0).abs() < f32::EPSILON); // Should hit min
 
         // Test max bound
         config.loss_scale = 600.0;
         config.scale_growth_factor = 2.0;
         config.scale_growth_interval = 10;
         update_loss_scale(&mut config, false, 10);
-        assert_eq!(config.loss_scale, 1000.0); // Should hit max
+        assert!((config.loss_scale - 1000.0).abs() < f32::EPSILON); // Should hit max
     }
 
     #[test]

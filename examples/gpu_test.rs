@@ -51,9 +51,11 @@ fn main() {
             let k_data: Vec<f32> = q_data.clone();
             let v_data: Vec<f32> = q_data.clone();
 
-            let q = Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
-            let k = Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
-            let v = Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &Device::Cpu).unwrap();
+            // Create tensors on CUDA device to actually test GPU kernel
+            let cuda_device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+            let q = Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let k = Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let v = Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
 
             let scale = 1.0 / (head_dim as f64).sqrt();
             let config = FlashAttentionConfig::default();
@@ -63,6 +65,7 @@ fn main() {
                 Ok(output) => {
                     let elapsed = start.elapsed();
                     println!("    Output shape: {:?}", output.dims());
+                    println!("    Device: {:?}", cuda_device);
                     println!("    Time: {:?}", elapsed);
                 }
                 Err(e) => {

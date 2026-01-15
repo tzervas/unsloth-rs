@@ -142,6 +142,7 @@ fn flash_attention_tile<F: Float>(
         // Note: For simplicity in Phase 1, we use shared memory reduction
         // Full implementation will use warp_reduce
         // FIXME: Hardcoded shared memory size of 256 elements
+        // WARNING: These limitations will cause INCORRECT RESULTS in the following cases:
         // - Threads with tid >= 256 will be out of bounds when writing to score_tile[tid]
         // - Tree reduction assumes head_dim_val is a power of 2, starting with stride = head_dim_val / 2
         // - For non-power-of-2 head_dim (e.g., 80), some elements won't be included in reduction
@@ -507,12 +508,12 @@ fn launch_cubecl_attention(
     // The kernel's reduction logic assumes all threads up to head_dim participate.
     // Currently only supports head_dim <= 256. For larger head_dim, the kernel
     // needs rewriting to handle multi-pass reduction or tiled computation.
-    // See kernel.rs lines 108-156 for the reduction code that makes this assumption.
+    // See kernel.rs lines 144-162 for the reduction code that makes this assumption.
     let block_size = Ord::min(head_dim as u32, 256);
     if head_dim > 256 {
         tracing::warn!(
             "head_dim={} exceeds maximum supported block size of 256. \
-             Results may be incorrect. This will be fixed in Phase 2 tiled kernel.",
+             Results WILL BE INCORRECT. This will be fixed in Phase 2 tiled kernel.",
             head_dim
         );
     }

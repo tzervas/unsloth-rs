@@ -141,6 +141,12 @@ fn flash_attention_tile<F: Float>(
         // Warp-level reduction for dot product (sum across head_dim threads)
         // Note: For simplicity in Phase 1, we use shared memory reduction
         // Full implementation will use warp_reduce
+        // FIXME: Hardcoded shared memory size of 256 elements
+        // - Threads with tid >= 256 will be out of bounds when writing to score_tile[tid]
+        // - Tree reduction assumes head_dim_val is a power of 2, starting with stride = head_dim_val / 2
+        // - For non-power-of-2 head_dim (e.g., 80), some elements won't be included in reduction
+        // - Shared memory size should match block size, and reduction should handle non-power-of-2
+        // These limitations will be addressed in Phase 2 with proper warp-level primitives
         let mut score_tile = SharedMemory::<F>::new(256); // Block size
         score_tile[tid] = score_contrib;
         sync_cube();
@@ -217,9 +223,8 @@ fn flash_attention_tile<F: Float>(
 ///     Write O_i to global memory
 /// ```
 // TODO: Re-enable once CubeCL comptime bool issue is resolved
-// #[cfg(feature = "cuda")]
-// #[cube(launch)]
 #[cfg(all(feature = "cuda", feature = "_phase2_tiled_kernel"))]
+#[cube(launch)]
 #[allow(dead_code)]
 fn flash_attention_tiled<F: Float>(
     q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
@@ -462,6 +467,12 @@ fn launch_cubecl_attention(
     );
 
     // Convert tensors to byte arrays
+    // PERF: This performs inefficient GPU→CPU→GPU transfers
+    // candle_to_cubecl_handle() copies CUDA tensor data to CPU (see interop.rs:131),
+    // then client.create() copies it back to GPU. For CUDA tensors, we should
+    // extract the GPU pointer directly without round-tripping through CPU memory.
+    // This significantly impacts performance and will be optimized in Phase 2.
+    // TODO: Implement direct GPU pointer extraction for CUDA tensors
     let (q_bytes, _, _) = candle_to_cubecl_handle(q)?;
     let (k_bytes, _, _) = candle_to_cubecl_handle(k)?;
     let (v_bytes, _, _) = candle_to_cubecl_handle(v)?;
@@ -492,8 +503,19 @@ fn launch_cubecl_attention(
     let cube_count = CubeCount::Static((batch * num_heads) as u32, seq_len as u32, 1);
 
     // Block: head_dim threads (each handles one element)
-    // Clamp to max 256 for Phase 1; will optimize later
+    // FIXME: Clamping to 256 threads is incorrect for head_dim > 256
+    // The kernel's reduction logic assumes all threads up to head_dim participate.
+    // Currently only supports head_dim <= 256. For larger head_dim, the kernel
+    // needs rewriting to handle multi-pass reduction or tiled computation.
+    // See kernel.rs lines 108-156 for the reduction code that makes this assumption.
     let block_size = Ord::min(head_dim as u32, 256);
+    if head_dim > 256 {
+        tracing::warn!(
+            "head_dim={} exceeds maximum supported block size of 256. \
+             Results may be incorrect. This will be fixed in Phase 2 tiled kernel.",
+            head_dim
+        );
+    }
     let cube_dim = CubeDim::new(block_size, 1, 1);
 
     // Scale as f32
@@ -518,11 +540,8 @@ fn launch_cubecl_attention(
 
     // Synchronize and read output
     let output_bytes = client.read_one(out_handle);
-    let output_data: &[f32] = f32::from_bytes(&output_bytes);
 
     // Convert back to Candle tensor
-    let output_bytes: Vec<u8> = output_data.iter().flat_map(|f| f.to_le_bytes()).collect();
-
     cubecl_to_candle_tensor(
         &output_bytes,
         &[batch, num_heads, seq_len, head_dim],

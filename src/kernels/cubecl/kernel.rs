@@ -41,7 +41,7 @@
 //! - `Array<Line<F>>` - Vectorized 4-element loads for coalescing
 //! - `SharedMemory::<F>::new(comptime_size)` - 1D shared memory allocation
 //! - `ABSOLUTE_POS`, `UNIT_POS`, `CUBE_POS` - Thread indexing primitives
-//! - `sync_units()` - Block-level barrier
+//! - `sync_cube()` - Block-level barrier
 //! - `warp_reduce` - Warp-level reductions for max/sum
 //!
 //! ## Implementation Status
@@ -57,8 +57,6 @@ use candle_core::Tensor;
 
 // CubeCL imports for kernel implementation
 #[cfg(feature = "cuda")]
-use bytemuck;
-#[cfg(feature = "cuda")]
 use cubecl::prelude::*;
 #[cfg(feature = "cuda")]
 use cubecl_cuda::CudaRuntime;
@@ -67,8 +65,9 @@ use cubecl_cuda::CudaRuntime;
 // CubeCL Kernel Definition (v0.8.1 API)
 // ============================================================================
 
-/// Compile-time configuration passed to CubeCL kernel.
-#[derive(Clone, Copy, Debug)]
+/// Compile-time configuration for Flash Attention kernels.
+/// This is used by the launch wrapper, not directly by CubeCL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg(feature = "cuda")]
 pub struct TileConfig {
     /// Size of tiles for tiled attention
@@ -92,14 +91,16 @@ pub struct TileConfig {
 ///
 /// Memory layout: [batch, heads, seq_len, head_dim] stored contiguously.
 #[cfg(feature = "cuda")]
-#[cube(launch_unchecked)]
+#[cube(launch)]
 fn flash_attention_tile<F: Float>(
     q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
     k: &Array<F>,       // Key [batch * heads * seq_len * head_dim]
     v: &Array<F>,       // Value [batch * heads * seq_len * head_dim]
     out: &mut Array<F>, // Output [batch * heads * seq_len * head_dim]
     scale: F,           // 1/sqrt(head_dim)
-    #[comptime] config: TileConfig,
+    // Runtime parameters for dimensions
+    seq_len_val: u32,
+    head_dim_val: u32,
 ) {
     // Thread/block indices
     let batch_head_idx = CUBE_POS_X; // Which (batch, head) pair
@@ -107,15 +108,15 @@ fn flash_attention_tile<F: Float>(
     let tid = UNIT_POS_X; // Thread within block
 
     // Strides for [batch*heads, seq_len, head_dim] layout
-    let head_stride = config.seq_len * config.head_dim;
+    let head_stride = seq_len_val * head_dim_val;
 
     // Base offset for this batch-head
     let base_offset = batch_head_idx * head_stride;
 
     // This thread handles one element in the head_dim dimension
     // Each row has head_dim elements; we process them in parallel
-    if tid >= config.head_dim {
-        return;
+    if tid >= head_dim_val {
+        terminate!();
     }
 
     // Initialize running statistics for online softmax
@@ -124,13 +125,13 @@ fn flash_attention_tile<F: Float>(
     let mut running_out = F::new(0.0); // Running output accumulator
 
     // Get Q value for this thread's position
-    let q_offset = base_offset + q_row_idx * config.head_dim + tid;
+    let q_offset = base_offset + q_row_idx * head_dim_val + tid;
     let q_val = q[q_offset];
 
     // Iterate over all K/V positions (tile-less for Phase 1)
-    for kv_idx in 0..config.seq_len {
+    for kv_idx in 0..seq_len_val {
         // Compute dot product Q[row] @ K[kv_idx] (single element contribution)
-        let k_offset = base_offset + kv_idx * config.head_dim + tid;
+        let k_offset = base_offset + kv_idx * head_dim_val + tid;
         let k_val = k[k_offset];
 
         // Each thread computes one term of the dot product
@@ -140,17 +141,24 @@ fn flash_attention_tile<F: Float>(
         // Warp-level reduction for dot product (sum across head_dim threads)
         // Note: For simplicity in Phase 1, we use shared memory reduction
         // Full implementation will use warp_reduce
+        // FIXME: Hardcoded shared memory size of 256 elements
+        // WARNING: These limitations will cause INCORRECT RESULTS in the following cases:
+        // - Threads with tid >= 256 will be out of bounds when writing to score_tile[tid]
+        // - Tree reduction assumes head_dim_val is a power of 2, starting with stride = head_dim_val / 2
+        // - For non-power-of-2 head_dim (e.g., 80), some elements won't be included in reduction
+        // - Shared memory size should match block size, and reduction should handle non-power-of-2
+        // These limitations will be addressed in Phase 2 with proper warp-level primitives
         let mut score_tile = SharedMemory::<F>::new(256); // Block size
         score_tile[tid] = score_contrib;
-        sync_units();
+        sync_cube();
 
         // Tree reduction for sum
-        let mut stride: u32 = config.head_dim / 2;
+        let mut stride: u32 = head_dim_val / 2;
         while stride > 0 {
             if tid < stride {
                 score_tile[tid] = score_tile[tid] + score_tile[tid + stride];
             }
-            sync_units();
+            sync_cube();
             stride = stride / 2;
         }
 
@@ -161,7 +169,7 @@ fn flash_attention_tile<F: Float>(
         if tid == 0 {
             score_tile[0] = score;
         }
-        sync_units();
+        sync_cube();
         let attn_score = score_tile[0];
 
         // Online softmax update
@@ -173,7 +181,7 @@ fn flash_attention_tile<F: Float>(
         let new_sum = exp_old * running_sum + exp_new;
 
         // Update output: scale old output and add new contribution
-        let v_offset = base_offset + kv_idx * config.head_dim + tid;
+        let v_offset = base_offset + kv_idx * head_dim_val + tid;
         let v_val = v[v_offset];
         running_out = (exp_old * running_sum * running_out + exp_new * v_val) / new_sum;
 
@@ -183,7 +191,7 @@ fn flash_attention_tile<F: Float>(
     }
 
     // Write output
-    let out_offset = base_offset + q_row_idx * config.head_dim + tid;
+    let out_offset = base_offset + q_row_idx * head_dim_val + tid;
     out[out_offset] = running_out;
 }
 
@@ -215,15 +223,21 @@ fn flash_attention_tile<F: Float>(
 ///     
 ///     Write O_i to global memory
 /// ```
-#[cfg(feature = "cuda")]
-#[cube(launch_unchecked)]
+// TODO: Re-enable once CubeCL comptime bool issue is resolved
+#[cfg(all(feature = "cuda", feature = "_phase2_tiled_kernel"))]
+#[cube(launch)]
+#[allow(dead_code)]
 fn flash_attention_tiled<F: Float>(
     q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
     k: &Array<F>,       // Key [batch * heads * seq_len * head_dim]
     v: &Array<F>,       // Value [batch * heads * seq_len * head_dim]
     out: &mut Array<F>, // Output [batch * heads * seq_len * head_dim]
     scale: F,           // 1/sqrt(head_dim)
-    #[comptime] config: TileConfig,
+    #[comptime] tile_size: u32,
+    #[comptime] head_dim: u32,
+    #[comptime] seq_len: u32,
+    #[comptime] num_kv_tiles: u32,
+    #[comptime] causal: bool,
 ) {
     // Grid: (batch * heads, num_q_tiles, 1)
     // Block: (tile_size, 1, 1) - each thread handles one Q row
@@ -233,115 +247,125 @@ fn flash_attention_tiled<F: Float>(
     let thread_in_tile = UNIT_POS_X;
 
     // Calculate which Q row this thread handles globally
-    let q_row_global = q_tile_idx * config.tile_size + thread_in_tile;
+    let q_row_global = q_tile_idx * tile_size + thread_in_tile;
 
     // Early exit if beyond sequence length
-    if q_row_global >= config.seq_len {
-        return;
+    if q_row_global >= seq_len {
+        terminate!();
     }
 
     // Stride calculations
-    let head_stride = config.seq_len * config.head_dim;
+    let head_stride = seq_len * head_dim;
     let base_offset = batch_head_idx * head_stride;
 
     // Allocate shared memory for Q tile (tile_size × head_dim)
     // Each thread loads head_dim elements for its Q row
-    let mut q_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+    let mut q_tile = SharedMemory::<F>::new(tile_size * head_dim);
 
     // Load Q tile cooperatively
     // Thread i loads Q[q_row_global, :] into q_tile[thread_in_tile, :]
-    for dim_idx in 0..config.head_dim {
-        let q_offset = base_offset + q_row_global * config.head_dim + dim_idx;
-        let tile_offset = thread_in_tile * config.head_dim + dim_idx;
+    for dim_idx in 0..head_dim {
+        let q_offset = base_offset + q_row_global * head_dim + dim_idx;
+        let tile_offset = thread_in_tile * head_dim + dim_idx;
         q_tile[tile_offset] = q[q_offset];
     }
-    sync_units();
+    sync_cube();
 
     // Initialize per-row accumulators (in registers)
     let mut running_max = F::new(-1e30);
     let mut running_sum = F::new(0.0);
 
     // Output accumulator (head_dim elements per thread)
-    let mut out_acc = SharedMemory::<F>::new(config.tile_size * config.head_dim);
-    for dim_idx in 0..config.head_dim {
-        out_acc[thread_in_tile * config.head_dim + dim_idx] = F::new(0.0);
+    let mut out_acc = SharedMemory::<F>::new(tile_size * head_dim);
+    for dim_idx in 0..head_dim {
+        out_acc[thread_in_tile * head_dim + dim_idx] = F::new(0.0);
     }
 
     // Iterate over KV tiles
-    for kv_tile_idx in 0..config.num_kv_tiles {
-        let kv_start = kv_tile_idx * config.tile_size;
-        let kv_end = F::min(kv_start + config.tile_size, config.seq_len);
+    for kv_tile_idx in 0..num_kv_tiles {
+        let kv_start = kv_tile_idx * tile_size;
+        // Compute actual tile size (min of tile_size and remaining seq_len)
+        let kv_end = if kv_start + tile_size < seq_len {
+            kv_start + tile_size
+        } else {
+            seq_len
+        };
         let kv_tile_actual_size = kv_end - kv_start;
 
         // Allocate shared memory for K and V tiles
-        let mut k_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
-        let mut v_tile = SharedMemory::<F>::new(config.tile_size * config.head_dim);
+        let mut k_tile = SharedMemory::<F>::new(tile_size * head_dim);
+        let mut v_tile = SharedMemory::<F>::new(tile_size * head_dim);
 
         // Load K and V tiles cooperatively
         // Each thread loads multiple rows if needed
         for local_kv_idx in 0..kv_tile_actual_size {
-            if local_kv_idx % config.tile_size == thread_in_tile {
+            if local_kv_idx % tile_size == thread_in_tile {
                 let kv_row_global = kv_start + local_kv_idx;
-                for dim_idx in 0..config.head_dim {
-                    let k_offset = base_offset + kv_row_global * config.head_dim + dim_idx;
-                    let v_offset = base_offset + kv_row_global * config.head_dim + dim_idx;
-                    let tile_offset = local_kv_idx * config.head_dim + dim_idx;
+                for dim_idx in 0..head_dim {
+                    let k_offset = base_offset + kv_row_global * head_dim + dim_idx;
+                    let v_offset = base_offset + kv_row_global * head_dim + dim_idx;
+                    let tile_offset = local_kv_idx * head_dim + dim_idx;
                     k_tile[tile_offset] = k[k_offset];
                     v_tile[tile_offset] = v[v_offset];
                 }
             }
         }
-        sync_units();
+        sync_cube();
 
         // Compute attention scores for this thread's Q row against all KV rows in tile
         for local_kv_idx in 0..kv_tile_actual_size {
             let kv_row_global = kv_start + local_kv_idx;
 
-            // Apply causal mask: if causal and q_row < kv_row, skip
-            if config.causal && q_row_global < kv_row_global {
-                continue;
+            // Apply causal mask: if causal and q_row < kv_row, skip this KV row
+            // Note: CubeCL doesn't support `continue`, so we use if-else instead
+            let should_process = if causal {
+                q_row_global >= kv_row_global
+            } else {
+                true
+            };
+
+            if should_process {
+                // Compute dot product Q[thread_in_tile] @ K[local_kv_idx]
+                let mut score = F::new(0.0);
+                for dim_idx in 0..head_dim {
+                    let q_val = q_tile[thread_in_tile * head_dim + dim_idx];
+                    let k_val = k_tile[local_kv_idx * head_dim + dim_idx];
+                    score = score + q_val * k_val;
+                }
+                score = score * scale;
+
+                // Online softmax update
+                let new_max = F::max(running_max, score);
+                let exp_old = F::exp(running_max - new_max);
+                let exp_new = F::exp(score - new_max);
+
+                // Update running sum with correction factor
+                let new_sum = exp_old * running_sum + exp_new;
+
+                // Update output: O_new = (exp_old * l_old * O_old + exp_new * V) / l_new
+                for dim_idx in 0..head_dim {
+                    let out_offset = thread_in_tile * head_dim + dim_idx;
+                    let old_out = out_acc[out_offset];
+                    let v_val = v_tile[local_kv_idx * head_dim + dim_idx];
+
+                    // Apply correction and add new contribution
+                    let corrected_old = exp_old * running_sum * old_out;
+                    let new_contrib = exp_new * v_val;
+                    out_acc[out_offset] = (corrected_old + new_contrib) / new_sum;
+                }
+
+                // Update statistics
+                running_max = new_max;
+                running_sum = new_sum;
             }
-
-            // Compute dot product Q[thread_in_tile] @ K[local_kv_idx]
-            let mut score = F::new(0.0);
-            for dim_idx in 0..config.head_dim {
-                let q_val = q_tile[thread_in_tile * config.head_dim + dim_idx];
-                let k_val = k_tile[local_kv_idx * config.head_dim + dim_idx];
-                score = score + q_val * k_val;
-            }
-            score = score * scale;
-
-            // Online softmax update
-            let new_max = F::max(running_max, score);
-            let exp_old = F::exp(running_max - new_max);
-            let exp_new = F::exp(score - new_max);
-
-            // Update running sum with correction factor
-            let new_sum = exp_old * running_sum + exp_new;
-
-            // Update output: O_new = (exp_old * l_old * O_old + exp_new * V) / l_new
-            for dim_idx in 0..config.head_dim {
-                let out_offset = thread_in_tile * config.head_dim + dim_idx;
-                let old_out = out_acc[out_offset];
-                let v_val = v_tile[local_kv_idx * config.head_dim + dim_idx];
-
-                // Apply correction and add new contribution
-                let corrected_old = exp_old * running_sum * old_out;
-                let new_contrib = exp_new * v_val;
-                out_acc[out_offset] = (corrected_old + new_contrib) / new_sum;
-            }
-
-            // Update statistics
-            running_max = new_max;
-            running_sum = new_sum;
         }
-        sync_units();
+        sync_cube();
     }
 
     // Write output to global memory
-    for dim_idx in 0..config.head_dim {
-        let out_offset = base_offset + q_row_global * config.head_dim + dim_idx;
-        let tile_offset = thread_in_tile * config.head_dim + dim_idx;
+    for dim_idx in 0..head_dim {
+        let out_offset = base_offset + q_row_global * head_dim + dim_idx;
+        let tile_offset = thread_in_tile * head_dim + dim_idx;
         out[out_offset] = out_acc[tile_offset];
     }
 }
@@ -426,9 +450,7 @@ fn launch_cubecl_attention(
     scale: f64,
     config: &FlashAttentionConfig,
 ) -> Result<Tensor> {
-    use super::interop::{
-        allocate_output_buffer, candle_to_cubecl_handle, cubecl_to_candle_tensor,
-    };
+    use super::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     // Extract dimensions
     let dims = q.dims();
@@ -446,26 +468,31 @@ fn launch_cubecl_attention(
     );
 
     // Convert tensors to byte arrays
+    // PERF: This performs inefficient GPU→CPU→GPU transfers
+    // candle_to_cubecl_handle() copies CUDA tensor data to CPU (see interop.rs:131),
+    // then client.create() copies it back to GPU. For CUDA tensors, we should
+    // extract the GPU pointer directly without round-tripping through CPU memory.
+    // This significantly impacts performance and will be optimized in Phase 2.
+    // TODO: Implement direct GPU pointer extraction for CUDA tensors
     let (q_bytes, _, _) = candle_to_cubecl_handle(q)?;
     let (k_bytes, _, _) = candle_to_cubecl_handle(k)?;
     let (v_bytes, _, _) = candle_to_cubecl_handle(v)?;
 
     // Allocate output buffer
     let num_elements = batch * num_heads * seq_len * head_dim;
-    let mut out_bytes = allocate_output_buffer(num_elements);
 
     // Get CubeCL CUDA client
     let device = cubecl_cuda::CudaDevice::new(0);
     let client = CudaRuntime::client(&device);
 
-    // Create CubeCL handles
-    let q_handle = client.create(bytemuck::cast_slice::<u8, f32>(&q_bytes));
-    let k_handle = client.create(bytemuck::cast_slice::<u8, f32>(&k_bytes));
-    let v_handle = client.create(bytemuck::cast_slice::<u8, f32>(&v_bytes));
-    let out_handle = client.empty(num_elements);
+    // Create CubeCL handles - data is already in bytes from candle_to_cubecl_handle
+    let q_handle = client.create(&q_bytes);
+    let k_handle = client.create(&k_bytes);
+    let v_handle = client.create(&v_bytes);
+    let out_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
-    // Configure kernel launch
-    let tile_config = TileConfig {
+    // Configure kernel launch (tile_config preserved for future tiled kernel)
+    let _tile_config = TileConfig {
         tile_size: config.tile_size,
         head_dim: head_dim as u32,
         seq_len: seq_len as u32,
@@ -477,16 +504,28 @@ fn launch_cubecl_attention(
     let cube_count = CubeCount::Static((batch * num_heads) as u32, seq_len as u32, 1);
 
     // Block: head_dim threads (each handles one element)
-    // Clamp to max 256 for Phase 1; will optimize later
-    let block_size = (head_dim as u32).min(256);
+    // FIXME: Clamping to 256 threads is incorrect for head_dim > 256
+    // The kernel's reduction logic assumes all threads up to head_dim participate.
+    // Currently only supports head_dim <= 256. For larger head_dim, the kernel
+    // needs rewriting to handle multi-pass reduction or tiled computation.
+    // See kernel.rs lines 144-162 for the reduction code that makes this assumption.
+    let block_size = Ord::min(head_dim as u32, 256);
+    if head_dim > 256 {
+        tracing::warn!(
+            "head_dim={} exceeds maximum supported block size of 256. \
+             Results WILL BE INCORRECT. This will be fixed in Phase 2 tiled kernel.",
+            head_dim
+        );
+    }
     let cube_dim = CubeDim::new(block_size, 1, 1);
 
     // Scale as f32
     let scale_f32 = scale as f32;
 
-    // Launch kernel
+    // Launch kernel with runtime dimension parameters
+    // SAFETY: ArrayArg::from_raw_parts requires handles to be valid and num_elements to match
     unsafe {
-        flash_attention_tile::launch_unchecked::<f32, CudaRuntime>(
+        flash_attention_tile::launch::<f32, CudaRuntime>(
             &client,
             cube_count,
             cube_dim,
@@ -495,16 +534,15 @@ fn launch_cubecl_attention(
             ArrayArg::from_raw_parts::<f32>(&v_handle, num_elements, 1),
             ArrayArg::from_raw_parts::<f32>(&out_handle, num_elements, 1),
             ScalarArg::new(scale_f32),
-            tile_config,
+            ScalarArg::new(seq_len as u32),
+            ScalarArg::new(head_dim as u32),
         );
     }
 
     // Synchronize and read output
-    let output_data: Vec<f32> = client.read(out_handle.binding());
+    let output_bytes = client.read_one(out_handle);
 
     // Convert back to Candle tensor
-    let output_bytes: Vec<u8> = output_data.iter().flat_map(|f| f.to_le_bytes()).collect();
-
     cubecl_to_candle_tensor(
         &output_bytes,
         &[batch, num_heads, seq_len, head_dim],

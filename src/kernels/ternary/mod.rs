@@ -53,13 +53,15 @@
 //! - **Accuracy**: <2% perplexity degradation post-calibration
 
 pub mod attention;
-#[cfg(feature = "cuda")]
-pub mod attention_cubecl;
+// TODO: Re-enable once CubeCL API compatibility is fixed
+// #[cfg(feature = "cuda")]
+// pub mod attention_cubecl;
 pub mod config;
 pub mod linear;
 pub mod matmul;
-#[cfg(feature = "cuda")]
-pub mod matmul_cubecl;
+// TODO: Re-enable once CubeCL API compatibility is fixed
+// #[cfg(feature = "cuda")]
+// pub mod matmul_cubecl;
 pub mod model;
 pub mod quantize;
 pub mod types;

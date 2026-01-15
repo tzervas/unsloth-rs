@@ -1,0 +1,50 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+
+title = "Gitleaks Config"
+
+[extend]
+# Use default gitleaks rules
+useDefault = true
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''(^|/)target/''',
+    '''(^|/)\.git/''',
+    '''Cargo\.lock$''',
+]
+
+# Rust-specific patterns that may trigger false positives
+regexes = [
+    # Test fixtures with dummy values
+    '''(?i)test.*=.*["'][a-z0-9]{32,}["']''',
+    # Documentation examples
+    '''(?i)example.*key.*=''',
+]
+
+[[rules]]
+id = "rust-api-key-pattern"
+description = "Potential API key in Rust code"
+regex = '''(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*["'][a-zA-Z0-9]{20,}["']'''
+tags = ["key", "API"]
+
+[[rules]]
+id = "env-credential"
+description = "Hardcoded credential in env or config"
+regex = '''(?i)(password|passwd|pwd|secret)\s*[:=]\s*["'][^"']{8,}["']'''
+tags = ["credential"]
+paths = [
+    '''\.rs$''',
+    '''\.toml$''',
+    '''\.yaml$''',
+    '''\.yml$''',
+]
+
+# Allowlist for test files
+[[rules.allowlist]]
+paths = [
+    '''tests/''',
+    '''benches/''',
+    '''examples/''',
+]

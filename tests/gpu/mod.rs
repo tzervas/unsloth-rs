@@ -47,7 +47,7 @@ pub fn is_gpu_available() -> bool {
                     // Verify we can actually compute on the GPU
                     match tensor.sum_all() {
                         Ok(_) => {
-                            tracing::info!("GPU detected and functional: {}", device);
+                            tracing::info!("GPU detected and functional: {:?}", device);
                             true
                         }
                         Err(e) => {
@@ -104,13 +104,13 @@ macro_rules! require_gpu {
     () => {
         if !crate::gpu::is_gpu_available() {
             eprintln!("SKIP: Test requires CUDA GPU - use 'cargo test --features cuda'");
-            return;
+            return Ok(());
         }
     };
     ($min_vram_gb:expr) => {
         if !crate::gpu::is_gpu_available() {
             eprintln!("SKIP: Test requires CUDA GPU - use 'cargo test --features cuda'");
-            return;
+            return Ok(());
         }
 
         if let Some(info) = crate::gpu::get_gpu_info() {
@@ -119,11 +119,11 @@ macro_rules! require_gpu {
                     "SKIP: Test requires {}GB VRAM, available: {:.1}GB",
                     $min_vram_gb, info.available_memory_gb
                 );
-                return;
+                return Ok(());
             }
         } else {
             eprintln!("SKIP: Cannot determine GPU VRAM capacity");
-            return;
+            return Ok(());
         }
     };
 }

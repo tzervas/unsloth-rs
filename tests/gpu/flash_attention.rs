@@ -295,7 +295,7 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
         let q_gpu = q_cpu.to_device(&cuda_device)?;
         let k_gpu = k_cpu.to_device(&cuda_device)?;
         let v_gpu = v_cpu.to_device(&cuda_device)?;
-        let mask_gpu = mask_cpu.map(|m| m.to_device(&cuda_device)).transpose()?;
+        let mask_gpu = mask_cpu.as_ref().map(|m| m.to_device(&cuda_device)).transpose()?;
 
         // GPU Flash Attention computation
         let gpu_output = flash_attention_cubecl(&q_gpu, &k_gpu, &v_gpu, scale, mask_gpu.as_ref())?;
@@ -530,11 +530,13 @@ fn test_flash_attention_different_configs() -> Result<()> {
 
     // Test different head configurations
     // NOTE: GQA (q_heads != kv_heads) is not yet supported
-    // TODO: Add GQA support and enable tests: (8, 4), (8, 1)
+    // TODO: Add GQA support and re-enable with feature flag
     let head_configs = vec![
         (4, 4), // MHA: same number of Q and KV heads
-        // (8, 4), // GQA: more Q heads than KV heads - TODO
-        // (8, 1), // Extreme GQA: many Q heads, single KV head - TODO
+        #[cfg(feature = "gqa_support")]
+        (8, 4), // GQA: more Q heads than KV heads
+        #[cfg(feature = "gqa_support")]
+        (8, 1), // Extreme GQA: many Q heads, single KV head
     ];
 
     for (q_heads, kv_heads) in head_configs {
@@ -665,7 +667,8 @@ fn test_flash_attention_large_sequences() -> Result<()> {
 
         // Reasonable execution time - CPU fallback is slower, so use generous limit
         // TODO: Tighten this once CubeCL kernel is optimized
-        let max_time_ms = (seq_len * seq_len / 30) as u128; // Allow for CPU fallback
+        // Use quadratic model with tighter cap, compute in u128 to avoid overflow
+        let max_time_ms = (((seq_len as u128) * (seq_len as u128)) / 3000).max(500); // Allow for CPU fallback
         assert!(
             execution_time_ms < max_time_ms,
             "Execution time {}ms too slow for seq_len={} (expected < {}ms)",

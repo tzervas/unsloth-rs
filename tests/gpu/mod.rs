@@ -98,6 +98,45 @@ pub fn get_gpu_info() -> Option<GpuInfo> {
 }
 
 /// Skip a test if GPU is not available with informative message.
+///
+/// # Usage
+///
+/// This macro should be used at the beginning of GPU tests. It checks for GPU
+/// availability and skips the test if no GPU is found.
+///
+/// ## For tests returning `Result<()>`:
+/// ```rust,ignore
+/// #[test]
+/// fn test_gpu_feature() -> Result<()> {
+///     require_gpu!();
+///     // ... test code
+/// }
+/// ```
+///
+/// ## For tests returning `Result<()>` with VRAM requirement:
+/// ```rust,ignore
+/// #[test]
+/// fn test_large_gpu_feature() -> Result<()> {
+///     require_gpu!(8.0); // Requires 8GB VRAM
+///     // ... test code
+/// }
+/// ```
+///
+/// # Note
+///
+/// Currently, this macro only supports test functions that return `Result<()>`.
+/// For tests that return `()`, use explicit GPU checks instead:
+///
+/// ```rust,ignore
+/// #[test]
+/// fn test_gpu_unit() {
+///     if !is_gpu_available() {
+///         eprintln!("SKIP: No GPU available");
+///         return;
+///     }
+///     // ... test code
+/// }
+/// ```
 #[cfg(feature = "cuda")]
 #[macro_export]
 macro_rules! require_gpu {

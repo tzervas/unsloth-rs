@@ -528,13 +528,9 @@ fn test_flash_attention_different_configs() -> Result<()> {
         dtype: DType::F32,
     };
 
-    // Test different head configurations
-    // NOTE: GQA (q_heads != kv_heads) is not yet supported
-    // TODO: Add GQA support and enable tests: (8, 4), (8, 1)
+    // Test different head configurations (MHA only - GQA has separate ignored tests)
     let head_configs = vec![
         (4, 4), // MHA: same number of Q and KV heads
-        // (8, 4), // GQA: more Q heads than KV heads - TODO
-        // (8, 1), // Extreme GQA: many Q heads, single KV head - TODO
     ];
 
     for (q_heads, kv_heads) in head_configs {
@@ -592,6 +588,91 @@ fn test_flash_attention_different_configs() -> Result<()> {
     }
 
     println!("✅ Flash Attention configuration test passed");
+    Ok(())
+}
+
+/// Test Flash Attention with GQA: 8 query heads, 4 key/value heads.
+///
+/// GQA (Grouped Query Attention) uses fewer KV heads than Q heads to reduce
+/// memory usage while maintaining quality. This configuration has 2 Q heads
+/// per KV head.
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "GQA not yet supported - enable when GQA support is added"]
+fn test_flash_attention_gqa_8_4() -> Result<()> {
+    crate::require_gpu!(1.0);
+
+    let config = AttentionTestConfig {
+        batch_size: 1,
+        num_heads: 8,       // Q heads
+        num_kv_heads: Some(4),  // KV heads (GQA ratio 2:1)
+        seq_len: 256,
+        head_dim: 64,
+        use_causal_mask: false,
+        dtype: DType::F32,
+    };
+
+    let cuda_device = Device::new_cuda(0)?;
+    let (q, k, v, mask) = create_test_tensors(&config, &cuda_device)?;
+    let scale = 1.0 / (config.head_dim as f64).sqrt();
+
+    let output = flash_attention_cubecl(&q, &k, &v, scale, mask.as_ref())?;
+
+    // Validate output shape matches Q heads (not KV heads)
+    assert_eq!(
+        output.dims(),
+        &[config.batch_size, config.num_heads, config.seq_len, config.head_dim]
+    );
+
+    // Validate output is reasonable (no NaN/Inf)
+    let values: Vec<f32> = output.flatten_all()?.to_vec1()?;
+    for v in values.iter().take(100) {
+        assert!(v.is_finite(), "Output contains non-finite value: {}", v);
+    }
+
+    println!("✅ Flash Attention GQA 8:4 test passed");
+    Ok(())
+}
+
+/// Test Flash Attention with extreme GQA: 8 query heads, 1 key/value head.
+///
+/// This is the most extreme GQA configuration (also called MQA - Multi-Query
+/// Attention), where all Q heads share a single KV head.
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "GQA not yet supported - enable when GQA support is added"]
+fn test_flash_attention_gqa_8_1() -> Result<()> {
+    crate::require_gpu!(1.0);
+
+    let config = AttentionTestConfig {
+        batch_size: 1,
+        num_heads: 8,       // Q heads
+        num_kv_heads: Some(1),  // Single KV head (MQA/extreme GQA)
+        seq_len: 256,
+        head_dim: 64,
+        use_causal_mask: false,
+        dtype: DType::F32,
+    };
+
+    let cuda_device = Device::new_cuda(0)?;
+    let (q, k, v, mask) = create_test_tensors(&config, &cuda_device)?;
+    let scale = 1.0 / (config.head_dim as f64).sqrt();
+
+    let output = flash_attention_cubecl(&q, &k, &v, scale, mask.as_ref())?;
+
+    // Validate output shape matches Q heads (not KV heads)
+    assert_eq!(
+        output.dims(),
+        &[config.batch_size, config.num_heads, config.seq_len, config.head_dim]
+    );
+
+    // Validate output is reasonable (no NaN/Inf)
+    let values: Vec<f32> = output.flatten_all()?.to_vec1()?;
+    for v in values.iter().take(100) {
+        assert!(v.is_finite(), "Output contains non-finite value: {}", v);
+    }
+
+    println!("✅ Flash Attention GQA 8:1 (MQA) test passed");
     Ok(())
 }
 

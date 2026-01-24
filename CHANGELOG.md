@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-01-24
+
+### Added
+- **Examples directory** with runnable examples:
+  - `basic_attention.rs` - FusedAttention demonstration
+  - `ternary_quantization.rs` - Ternary quantization with compression stats
+- Comprehensive documentation for all training.rs functions
+- CLAUDE.md for Claude Code development workflow
+- Feature flags for experimental GPU kernels
+
+### Fixed
+- All clippy warnings resolved with strategic allows
+- Documentation formatting and completeness
+
+### Known Limitations (1.0)
+- Flash Attention uses CPU reference implementation with Candle CUDA dispatch (not fused CubeCL kernel)
+- Ternary quantization GPU kernels are experimental and not validated
+- Gradient checkpointing is stub-only (returns NotImplemented error)
+- Full CubeCL GPU kernel validation pending RTX 5080 hardware
+
 ### Fixed
 - Gradient checkpointing stub now returns proper error instead of panicking
 - Updated documentation to accurately reflect implemented vs planned features

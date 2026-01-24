@@ -18,8 +18,8 @@ tracing = "0.1"
 bytemuck = { version = "1.21", features = ["derive"] }
 
 # GPU compute - CubeCL for cross-platform GPU kernels (v0.8.1 validated Jan 2026)
-cubecl = "0.8.1"
-cubecl-cuda = { version = "0.8.1", optional = true }
+cubecl = "0.9.0"
+cubecl-cuda = { version = "0.9.0", optional = true }
 # Tensor-core accelerated matmul for Q@K^T and Attn@V operations
 # Note: Fallback to manual implementation initially; integrate once validated
 # cubek-matmul = { git = "https://github.com/tracel-ai/cubek" }

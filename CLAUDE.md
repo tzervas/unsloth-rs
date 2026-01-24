@@ -133,7 +133,7 @@ cargo bench -p unsloth-rs --features cuda
 - [x] SwiGLU activation
 - [x] Memory estimation
 - [x] Ternary quantization (experimental)
-- [x] 148 passing tests
+- [x] 160 passing tests
 - [ ] FlashAttention-style memory optimization
 - [ ] Fused attention kernel
 - [ ] KV cache management

@@ -26,7 +26,7 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 - ✅ Ternary quantization (5-15x compression achieved)
 - ✅ Mixed precision training utilities (FP32/FP16/BF16)
 - ✅ Benchmarking suite (CPU)
-- ✅ 148 passing tests (100% pass rate)
+- ✅ 160 passing tests (100% pass rate)
 
 ### In Progress
 - 🚧 Flash Attention CubeCL GPU kernel (Phase 1 complete, Phase 2 ready for RTX 5080 validation)
@@ -44,14 +44,14 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 
 ```toml
 [dependencies]
-unsloth-rs = "0.1"
+unsloth-rs = "1.0.0"
 ```
 
 For CUDA support (uses Candle's CUDA backend):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "0.1", features = ["cuda"] }
+unsloth-rs = { version = "1.0.0", features = ["cuda"] }
 ```
 
 ## Usage

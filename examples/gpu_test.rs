@@ -1,10 +1,9 @@
 //! Simple GPU test to verify CubeCL CUDA is working
 
-use std::time::Instant;
-
 fn main() {
     #[cfg(feature = "cuda")]
     {
+        use std::time::Instant;
         use cubecl::prelude::*;
         use cubecl_cuda::CudaRuntime;
 

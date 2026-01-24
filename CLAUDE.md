@@ -138,7 +138,7 @@ cargo bench -p unsloth-rs --features cuda
 - [ ] Fused attention kernel
 - [ ] KV cache management
 - [ ] Benchmark suite vs PyTorch/Triton
-- [ ] Examples directory
+- [x] Examples directory
 - [ ] 100% doc coverage
 
 ## Common Issues

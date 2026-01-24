@@ -15,7 +15,7 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 
 ## Status
 
-**⚠️ Early Development** - This project is in early development. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
+**Version 1.0.0** - Core functionality stable. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
 
 ### Implemented
 - ✅ Multi-head attention (CPU reference, Candle CUDA backend)

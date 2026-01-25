@@ -2,7 +2,7 @@
 name = "unsloth-rs"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.92"
+rust-version = "1.70"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
 description = "Rust implementations of transformer building blocks for LLM inference"

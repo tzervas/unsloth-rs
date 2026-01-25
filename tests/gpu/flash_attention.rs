@@ -358,7 +358,10 @@ fn test_flash_attention_gpu_performance() -> Result<()> {
         let q_gpu = q_cpu.to_device(&cuda_device)?;
         let k_gpu = k_cpu.to_device(&cuda_device)?;
         let v_gpu = v_cpu.to_device(&cuda_device)?;
-        let mask_gpu = mask_cpu.as_ref().map(|m| m.to_device(&cuda_device)).transpose()?;
+        let mask_gpu = mask_cpu
+            .as_ref()
+            .map(|m| m.to_device(&cuda_device))
+            .transpose()?;
 
         // Warm up GPU
         for _ in 0..3 {
@@ -604,8 +607,8 @@ fn test_flash_attention_gqa_8_4() -> Result<()> {
 
     let config = AttentionTestConfig {
         batch_size: 1,
-        num_heads: 8,       // Q heads
-        num_kv_heads: Some(4),  // KV heads (GQA ratio 2:1)
+        num_heads: 8,          // Q heads
+        num_kv_heads: Some(4), // KV heads (GQA ratio 2:1)
         seq_len: 256,
         head_dim: 64,
         use_causal_mask: false,
@@ -621,7 +624,12 @@ fn test_flash_attention_gqa_8_4() -> Result<()> {
     // Validate output shape matches Q heads (not KV heads)
     assert_eq!(
         output.dims(),
-        &[config.batch_size, config.num_heads, config.seq_len, config.head_dim]
+        &[
+            config.batch_size,
+            config.num_heads,
+            config.seq_len,
+            config.head_dim
+        ]
     );
 
     // Validate output is reasonable (no NaN/Inf)
@@ -646,8 +654,8 @@ fn test_flash_attention_gqa_8_1() -> Result<()> {
 
     let config = AttentionTestConfig {
         batch_size: 1,
-        num_heads: 8,       // Q heads
-        num_kv_heads: Some(1),  // Single KV head (MQA/extreme GQA)
+        num_heads: 8,          // Q heads
+        num_kv_heads: Some(1), // Single KV head (MQA/extreme GQA)
         seq_len: 256,
         head_dim: 64,
         use_causal_mask: false,
@@ -663,7 +671,12 @@ fn test_flash_attention_gqa_8_1() -> Result<()> {
     // Validate output shape matches Q heads (not KV heads)
     assert_eq!(
         output.dims(),
-        &[config.batch_size, config.num_heads, config.seq_len, config.head_dim]
+        &[
+            config.batch_size,
+            config.num_heads,
+            config.seq_len,
+            config.head_dim
+        ]
     );
 
     // Validate output is reasonable (no NaN/Inf)

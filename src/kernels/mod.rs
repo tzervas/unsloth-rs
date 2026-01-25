@@ -55,4 +55,3 @@ pub use fused_swiglu::{fused_ffn_swiglu, swiglu as swiglu_cubecl, swiglu_backwar
 pub use ternary::{
     CalibrationMethod, SparsityMetadata, TernaryConfig, TernaryLinear, TernaryPlanes, TernaryTensor,
 };
-

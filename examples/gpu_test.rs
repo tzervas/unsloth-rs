@@ -3,9 +3,9 @@
 fn main() {
     #[cfg(feature = "cuda")]
     {
-        use std::time::Instant;
         use cubecl::prelude::*;
         use cubecl_cuda::CudaRuntime;
+        use std::time::Instant;
 
         println!("Testing CubeCL CUDA...");
 
@@ -17,7 +17,9 @@ fn main() {
 
         // Simple test: create and read back data
         let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(f32::as_bytes(&data).to_vec()));
+        let handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(
+            f32::as_bytes(&data).to_vec(),
+        ));
 
         let output_bytes = client.read_one(handle);
         let output_data: &[f32] = f32::from_bytes(&output_bytes);
@@ -52,9 +54,12 @@ fn main() {
 
             // Create tensors on CUDA device to actually test GPU kernel
             let cuda_device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
-            let q = Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
-            let k = Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
-            let v = Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let q =
+                Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let k =
+                Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let v =
+                Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
 
             let scale = 1.0 / (head_dim as f64).sqrt();
             let config = FlashAttentionConfig::default();
@@ -72,12 +77,14 @@ fn main() {
                 }
             }
         }
-        
+
         println!("\n✓ Flash Attention kernel tests passed!");
     }
 
     #[cfg(not(feature = "cuda"))]
     {
-        println!("CUDA feature not enabled. Run with: cargo run --example gpu_test --features cuda");
+        println!(
+            "CUDA feature not enabled. Run with: cargo run --example gpu_test --features cuda"
+        );
     }
 }

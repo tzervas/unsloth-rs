@@ -437,8 +437,10 @@ fn flash_attention_tiled<F: Float + CubeElement>(
                 let kv_row_global = kv_start + local_kv_idx;
                 for dim_idx in 0u32..(head_dim) {
                     let dim_idx_usize = dim_idx as usize;
-                    let k_offset = base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
-                    let v_offset = base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
+                    let k_offset =
+                        base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
+                    let v_offset =
+                        base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
                     let tile_offset = local_kv_idx * (head_dim as usize) + dim_idx_usize;
                     k_tile[tile_offset] = k[k_offset];
                     v_tile[tile_offset] = v[v_offset];
@@ -659,7 +661,10 @@ fn launch_cubecl_attention(
                 ScalarArg::new(seq_len as u32),
                 ScalarArg::new(head_dim as u32),
                 ScalarArg::new(block_size),
-            ).map_err(|e| UnslothError::Kernel(format!("flash_attention_causal kernel launch failed: {e}")))?;
+            )
+            .map_err(|e| {
+                UnslothError::Kernel(format!("flash_attention_causal kernel launch failed: {e}"))
+            })?;
         } else {
             flash_attention_tile::launch::<f32, CudaRuntime>(
                 &client,
@@ -673,7 +678,10 @@ fn launch_cubecl_attention(
                 ScalarArg::new(seq_len as u32),
                 ScalarArg::new(head_dim as u32),
                 ScalarArg::new(block_size),
-            ).map_err(|e| UnslothError::Kernel(format!("flash_attention_tile kernel launch failed: {e}")))?;
+            )
+            .map_err(|e| {
+                UnslothError::Kernel(format!("flash_attention_tile kernel launch failed: {e}"))
+            })?;
         }
     }
 
@@ -768,7 +776,10 @@ fn fallback_attention(
 }
 
 /// Create a causal mask tensor with -inf in upper triangle.
-fn create_causal_mask_tensor(seq_len: usize, device: &candle_core::Device) -> UnslothResult<Tensor> {
+fn create_causal_mask_tensor(
+    seq_len: usize,
+    device: &candle_core::Device,
+) -> UnslothResult<Tensor> {
     let mut mask_data = vec![0.0f32; seq_len * seq_len];
     for i in 0..seq_len {
         for j in 0..seq_len {

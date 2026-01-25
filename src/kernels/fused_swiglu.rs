@@ -125,7 +125,8 @@ fn swiglu_backward_kernel<F: Float + CubeElement>(
     grad_up[idx] = g_out * silu_gate;
 
     // silu'(gate) = sigmoid(gate) * (1 + gate * (1 - sigmoid(gate)))
-    let silu_grad = sigmoid_gate * (F::cast_from(1.0f32) + gate_val * (F::cast_from(1.0f32) - sigmoid_gate));
+    let silu_grad =
+        sigmoid_gate * (F::cast_from(1.0f32) + gate_val * (F::cast_from(1.0f32) - sigmoid_gate));
 
     // grad_gate = grad_output * up * silu'(gate)
     grad_gate[idx] = g_out * up_val * silu_grad;
@@ -467,7 +468,8 @@ fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
             ArrayArg::from_raw_parts::<f32>(&up_handle, num_elements, 1),
             ArrayArg::from_raw_parts::<f32>(&output_handle, num_elements, 1),
             ScalarArg::new(num_elements as u32),
-        ).map_err(|e| UnslothError::Kernel(format!("swiglu_kernel launch failed: {e}")))?;
+        )
+        .map_err(|e| UnslothError::Kernel(format!("swiglu_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -518,7 +520,8 @@ fn launch_swiglu_backward_kernel(
             ArrayArg::from_raw_parts::<f32>(&grad_gate_handle, num_elements, 1),
             ArrayArg::from_raw_parts::<f32>(&grad_up_handle, num_elements, 1),
             ScalarArg::new(num_elements as u32),
-        ).map_err(|e| UnslothError::Kernel(format!("swiglu_backward_kernel launch failed: {e}")))?;
+        )
+        .map_err(|e| UnslothError::Kernel(format!("swiglu_backward_kernel launch failed: {e}")))?;
     }
 
     let grad_gate_bytes = client.read_one(grad_gate_handle);
@@ -629,27 +632,9 @@ mod tests {
         let intermediate_dim = 128;
 
         let input = Tensor::randn(0.0f32, 1.0, (batch, seq_len, hidden_dim), &device).unwrap();
-        let w1 = Tensor::randn(
-            0.0f32,
-            0.1,
-            (intermediate_dim, hidden_dim),
-            &device,
-        )
-        .unwrap();
-        let w3 = Tensor::randn(
-            0.0f32,
-            0.1,
-            (intermediate_dim, hidden_dim),
-            &device,
-        )
-        .unwrap();
-        let w2 = Tensor::randn(
-            0.0f32,
-            0.1,
-            (hidden_dim, intermediate_dim),
-            &device,
-        )
-        .unwrap();
+        let w1 = Tensor::randn(0.0f32, 0.1, (intermediate_dim, hidden_dim), &device).unwrap();
+        let w3 = Tensor::randn(0.0f32, 0.1, (intermediate_dim, hidden_dim), &device).unwrap();
+        let w2 = Tensor::randn(0.0f32, 0.1, (hidden_dim, intermediate_dim), &device).unwrap();
 
         let output = fused_ffn_swiglu(&input, &w1, &w3, &w2).unwrap();
 

@@ -54,8 +54,14 @@ fn main() -> Result<()> {
     println!("=== Quantization Statistics ===");
     println!("Distribution:");
     println!("  Sparsity (zeros): {:.2}%", stats.sparsity * 100.0);
-    println!("  Positive values (+1): {:.2}%", stats.positive_ratio * 100.0);
-    println!("  Negative values (-1): {:.2}%", stats.negative_ratio * 100.0);
+    println!(
+        "  Positive values (+1): {:.2}%",
+        stats.positive_ratio * 100.0
+    );
+    println!(
+        "  Negative values (-1): {:.2}%",
+        stats.negative_ratio * 100.0
+    );
     println!();
 
     println!("Quantization error:");
@@ -65,11 +71,11 @@ fn main() -> Result<()> {
 
     // Display scale statistics
     let avg_scale = stats.scales.iter().sum::<f32>() / stats.scales.len() as f32;
-    let min_scale = stats
+    let min_scale = stats.scales.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+    let max_scale = stats
         .scales
         .iter()
-        .fold(f32::INFINITY, |a, &b| a.min(b));
-    let max_scale = stats.scales.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
 
     println!("Scale statistics:");
     println!("  Average scale: {:.6}", avg_scale);
@@ -83,7 +89,10 @@ fn main() -> Result<()> {
     println!("  Compression ratio: {:.2}x", compression_ratio);
 
     let (ternary_out, ternary_in) = ternary_tensor.dims();
-    println!("  Ternary tensor dimensions: [{}, {}]", ternary_out, ternary_in);
+    println!(
+        "  Ternary tensor dimensions: [{}, {}]",
+        ternary_out, ternary_in
+    );
 
     let memory_saved_bytes = original_size as f32 - (original_size as f32 / compression_ratio);
     let memory_saved_mb = memory_saved_bytes / (1024.0 * 1024.0);
@@ -109,8 +118,14 @@ fn main() -> Result<()> {
 
     println!("\n=== Example completed successfully! ===");
     println!("\nKey takeaways:");
-    println!("  - Ternary quantization reduces memory by {:.1}x", compression_ratio);
-    println!("  - {:.1}% of weights are quantized to zero", stats.sparsity * 100.0);
+    println!(
+        "  - Ternary quantization reduces memory by {:.1}x",
+        compression_ratio
+    );
+    println!(
+        "  - {:.1}% of weights are quantized to zero",
+        stats.sparsity * 100.0
+    );
     println!("  - Mean quantization error: {:.6}", stats.mean_error);
 
     Ok(())

@@ -168,7 +168,8 @@ fn fused_rmsnorm_rope_kernel<F: Float + CubeElement>(
         terminate!();
     }
 
-    let base_idx = ((batch_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (hidden_dim as usize);
+    let base_idx =
+        ((batch_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (hidden_dim as usize);
     let is_active = (tid as usize) < (hidden_dim as usize);
     let half_head = (head_dim / 2) as usize;
 
@@ -291,7 +292,8 @@ fn rope_kernel<F: Float + CubeElement>(
     }
 
     let half_head = (head_dim / 2) as usize;
-    let base_idx = ((batch_head_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (head_dim as usize);
+    let base_idx =
+        ((batch_head_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (head_dim as usize);
     let is_active = (tid as usize) < (head_dim as usize);
 
     if is_active {
@@ -424,16 +426,8 @@ pub fn fused_rmsnorm_rope(
     {
         if input.device().is_cuda() {
             return launch_fused_rmsnorm_rope_kernel(
-                input,
-                weight,
-                cos_cache,
-                sin_cache,
-                batch_size,
-                seq_len,
-                hidden_dim,
-                head_dim,
-                num_heads,
-                eps,
+                input, weight, cos_cache, sin_cache, batch_size, seq_len, hidden_dim, head_dim,
+                num_heads, eps,
             );
         }
     }
@@ -515,7 +509,8 @@ fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothRe
             ScalarArg::new(hidden_dim as u32),
             ScalarArg::new(eps as f32),
             ScalarArg::new(block_size),
-        ).map_err(|e| UnslothError::Kernel(format!("rmsnorm_kernel launch failed: {e}")))?;
+        )
+        .map_err(|e| UnslothError::Kernel(format!("rmsnorm_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -580,7 +575,10 @@ fn launch_fused_rmsnorm_rope_kernel(
             ScalarArg::new(num_heads as u32),
             ScalarArg::new(eps as f32),
             ScalarArg::new(block_size),
-        ).map_err(|e| UnslothError::Kernel(format!("fused_rmsnorm_rope_kernel launch failed: {e}")))?;
+        )
+        .map_err(|e| {
+            UnslothError::Kernel(format!("fused_rmsnorm_rope_kernel launch failed: {e}"))
+        })?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -639,7 +637,8 @@ fn launch_rope_kernel(
             ScalarArg::new(seq_len as u32),
             ScalarArg::new(head_dim as u32),
             ScalarArg::new(block_size),
-        ).map_err(|e| UnslothError::Kernel(format!("rope_kernel launch failed: {e}")))?;
+        )
+        .map_err(|e| UnslothError::Kernel(format!("rope_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -752,8 +751,7 @@ mod tests {
         let batch_size = 2;
         let seq_len = 4;
 
-        let input =
-            Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, hidden_dim), &device).unwrap();
+        let input = Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, hidden_dim), &device).unwrap();
         let weight = Tensor::ones((hidden_dim,), DType::F32, &device).unwrap();
 
         let output = rmsnorm(&input, &weight, 1e-5).unwrap();
@@ -794,20 +792,13 @@ mod tests {
         let hidden_dim = num_heads * head_dim;
         let half_dim = head_dim / 2;
 
-        let input =
-            Tensor::randn(0.0f32, 1.0, (batch, seq_len, hidden_dim), &device).unwrap();
+        let input = Tensor::randn(0.0f32, 1.0, (batch, seq_len, hidden_dim), &device).unwrap();
         let weight = Tensor::ones((hidden_dim,), DType::F32, &device).unwrap();
         let cos_cache = Tensor::ones((seq_len, half_dim), DType::F32, &device).unwrap();
         let sin_cache = Tensor::zeros((seq_len, half_dim), DType::F32, &device).unwrap();
 
         let output = fused_rmsnorm_rope(
-            &input,
-            &weight,
-            &cos_cache,
-            &sin_cache,
-            head_dim,
-            num_heads,
-            1e-5,
+            &input, &weight, &cos_cache, &sin_cache, head_dim, num_heads, 1e-5,
         )
         .unwrap();
         assert_eq!(output.dims(), input.dims());

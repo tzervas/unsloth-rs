@@ -17,7 +17,7 @@ fn main() {
 
         // Simple test: create and read back data
         let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let handle = client.create(f32::as_bytes(&data));
+        let handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(f32::as_bytes(&data).to_vec()));
 
         let output_bytes = client.read_one(handle);
         let output_data: &[f32] = f32::from_bytes(&output_bytes);

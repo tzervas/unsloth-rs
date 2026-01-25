@@ -406,7 +406,9 @@ pub fn fused_rmsnorm_rope(
         )));
     }
 
+    #[cfg(feature = "cuda")]
     let batch_size = input_shape[0];
+    #[cfg(feature = "cuda")]
     let seq_len = input_shape[1];
     let hidden_dim = input_shape[2];
 

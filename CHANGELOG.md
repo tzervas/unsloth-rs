@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-01-24
+
+### Added
+- CPU fallback warning when CUDA is unavailable
+
+### Changed
+- Bumped minimum Rust version to 1.92
+- README badges added for crates.io and docs.rs
+
 ## [1.0.0] - 2026-01-24
 
 ### Added

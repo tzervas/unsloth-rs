@@ -99,21 +99,20 @@ pub fn get_gpu_info() -> Option<GpuInfo> {
 
 /// Skip a test if GPU is not available with informative message.
 ///
-/// This macro supports both `Result<()>` and `()` return types by using
-/// `Default::default()` which returns `Ok(())` for Result and `()` for unit.
+/// This macro works with `Result<(), _>` return types by returning `Ok(())`.
 #[cfg(feature = "cuda")]
 #[macro_export]
 macro_rules! require_gpu {
     () => {
         if !crate::gpu::is_gpu_available() {
             eprintln!("SKIP: Test requires CUDA GPU - use 'cargo test --features cuda'");
-            return Default::default();
+            return Ok(());
         }
     };
     ($min_vram_gb:expr) => {
         if !crate::gpu::is_gpu_available() {
             eprintln!("SKIP: Test requires CUDA GPU - use 'cargo test --features cuda'");
-            return Default::default();
+            return Ok(());
         }
 
         if let Some(info) = crate::gpu::get_gpu_info() {
@@ -122,11 +121,11 @@ macro_rules! require_gpu {
                     "SKIP: Test requires {}GB VRAM, available: {:.1}GB",
                     $min_vram_gb, info.available_memory_gb
                 );
-                return Default::default();
+                return Ok(());
             }
         } else {
             eprintln!("SKIP: Cannot determine GPU VRAM capacity");
-            return Default::default();
+            return Ok(());
         }
     };
 }
@@ -144,17 +143,16 @@ pub fn get_gpu_info() -> Option<()> {
 
 /// Fallback macro that skips tests when CUDA feature is not enabled.
 ///
-/// This macro supports both `Result<()>` and `()` return types by using
-/// `Default::default()` which returns `Ok(())` for Result and `()` for unit.
+/// This macro works with `Result<(), _>` return types by returning `Ok(())`.
 #[cfg(not(feature = "cuda"))]
 #[macro_export]
 macro_rules! require_gpu {
     () => {
         eprintln!("SKIP: CUDA feature not enabled - use 'cargo test --features cuda'");
-        return Default::default();
+        return Ok(());
     };
     ($min_vram_gb:expr) => {
         eprintln!("SKIP: CUDA feature not enabled - use 'cargo test --features cuda'");
-        return Default::default();
+        return Ok(());
     };
 }

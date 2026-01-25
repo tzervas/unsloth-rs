@@ -2,6 +2,8 @@
 
 Rust implementations of transformer building blocks for LLM inference and fine-tuning.
 
+[![Crates.io](https://img.shields.io/crates/v/unsloth-rs.svg)](https://crates.io/crates/unsloth-rs)
+[![Documentation](https://docs.rs/unsloth-rs/badge.svg)](https://docs.rs/unsloth-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview

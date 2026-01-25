@@ -33,7 +33,7 @@
 //! ### Fused Operation
 //! Applies RMSNorm first, then RoPE, in a single kernel pass.
 
-use crate::error::{Result, UnslothError};
+use crate::error::{Result as UnslothResult, UnslothError};
 use candle_core::Tensor;
 
 #[cfg(feature = "cuda")]
@@ -62,7 +62,7 @@ const WARP_SIZE: u32 = 32;
 /// Block: (min(hidden_dim, MAX_BLOCK_SIZE), 1, 1)
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn rmsnorm_kernel<F: Float>(
+fn rmsnorm_kernel<F: Float + CubeElement>(
     input: &Array<F>,      // [num_rows, hidden_dim]
     weight: &Array<F>,     // [hidden_dim]
     output: &mut Array<F>, // [num_rows, hidden_dim]
@@ -73,33 +73,33 @@ fn rmsnorm_kernel<F: Float>(
     let row_idx = CUBE_POS_X;
     let tid = UNIT_POS_X;
 
-    let base_idx = row_idx * hidden_dim;
-    let is_active = tid < hidden_dim;
+    let base_idx = (row_idx as usize) * (hidden_dim as usize);
+    let is_active = (tid as usize) < (hidden_dim as usize);
 
     // Shared memory for reduction
-    let mut shared_sq = SharedMemory::<F>::new(1024);
+    let mut shared_sq = SharedMemory::<F>::new(1024usize);
 
     // Step 1: Compute sum of squares for this row
-    let mut local_sum = F::new(0.0);
+    let mut local_sum = F::cast_from(0.0f32);
     if is_active {
         // Handle hidden_dim > block_size with striding
-        let mut i = tid;
-        while i < hidden_dim {
+        let mut i = tid as usize;
+        while i < (hidden_dim as usize) {
             let val = input[base_idx + i];
             local_sum = local_sum + val * val;
-            i = i + block_size;
+            i = i + (block_size as usize);
         }
     }
-    shared_sq[tid] = local_sum;
+    shared_sq[tid as usize] = local_sum;
     sync_cube();
 
     // Tree reduction for sum of squares
-    let mut stride = block_size / 2;
+    let mut stride = (block_size / 2) as usize;
     while stride > 0 {
-        if tid < stride {
-            let partner_idx = tid + stride;
-            if partner_idx < block_size {
-                shared_sq[tid] = shared_sq[tid] + shared_sq[partner_idx];
+        if (tid as usize) < stride {
+            let partner_idx = (tid as usize) + stride;
+            if partner_idx < (block_size as usize) {
+                shared_sq[tid as usize] = shared_sq[tid as usize] + shared_sq[partner_idx];
             }
         }
         sync_cube();
@@ -108,12 +108,12 @@ fn rmsnorm_kernel<F: Float>(
 
     // Compute inverse RMS and broadcast
     let sum_sq = shared_sq[0];
-    let mean_sq = sum_sq / F::new(hidden_dim as f32);
-    let rms = sqrt(mean_sq + eps);
-    let inv_rms = F::new(1.0) / rms;
+    let mean_sq = sum_sq / F::cast_from(hidden_dim as f32);
+    let rms = F::sqrt(mean_sq + eps);
+    let inv_rms = F::cast_from(1.0f32) / rms;
 
     // Store inv_rms in shared memory for all threads
-    if tid == 0 {
+    if tid as usize == 0 {
         shared_sq[0] = inv_rms;
     }
     sync_cube();
@@ -121,12 +121,12 @@ fn rmsnorm_kernel<F: Float>(
 
     // Step 2: Apply normalization with striding
     if is_active {
-        let mut i = tid;
-        while i < hidden_dim {
+        let mut i = tid as usize;
+        while i < (hidden_dim as usize) {
             let val = input[base_idx + i];
             let w = weight[i];
             output[base_idx + i] = val * inv_rms_val * w;
-            i = i + block_size;
+            i = i + (block_size as usize);
         }
     }
 }
@@ -145,7 +145,7 @@ fn rmsnorm_kernel<F: Float>(
 /// 3. Each head gets RoPE applied based on sequence position
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn fused_rmsnorm_rope_kernel<F: Float>(
+fn fused_rmsnorm_rope_kernel<F: Float + CubeElement>(
     input: &Array<F>,      // [batch, seq_len, hidden_dim]
     weight: &Array<F>,     // RMSNorm weight [hidden_dim]
     cos_cache: &Array<F>,  // Precomputed cos [max_seq, head_dim/2]
@@ -155,7 +155,7 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
     seq_len: u32,
     hidden_dim: u32,
     head_dim: u32,
-    num_heads: u32,
+    _num_heads: u32,
     eps: F,
     block_size: u32,
 ) {
@@ -168,33 +168,33 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
         terminate!();
     }
 
-    let base_idx = (batch_idx * seq_len + seq_idx) * hidden_dim;
-    let is_active = tid < hidden_dim;
-    let half_head = head_dim / 2;
+    let base_idx = ((batch_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (hidden_dim as usize);
+    let is_active = (tid as usize) < (hidden_dim as usize);
+    let half_head = (head_dim / 2) as usize;
 
     // Shared memory for reduction and intermediate values
-    let mut shared = SharedMemory::<F>::new(1024);
+    let mut shared = SharedMemory::<F>::new(1024usize);
 
     // ========== Step 1: Compute RMS ==========
-    let mut local_sum = F::new(0.0);
+    let mut local_sum = F::cast_from(0.0f32);
     if is_active {
-        let mut i = tid;
-        while i < hidden_dim {
+        let mut i = tid as usize;
+        while i < (hidden_dim as usize) {
             let val = input[base_idx + i];
             local_sum = local_sum + val * val;
-            i = i + block_size;
+            i = i + (block_size as usize);
         }
     }
-    shared[tid] = local_sum;
+    shared[tid as usize] = local_sum;
     sync_cube();
 
     // Tree reduction
-    let mut stride = block_size / 2;
+    let mut stride = (block_size / 2) as usize;
     while stride > 0 {
-        if tid < stride {
-            let partner_idx = tid + stride;
-            if partner_idx < block_size {
-                shared[tid] = shared[tid] + shared[partner_idx];
+        if (tid as usize) < stride {
+            let partner_idx = (tid as usize) + stride;
+            if partner_idx < (block_size as usize) {
+                shared[tid as usize] = shared[tid as usize] + shared[partner_idx];
             }
         }
         sync_cube();
@@ -203,11 +203,11 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
 
     // Compute and broadcast inv_rms
     let sum_sq = shared[0];
-    let mean_sq = sum_sq / F::new(hidden_dim as f32);
-    let rms = sqrt(mean_sq + eps);
-    let inv_rms = F::new(1.0) / rms;
+    let mean_sq = sum_sq / F::cast_from(hidden_dim as f32);
+    let rms = F::sqrt(mean_sq + eps);
+    let inv_rms = F::cast_from(1.0f32) / rms;
 
-    if tid == 0 {
+    if tid as usize == 0 {
         shared[0] = inv_rms;
     }
     sync_cube();
@@ -216,15 +216,15 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
     // ========== Step 2: Apply RMSNorm and RoPE together ==========
     // Process elements in pairs for RoPE
     if is_active {
-        let mut i = tid;
-        while i < hidden_dim {
+        let mut i = tid as usize;
+        while i < (hidden_dim as usize) {
             // First apply RMSNorm
             let input_val = input[base_idx + i];
             let normed = input_val * inv_rms_val * weight[i];
 
             // Determine head and position within head
-            let head_idx = i / head_dim;
-            let pos_in_head = i % head_dim;
+            let _head_idx = i / (head_dim as usize);
+            let pos_in_head = i % (head_dim as usize);
 
             // Apply RoPE based on position in head
             if pos_in_head < half_head {
@@ -236,7 +236,7 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
                 let pair_normed = pair_input * inv_rms_val * weight[pair_idx];
 
                 // Get cos/sin for this position
-                let cache_idx = seq_idx * half_head + pos_in_head;
+                let cache_idx = (seq_idx as usize) * half_head + pos_in_head;
                 let cos_val = cos_cache[cache_idx];
                 let sin_val = sin_cache[cache_idx];
 
@@ -251,7 +251,7 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
                 let pair_normed = pair_input * inv_rms_val * weight[pair_idx];
 
                 // Get cos/sin for this position
-                let cache_idx = seq_idx * half_head + (pos_in_head - half_head);
+                let cache_idx = (seq_idx as usize) * half_head + (pos_in_head - half_head);
                 let cos_val = cos_cache[cache_idx];
                 let sin_val = sin_cache[cache_idx];
 
@@ -259,7 +259,7 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
                 output[base_idx + i] = pair_normed * sin_val + normed * cos_val;
             }
 
-            i = i + block_size;
+            i = i + (block_size as usize);
         }
     }
 }
@@ -269,7 +269,7 @@ fn fused_rmsnorm_rope_kernel<F: Float>(
 /// Applies rotary position embeddings to pre-normalized Q/K tensors.
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn rope_kernel<F: Float>(
+fn rope_kernel<F: Float + CubeElement>(
     input: &Array<F>,      // [batch, num_heads, seq_len, head_dim]
     cos_cache: &Array<F>,  // [max_seq, head_dim/2]
     sin_cache: &Array<F>,  // [max_seq, head_dim/2]
@@ -290,13 +290,13 @@ fn rope_kernel<F: Float>(
         terminate!();
     }
 
-    let half_head = head_dim / 2;
-    let base_idx = (batch_head_idx * seq_len + seq_idx) * head_dim;
-    let is_active = tid < head_dim;
+    let half_head = (head_dim / 2) as usize;
+    let base_idx = ((batch_head_idx as usize) * (seq_len as usize) + (seq_idx as usize)) * (head_dim as usize);
+    let is_active = (tid as usize) < (head_dim as usize);
 
     if is_active {
-        let mut i = tid;
-        while i < head_dim {
+        let mut i = tid as usize;
+        while i < (head_dim as usize) {
             let pos_in_head = i;
 
             if pos_in_head < half_head {
@@ -304,7 +304,7 @@ fn rope_kernel<F: Float>(
                 let x = input[base_idx + pos_in_head];
                 let y = input[base_idx + pos_in_head + half_head];
 
-                let cache_idx = seq_idx * half_head + pos_in_head;
+                let cache_idx = (seq_idx as usize) * half_head + pos_in_head;
                 let cos_val = cos_cache[cache_idx];
                 let sin_val = sin_cache[cache_idx];
 
@@ -315,14 +315,14 @@ fn rope_kernel<F: Float>(
                 let x = input[base_idx + local_pos];
                 let y = input[base_idx + pos_in_head];
 
-                let cache_idx = seq_idx * half_head + local_pos;
+                let cache_idx = (seq_idx as usize) * half_head + local_pos;
                 let cos_val = cos_cache[cache_idx];
                 let sin_val = sin_cache[cache_idx];
 
                 output[base_idx + pos_in_head] = x * sin_val + y * cos_val;
             }
 
-            i = i + block_size;
+            i = i + (block_size as usize);
         }
     }
 }
@@ -340,7 +340,7 @@ fn rope_kernel<F: Float>(
 ///
 /// # Returns
 /// Normalized tensor with same shape as input
-pub fn rmsnorm(input: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+pub fn rmsnorm(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tensor> {
     // Validate inputs
     let input_shape = input.dims();
     let weight_shape = weight.dims();
@@ -397,7 +397,7 @@ pub fn fused_rmsnorm_rope(
     head_dim: usize,
     num_heads: usize,
     eps: f64,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     let input_shape = input.dims();
     if input_shape.len() != 3 {
         return Err(UnslothError::InvalidConfig(format!(
@@ -406,8 +406,8 @@ pub fn fused_rmsnorm_rope(
         )));
     }
 
-    let _batch_size = input_shape[0];
-    let _seq_len = input_shape[1];
+    let batch_size = input_shape[0];
+    let seq_len = input_shape[1];
     let hidden_dim = input_shape[2];
 
     // Validate dimensions
@@ -449,7 +449,7 @@ pub fn fused_rmsnorm_rope(
 ///
 /// # Returns
 /// Tensor with RoPE applied
-pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> Result<Tensor> {
+pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothResult<Tensor> {
     let input_shape = input.dims();
     if input_shape.len() != 4 {
         return Err(UnslothError::InvalidConfig(format!(
@@ -474,7 +474,7 @@ pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> Result<Te
 // ============================================================================
 
 #[cfg(feature = "cuda")]
-fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     let input_shape = input.dims();
@@ -491,16 +491,17 @@ fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> Result<Te
     let device = cubecl_cuda::CudaDevice::new(0);
     let client = CudaRuntime::client(&device);
 
-    // Create handles
-    let input_handle = client.create(&input_bytes);
-    let weight_handle = client.create(&weight_bytes);
+    // Create handles - CubeCL 0.9 requires Bytes type
+    let input_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(input_bytes));
+    let weight_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(weight_bytes));
     let output_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
     // Launch configuration
     let block_size = (hidden_dim as u32).min(MAX_BLOCK_SIZE).next_power_of_two();
     let cube_count = CubeCount::Static(num_rows as u32, 1, 1);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         rmsnorm_kernel::launch::<f32, CudaRuntime>(
             &client,
@@ -512,7 +513,7 @@ fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> Result<Te
             ScalarArg::new(hidden_dim as u32),
             ScalarArg::new(eps as f32),
             ScalarArg::new(block_size),
-        );
+        ).map_err(|e| UnslothError::Kernel(format!("rmsnorm_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -531,7 +532,7 @@ fn launch_fused_rmsnorm_rope_kernel(
     head_dim: usize,
     num_heads: usize,
     eps: f64,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     // Convert to bytes
@@ -547,18 +548,19 @@ fn launch_fused_rmsnorm_rope_kernel(
     let device = cubecl_cuda::CudaDevice::new(0);
     let client = CudaRuntime::client(&device);
 
-    // Create handles
-    let input_handle = client.create(&input_bytes);
-    let weight_handle = client.create(&weight_bytes);
-    let cos_handle = client.create(&cos_bytes);
-    let sin_handle = client.create(&sin_bytes);
+    // Create handles - CubeCL 0.9 requires Bytes type
+    let input_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(input_bytes));
+    let weight_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(weight_bytes));
+    let cos_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(cos_bytes));
+    let sin_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(sin_bytes));
     let output_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
     // Launch configuration
     let block_size = (hidden_dim as u32).min(MAX_BLOCK_SIZE).next_power_of_two();
     let cube_count = CubeCount::Static(batch_size as u32, seq_len as u32, 1);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         fused_rmsnorm_rope_kernel::launch::<f32, CudaRuntime>(
             &client,
@@ -576,7 +578,7 @@ fn launch_fused_rmsnorm_rope_kernel(
             ScalarArg::new(num_heads as u32),
             ScalarArg::new(eps as f32),
             ScalarArg::new(block_size),
-        );
+        ).map_err(|e| UnslothError::Kernel(format!("fused_rmsnorm_rope_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -588,7 +590,7 @@ fn launch_rope_kernel(
     input: &Tensor,
     cos_cache: &Tensor,
     sin_cache: &Tensor,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     let dims = input.dims();
@@ -609,17 +611,18 @@ fn launch_rope_kernel(
     let device = cubecl_cuda::CudaDevice::new(0);
     let client = CudaRuntime::client(&device);
 
-    // Create handles
-    let input_handle = client.create(&input_bytes);
-    let cos_handle = client.create(&cos_bytes);
-    let sin_handle = client.create(&sin_bytes);
+    // Create handles - CubeCL 0.9 requires Bytes type
+    let input_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(input_bytes));
+    let cos_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(cos_bytes));
+    let sin_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(sin_bytes));
     let output_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
     // Launch configuration
     let block_size = (head_dim as u32).min(MAX_BLOCK_SIZE).next_power_of_two();
     let cube_count = CubeCount::Static((batch_size * num_heads) as u32, seq_len as u32, 1);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         rope_kernel::launch::<f32, CudaRuntime>(
             &client,
@@ -634,7 +637,7 @@ fn launch_rope_kernel(
             ScalarArg::new(seq_len as u32),
             ScalarArg::new(head_dim as u32),
             ScalarArg::new(block_size),
-        );
+        ).map_err(|e| UnslothError::Kernel(format!("rope_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -645,7 +648,7 @@ fn launch_rope_kernel(
 // CPU Fallback Implementations
 // ============================================================================
 
-fn rmsnorm_cpu(input: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+fn rmsnorm_cpu(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tensor> {
     // RMS = sqrt(mean(x^2) + eps)
     let x_sq = input.sqr()?;
     let mean_sq = x_sq.mean_keepdim(input.rank() - 1)?;
@@ -665,7 +668,7 @@ fn fused_rmsnorm_rope_cpu(
     sin_cache: &Tensor,
     head_dim: usize,
     eps: f64,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     // Step 1: Apply RMSNorm
     let normalized = rmsnorm_cpu(input, weight, eps)?;
 
@@ -705,7 +708,7 @@ fn fused_rmsnorm_rope_cpu(
     Ok(output)
 }
 
-fn rope_cpu(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> Result<Tensor> {
+fn rope_cpu(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothResult<Tensor> {
     let dims = input.dims();
     let seq_len = dims[2];
     let head_dim = dims[3];

@@ -30,7 +30,7 @@
 //! - Enables better instruction-level parallelism
 //! - Reduces kernel launch overhead
 
-use crate::error::{Result, UnslothError};
+use crate::error::{Result as UnslothResult, UnslothError};
 use candle_core::Tensor;
 
 #[cfg(feature = "cuda")]
@@ -48,8 +48,8 @@ const _MAX_BLOCK_SIZE: u32 = 1024;
 /// SiLU (Swish) activation: x * sigmoid(x)
 #[cfg(feature = "cuda")]
 #[cube]
-fn silu<F: Float>(x: F) -> F {
-    let sigmoid = F::new(1.0) / (F::new(1.0) + exp(-x));
+fn silu<F: Float + CubeElement>(x: F) -> F {
+    let sigmoid = F::cast_from(1.0f32) / (F::cast_from(1.0f32) + F::exp(-x));
     x * sigmoid
 }
 
@@ -64,7 +64,7 @@ fn silu<F: Float>(x: F) -> F {
 /// Block: (block_size, 1, 1)
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn swiglu_kernel<F: Float>(
+fn swiglu_kernel<F: Float + CubeElement>(
     gate: &Array<F>,       // Gate projection output [*, intermediate_dim]
     up: &Array<F>,         // Up projection output [*, intermediate_dim]
     output: &mut Array<F>, // SwiGLU output [*, intermediate_dim]
@@ -72,7 +72,7 @@ fn swiglu_kernel<F: Float>(
 ) {
     let idx = ABSOLUTE_POS;
 
-    if idx >= num_elements {
+    if idx >= (num_elements as usize) {
         terminate!();
     }
 
@@ -80,7 +80,7 @@ fn swiglu_kernel<F: Float>(
     let up_val = up[idx];
 
     // SiLU(gate) = gate * sigmoid(gate)
-    let sigmoid_gate = F::new(1.0) / (F::new(1.0) + exp(-gate_val));
+    let sigmoid_gate = F::cast_from(1.0f32) / (F::cast_from(1.0f32) + F::exp(-gate_val));
     let silu_gate = gate_val * sigmoid_gate;
 
     // SwiGLU = SiLU(gate) * up
@@ -97,7 +97,7 @@ fn swiglu_kernel<F: Float>(
 ///                = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn swiglu_backward_kernel<F: Float>(
+fn swiglu_backward_kernel<F: Float + CubeElement>(
     grad_output: &Array<F>, // Gradient from downstream
     gate: &Array<F>,        // Original gate values
     up: &Array<F>,          // Original up values
@@ -107,7 +107,7 @@ fn swiglu_backward_kernel<F: Float>(
 ) {
     let idx = ABSOLUTE_POS;
 
-    if idx >= num_elements {
+    if idx >= (num_elements as usize) {
         terminate!();
     }
 
@@ -116,7 +116,7 @@ fn swiglu_backward_kernel<F: Float>(
     let up_val = up[idx];
 
     // Compute sigmoid(gate)
-    let sigmoid_gate = F::new(1.0) / (F::new(1.0) + exp(-gate_val));
+    let sigmoid_gate = F::cast_from(1.0f32) / (F::cast_from(1.0f32) + F::exp(-gate_val));
 
     // Compute silu(gate) = gate * sigmoid(gate)
     let silu_gate = gate_val * sigmoid_gate;
@@ -125,7 +125,7 @@ fn swiglu_backward_kernel<F: Float>(
     grad_up[idx] = g_out * silu_gate;
 
     // silu'(gate) = sigmoid(gate) * (1 + gate * (1 - sigmoid(gate)))
-    let silu_grad = sigmoid_gate * (F::new(1.0) + gate_val * (F::new(1.0) - sigmoid_gate));
+    let silu_grad = sigmoid_gate * (F::cast_from(1.0f32) + gate_val * (F::cast_from(1.0f32) - sigmoid_gate));
 
     // grad_gate = grad_output * up * silu'(gate)
     grad_gate[idx] = g_out * up_val * silu_grad;
@@ -137,15 +137,15 @@ fn swiglu_backward_kernel<F: Float>(
 /// This improves memory coalescing and bandwidth utilization.
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn swiglu_vectorized_kernel<F: Float>(
+fn swiglu_vectorized_kernel<F: Float + CubeElement>(
     gate: &Array<Line<F>>,       // Gate as 4-element vectors
     up: &Array<Line<F>>,         // Up as 4-element vectors
     output: &mut Array<Line<F>>, // Output as 4-element vectors
-    num_vectors: u32,
+    #[comptime] num_vectors: u32,
 ) {
     let idx = ABSOLUTE_POS;
 
-    if idx >= num_vectors {
+    if idx >= (num_vectors as usize) {
         terminate!();
     }
 
@@ -153,17 +153,14 @@ fn swiglu_vectorized_kernel<F: Float>(
     let up_vec = up[idx];
 
     // Process each element of the vector
-    // SwiGLU element-wise
-    let mut out_vec = Line::<F>::empty(4);
-
-    for i in 0..4u32 {
+    // SwiGLU element-wise using vectorized = 4 elements
+    #[unroll]
+    for i in 0..4 {
         let g = gate_vec[i];
         let u = up_vec[i];
-        let sigmoid_g = F::new(1.0) / (F::new(1.0) + exp(-g));
-        out_vec[i] = g * sigmoid_g * u;
+        let sigmoid_g = F::cast_from(1.0f32) / (F::cast_from(1.0f32) + F::exp(-g));
+        output[idx][i] = g * sigmoid_g * u;
     }
-
-    output[idx] = out_vec;
 }
 
 /// Fused FFN with SwiGLU kernel (advanced optimization).
@@ -182,11 +179,11 @@ fn swiglu_vectorized_kernel<F: Float>(
 /// highly optimized cuBLAS/cuDNN GEMM implementations.
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn fused_ffn_swiglu_tiled_kernel<F: Float>(
+fn fused_ffn_swiglu_tiled_kernel<F: Float + CubeElement>(
     input: &Array<F>,      // [M, K] where M = batch*seq, K = hidden_dim
     w1: &Array<F>,         // [K, N] gate projection
     w3: &Array<F>,         // [K, N] up projection
-    w2: &Array<F>,         // [N, K] down projection
+    _w2: &Array<F>,        // [N, K] down projection (unused in this phase)
     output: &mut Array<F>, // [M, K]
     m_val: u32,            // batch * seq_len
     k_val: u32,            // hidden_dim
@@ -199,14 +196,16 @@ fn fused_ffn_swiglu_tiled_kernel<F: Float>(
 
     let row = CUBE_POS_X * tile_size + UNIT_POS_Y;
     let col = CUBE_POS_Y * tile_size + UNIT_POS_X;
-    let tid_x = UNIT_POS_X;
-    let tid_y = UNIT_POS_Y;
+    let tid_x = UNIT_POS_X as usize;
+    let tid_y = UNIT_POS_Y as usize;
 
-    // Shared memory for tiles
-    let mut input_tile = SharedMemory::<F>::new(tile_size * tile_size);
-    let mut w1_tile = SharedMemory::<F>::new(tile_size * tile_size);
-    let mut w3_tile = SharedMemory::<F>::new(tile_size * tile_size);
-    let mut swiglu_tile = SharedMemory::<F>::new(tile_size * tile_size);
+    // Shared memory for tiles (fixed size for CubeCL 0.9)
+    let tile_size_usize = tile_size as usize;
+    let _tile_size_sq = tile_size_usize * tile_size_usize;
+    let mut input_tile = SharedMemory::<F>::new(1024usize);
+    let mut w1_tile = SharedMemory::<F>::new(1024usize);
+    let mut w3_tile = SharedMemory::<F>::new(1024usize);
+    let mut swiglu_tile = SharedMemory::<F>::new(1024usize);
 
     // Bounds check
     if row >= m_val || col >= k_val {
@@ -214,8 +213,8 @@ fn fused_ffn_swiglu_tiled_kernel<F: Float>(
     }
 
     // Step 1: Compute gate = input @ W1 and up = input @ W3 tile by tile
-    let mut gate_acc = F::new(0.0);
-    let mut up_acc = F::new(0.0);
+    let mut gate_acc = F::cast_from(0.0f32);
+    let mut up_acc = F::cast_from(0.0f32);
 
     let num_tiles = (k_val + tile_size - 1) / tile_size;
     for t in 0..num_tiles {
@@ -223,47 +222,53 @@ fn fused_ffn_swiglu_tiled_kernel<F: Float>(
 
         // Load input tile
         let input_row = row;
-        let input_col = tile_start + tid_x;
-        if input_row < m_val && input_col < k_val {
-            input_tile[tid_y * tile_size + tid_x] = input[input_row * k_val + input_col];
+        let input_col = (tile_start as usize) + tid_x;
+        if input_row < m_val && (input_col as u32) < k_val {
+            let input_idx = (input_row as usize * (k_val as usize)) + input_col;
+            input_tile[(tid_y * tile_size_usize) + tid_x] = input[input_idx];
         } else {
-            input_tile[tid_y * tile_size + tid_x] = F::new(0.0);
+            input_tile[(tid_y * tile_size_usize) + tid_x] = F::cast_from(0.0f32);
         }
 
         // Load W1 tile
-        let w1_row = tile_start + tid_y;
-        let w1_col = col; // Actually N dimension
-        if w1_row < k_val && w1_col < n_val {
-            w1_tile[tid_y * tile_size + tid_x] = w1[w1_row * n_val + w1_col];
+        let w1_row = (tile_start as usize) + tid_y;
+        let w1_col = col as usize; // Actually N dimension
+        if (w1_row as u32) < k_val && (w1_col as u32) < n_val {
+            let w1_idx = ((w1_row as u32) as usize * (n_val as usize)) + w1_col;
+            w1_tile[(tid_y * tile_size_usize) + tid_x] = w1[w1_idx];
         } else {
-            w1_tile[tid_y * tile_size + tid_x] = F::new(0.0);
+            w1_tile[(tid_y * tile_size_usize) + tid_x] = F::cast_from(0.0f32);
         }
 
         // Load W3 tile
-        if w1_row < k_val && w1_col < n_val {
-            w3_tile[tid_y * tile_size + tid_x] = w3[w1_row * n_val + w1_col];
+        if (w1_row as u32) < k_val && (w1_col as u32) < n_val {
+            let w3_idx = ((w1_row as u32) as usize * (n_val as usize)) + w1_col;
+            w3_tile[(tid_y * tile_size_usize) + tid_x] = w3[w3_idx];
         } else {
-            w3_tile[tid_y * tile_size + tid_x] = F::new(0.0);
+            w3_tile[(tid_y * tile_size_usize) + tid_x] = F::cast_from(0.0f32);
         }
 
         sync_cube();
 
         // Compute partial dot products
         for k in 0..tile_size {
-            let input_val = input_tile[tid_y * tile_size + k];
-            gate_acc = gate_acc + input_val * w1_tile[k * tile_size + tid_x];
-            up_acc = up_acc + input_val * w3_tile[k * tile_size + tid_x];
+            let k_usize = k as usize;
+            let input_val = input_tile[(tid_y * tile_size_usize) + k_usize];
+            let w1_val = w1_tile[(k_usize * tile_size_usize) + tid_x];
+            let w3_val = w3_tile[(k_usize * tile_size_usize) + tid_x];
+            gate_acc = gate_acc + input_val * w1_val;
+            up_acc = up_acc + input_val * w3_val;
         }
 
         sync_cube();
     }
 
     // Step 2: Apply SwiGLU
-    let sigmoid_gate = F::new(1.0) / (F::new(1.0) + exp(-gate_acc));
+    let sigmoid_gate = F::cast_from(1.0f32) / (F::cast_from(1.0f32) + F::exp(-gate_acc));
     let swiglu_val = gate_acc * sigmoid_gate * up_acc;
 
     // Store SwiGLU result in shared memory for next matmul
-    swiglu_tile[tid_y * tile_size + tid_x] = swiglu_val;
+    swiglu_tile[(tid_y * tile_size_usize) + tid_x] = swiglu_val;
     sync_cube();
 
     // Step 3: Compute output = swiglu_result @ W2
@@ -274,7 +279,8 @@ fn fused_ffn_swiglu_tiled_kernel<F: Float>(
     if row < m_val && col < n_val {
         // This is the intermediate activation
         // In a full implementation, we'd do another matmul with W2
-        output[row * n_val + col] = swiglu_val;
+        let output_idx = (row as usize * (n_val as usize)) + (col as usize);
+        output[output_idx] = swiglu_val;
     }
 }
 
@@ -300,7 +306,7 @@ fn fused_ffn_swiglu_tiled_kernel<F: Float>(
 /// let activated = swiglu(&hidden, &up)?;
 /// let output = linear(&activated, &w2)?;  // Down projection
 /// ```
-pub fn swiglu(gate: &Tensor, up: &Tensor) -> Result<Tensor> {
+pub fn swiglu(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     // Validate shapes match
     if gate.dims() != up.dims() {
         return Err(UnslothError::InvalidConfig(format!(
@@ -334,7 +340,7 @@ pub fn swiglu_backward(
     grad_output: &Tensor,
     gate: &Tensor,
     up: &Tensor,
-) -> Result<(Tensor, Tensor)> {
+) -> UnslothResult<(Tensor, Tensor)> {
     #[cfg(feature = "cuda")]
     {
         if grad_output.device().is_cuda() {
@@ -373,7 +379,7 @@ pub fn fused_ffn_swiglu(
     w1: &Tensor,
     w3: &Tensor,
     w2: &Tensor,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     // Validate dimensions
     let input_shape = input.dims();
     let w1_shape = w1.dims();
@@ -427,7 +433,7 @@ pub fn fused_ffn_swiglu(
 // ============================================================================
 
 #[cfg(feature = "cuda")]
-fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> Result<Tensor> {
+fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     let num_elements: usize = gate.dims().iter().product();
@@ -441,16 +447,17 @@ fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> Result<Tensor> {
     let client = CudaRuntime::client(&device);
 
     // Create handles
-    let gate_handle = client.create(&gate_bytes);
-    let up_handle = client.create(&up_bytes);
+    let gate_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(gate_bytes));
+    let up_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(up_bytes));
     let output_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
     // Launch configuration
     let block_size = 256u32;
     let num_blocks = (num_elements as u32 + block_size - 1) / block_size;
     let cube_count = CubeCount::Static(num_blocks, 1, 1);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         swiglu_kernel::launch::<f32, CudaRuntime>(
             &client,
@@ -460,7 +467,7 @@ fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> Result<Tensor> {
             ArrayArg::from_raw_parts::<f32>(&up_handle, num_elements, 1),
             ArrayArg::from_raw_parts::<f32>(&output_handle, num_elements, 1),
             ScalarArg::new(num_elements as u32),
-        );
+        ).map_err(|e| UnslothError::Kernel(format!("swiglu_kernel launch failed: {e}")))?;
     }
 
     let output_bytes = client.read_one(output_handle);
@@ -472,7 +479,7 @@ fn launch_swiglu_backward_kernel(
     grad_output: &Tensor,
     gate: &Tensor,
     up: &Tensor,
-) -> Result<(Tensor, Tensor)> {
+) -> UnslothResult<(Tensor, Tensor)> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     let num_elements: usize = gate.dims().iter().product();
@@ -487,9 +494,9 @@ fn launch_swiglu_backward_kernel(
     let client = CudaRuntime::client(&device);
 
     // Create handles
-    let grad_handle = client.create(&grad_bytes);
-    let gate_handle = client.create(&gate_bytes);
-    let up_handle = client.create(&up_bytes);
+    let grad_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(grad_bytes));
+    let gate_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(gate_bytes));
+    let up_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(up_bytes));
     let grad_gate_handle = client.empty(num_elements * std::mem::size_of::<f32>());
     let grad_up_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
@@ -497,8 +504,9 @@ fn launch_swiglu_backward_kernel(
     let block_size = 256u32;
     let num_blocks = (num_elements as u32 + block_size - 1) / block_size;
     let cube_count = CubeCount::Static(num_blocks, 1, 1);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         swiglu_backward_kernel::launch::<f32, CudaRuntime>(
             &client,
@@ -510,7 +518,7 @@ fn launch_swiglu_backward_kernel(
             ArrayArg::from_raw_parts::<f32>(&grad_gate_handle, num_elements, 1),
             ArrayArg::from_raw_parts::<f32>(&grad_up_handle, num_elements, 1),
             ScalarArg::new(num_elements as u32),
-        );
+        ).map_err(|e| UnslothError::Kernel(format!("swiglu_backward_kernel launch failed: {e}")))?;
     }
 
     let grad_gate_bytes = client.read_one(grad_gate_handle);
@@ -526,7 +534,7 @@ fn launch_swiglu_backward_kernel(
 // CPU Fallback Implementations
 // ============================================================================
 
-fn swiglu_cpu(gate: &Tensor, up: &Tensor) -> Result<Tensor> {
+fn swiglu_cpu(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     // SiLU(gate) = gate * sigmoid(gate)
     let silu_gate = candle_nn::ops::silu(gate)?;
 
@@ -540,7 +548,7 @@ fn swiglu_backward_cpu(
     grad_output: &Tensor,
     gate: &Tensor,
     up: &Tensor,
-) -> Result<(Tensor, Tensor)> {
+) -> UnslothResult<(Tensor, Tensor)> {
     // sigmoid(gate)
     let sigmoid_gate = candle_nn::ops::sigmoid(gate)?;
 

@@ -11,23 +11,23 @@ keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
 categories = ["science", "mathematics"]
 
 [dependencies]
-candle-core = "0.9.1"
-candle-nn = "0.9.1"
-thiserror = "2.0"
-tracing = "0.1"
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 bytemuck = { version = "1.21", features = ["derive"] }
 
-# GPU compute - CubeCL for cross-platform GPU kernels (v0.8.1 validated Jan 2026)
-cubecl = "0.8.1"
-cubecl-cuda = { version = "0.8.1", optional = true }
+# GPU compute - CubeCL for cross-platform GPU kernels
+cubecl = { workspace = true }
+cubecl-cuda = { workspace = true, optional = true }
 # Tensor-core accelerated matmul for Q@K^T and Attn@V operations
 # Note: Fallback to manual implementation initially; integrate once validated
 # cubek-matmul = { git = "https://github.com/tracel-ai/cubek" }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = { workspace = true }
 proptest = "1.9"
-anyhow = "1.0"
+anyhow = { workspace = true }
 
 [features]
 default = []

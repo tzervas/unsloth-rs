@@ -53,7 +53,7 @@
 
 use super::config::FlashAttentionConfig;
 use super::interop::has_cubecl_cuda_support;
-use crate::error::{Result, UnslothError};
+use crate::error::{Result as UnslothResult, UnslothError};
 use candle_core::Tensor;
 
 // CubeCL imports for kernel implementation
@@ -119,7 +119,7 @@ fn next_power_of_two(n: u32) -> u32 {
 /// Memory layout: [batch, heads, seq_len, head_dim] stored contiguously.
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn flash_attention_tile<F: Float>(
+fn flash_attention_tile<F: Float + CubeElement>(
     q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
     k: &Array<F>,       // Key [batch * heads * seq_len * head_dim]
     v: &Array<F>,       // Value [batch * heads * seq_len * head_dim]
@@ -131,19 +131,20 @@ fn flash_attention_tile<F: Float>(
     block_size_val: u32, // Actual block size being used
 ) {
     // Thread/block indices
-    let batch_head_idx = CUBE_POS_X; // Which (batch, head) pair
-    let q_row_idx = CUBE_POS_Y; // Which Q row within this batch-head
-    let tid = UNIT_POS_X; // Thread within block
+    let batch_head_idx = CUBE_POS_X; // Which (batch, head) pair (u32)
+    let q_row_idx = CUBE_POS_Y; // Which Q row within this batch-head (u32)
+    let tid = UNIT_POS_X; // Thread within block (u32)
+    let tid_usize = tid as usize; // Cast for array indexing
 
     // Strides for [batch*heads, seq_len, head_dim] layout
-    let head_stride = seq_len_val * head_dim_val;
+    let head_stride = (seq_len_val as usize) * (head_dim_val as usize);
 
     // Base offset for this batch-head
-    let base_offset = batch_head_idx * head_stride;
+    let base_offset = (batch_head_idx as usize) * head_stride;
 
     // Bounds check: threads beyond head_dim don't participate in main computation
     // but still participate in synchronization for correctness
-    let is_active = tid < head_dim_val;
+    let is_active = tid_usize < (head_dim_val as usize);
 
     // Initialize running statistics for online softmax
     let mut running_max = F::new(-1e30); // Running max of attention scores
@@ -152,20 +153,21 @@ fn flash_attention_tile<F: Float>(
 
     // Get Q value for this thread's position (only if active)
     let q_val = if is_active {
-        let q_offset = base_offset + q_row_idx * head_dim_val + tid;
+        let q_offset = base_offset + ((q_row_idx as usize) * (head_dim_val as usize) + tid_usize);
         q[q_offset]
     } else {
         F::new(0.0)
     };
 
     // Shared memory for reduction - sized to block_size (power of 2, max 1024)
-    let mut score_tile = SharedMemory::<F>::new(1024);
+    let mut score_tile = SharedMemory::<F>::new(1024usize);
 
     // Iterate over all K/V positions
-    for kv_idx in 0..seq_len_val {
+    for kv_idx in 0u32..(seq_len_val) {
+        let kv_idx_usize = kv_idx as usize;
         // Compute dot product contribution for this thread
         let score_contrib = if is_active {
-            let k_offset = base_offset + kv_idx * head_dim_val + tid;
+            let k_offset = base_offset + (kv_idx_usize * (head_dim_val as usize) + tid_usize);
             let k_val = k[k_offset];
             q_val * k_val
         } else {
@@ -173,18 +175,18 @@ fn flash_attention_tile<F: Float>(
         };
 
         // Store contribution in shared memory
-        score_tile[tid] = score_contrib;
+        score_tile[tid_usize] = score_contrib;
         sync_cube();
 
         // Tree reduction for sum - handles non-power-of-2 head_dim
         // by padding with zeros (inactive threads contribute 0)
-        let mut stride = block_size_val / 2;
+        let mut stride = (block_size_val / 2) as usize;
         while stride > 0 {
-            if tid < stride {
+            if tid_usize < stride {
                 // Only add if the partner thread has valid data
-                let partner_idx = tid + stride;
-                if partner_idx < block_size_val {
-                    score_tile[tid] = score_tile[tid] + score_tile[partner_idx];
+                let partner_idx = tid_usize + stride;
+                if partner_idx < (block_size_val as usize) {
+                    score_tile[tid_usize] = score_tile[tid_usize] + score_tile[partner_idx];
                 }
             }
             sync_cube();
@@ -211,7 +213,7 @@ fn flash_attention_tile<F: Float>(
 
         // Update output: scale old output and add new contribution
         if is_active {
-            let v_offset = base_offset + kv_idx * head_dim_val + tid;
+            let v_offset = base_offset + (kv_idx_usize * (head_dim_val as usize) + tid_usize);
             let v_val = v[v_offset];
             running_out = (exp_old * running_sum * running_out + exp_new * v_val) / new_sum;
         }
@@ -223,7 +225,7 @@ fn flash_attention_tile<F: Float>(
 
     // Write output (only active threads)
     if is_active {
-        let out_offset = base_offset + q_row_idx * head_dim_val + tid;
+        let out_offset = base_offset + ((q_row_idx as usize) * (head_dim_val as usize) + tid_usize);
         out[out_offset] = running_out;
     }
 }
@@ -234,7 +236,7 @@ fn flash_attention_tile<F: Float>(
 /// for autoregressive (causal) attention patterns.
 #[cfg(feature = "cuda")]
 #[cube(launch)]
-fn flash_attention_causal<F: Float>(
+fn flash_attention_causal<F: Float + CubeElement>(
     q: &Array<F>,
     k: &Array<F>,
     v: &Array<F>,
@@ -247,46 +249,48 @@ fn flash_attention_causal<F: Float>(
     let batch_head_idx = CUBE_POS_X;
     let q_row_idx = CUBE_POS_Y;
     let tid = UNIT_POS_X;
+    let tid_usize = tid as usize; // Cast for array indexing
 
-    let head_stride = seq_len_val * head_dim_val;
-    let base_offset = batch_head_idx * head_stride;
-    let is_active = tid < head_dim_val;
+    let head_stride = (seq_len_val as usize) * (head_dim_val as usize);
+    let base_offset = (batch_head_idx as usize) * head_stride;
+    let is_active = tid_usize < (head_dim_val as usize);
 
     let mut running_max = F::new(-1e30);
     let mut running_sum = F::new(0.0);
     let mut running_out = F::new(0.0);
 
     let q_val = if is_active {
-        let q_offset = base_offset + q_row_idx * head_dim_val + tid;
+        let q_offset = base_offset + ((q_row_idx as usize) * (head_dim_val as usize) + tid_usize);
         q[q_offset]
     } else {
         F::new(0.0)
     };
 
-    let mut score_tile = SharedMemory::<F>::new(1024);
+    let mut score_tile = SharedMemory::<F>::new(1024usize);
 
     // Causal masking: only attend to positions <= current position
     // kv_idx goes from 0 to q_row_idx (inclusive)
     let max_kv_idx = q_row_idx + 1;
 
-    for kv_idx in 0..max_kv_idx {
+    for kv_idx in 0u32..(max_kv_idx) {
+        let kv_idx_usize = kv_idx as usize;
         let score_contrib = if is_active {
-            let k_offset = base_offset + kv_idx * head_dim_val + tid;
+            let k_offset = base_offset + (kv_idx_usize * (head_dim_val as usize) + tid_usize);
             let k_val = k[k_offset];
             q_val * k_val
         } else {
             F::new(0.0)
         };
 
-        score_tile[tid] = score_contrib;
+        score_tile[tid_usize] = score_contrib;
         sync_cube();
 
-        let mut stride = block_size_val / 2;
+        let mut stride = (block_size_val / 2) as usize;
         while stride > 0 {
-            if tid < stride {
-                let partner_idx = tid + stride;
-                if partner_idx < block_size_val {
-                    score_tile[tid] = score_tile[tid] + score_tile[partner_idx];
+            if tid_usize < stride {
+                let partner_idx = tid_usize + stride;
+                if partner_idx < (block_size_val as usize) {
+                    score_tile[tid_usize] = score_tile[tid_usize] + score_tile[partner_idx];
                 }
             }
             sync_cube();
@@ -307,7 +311,7 @@ fn flash_attention_causal<F: Float>(
         let new_sum = exp_old * running_sum + exp_new;
 
         if is_active {
-            let v_offset = base_offset + kv_idx * head_dim_val + tid;
+            let v_offset = base_offset + (kv_idx_usize * (head_dim_val as usize) + tid_usize);
             let v_val = v[v_offset];
             running_out = (exp_old * running_sum * running_out + exp_new * v_val) / new_sum;
         }
@@ -317,7 +321,7 @@ fn flash_attention_causal<F: Float>(
     }
 
     if is_active {
-        let out_offset = base_offset + q_row_idx * head_dim_val + tid;
+        let out_offset = base_offset + ((q_row_idx as usize) * (head_dim_val as usize) + tid_usize);
         out[out_offset] = running_out;
     }
 }
@@ -354,7 +358,7 @@ fn flash_attention_causal<F: Float>(
 #[cfg(all(feature = "cuda", feature = "_phase2_tiled_kernel"))]
 #[cube(launch)]
 #[allow(dead_code)]
-fn flash_attention_tiled<F: Float>(
+fn flash_attention_tiled<F: Float + CubeElement>(
     q: &Array<F>,       // Query [batch * heads * seq_len * head_dim]
     k: &Array<F>,       // Key [batch * heads * seq_len * head_dim]
     v: &Array<F>,       // Value [batch * heads * seq_len * head_dim]
@@ -372,28 +376,30 @@ fn flash_attention_tiled<F: Float>(
     let batch_head_idx = CUBE_POS_X;
     let q_tile_idx = CUBE_POS_Y;
     let thread_in_tile = UNIT_POS_X;
+    let thread_in_tile_usize = thread_in_tile as usize; // Cast for array indexing
 
     // Calculate which Q row this thread handles globally
-    let q_row_global = q_tile_idx * tile_size + thread_in_tile;
+    let q_row_global = ((q_tile_idx as usize) * (tile_size as usize) + thread_in_tile_usize);
 
     // Early exit if beyond sequence length
-    if q_row_global >= seq_len {
+    if q_row_global >= (seq_len as usize) {
         terminate!();
     }
 
     // Stride calculations
-    let head_stride = seq_len * head_dim;
-    let base_offset = batch_head_idx * head_stride;
+    let head_stride = (seq_len as usize) * (head_dim as usize);
+    let base_offset = (batch_head_idx as usize) * head_stride;
 
     // Allocate shared memory for Q tile (tile_size × head_dim)
     // Each thread loads head_dim elements for its Q row
-    let mut q_tile = SharedMemory::<F>::new(tile_size * head_dim);
+    let mut q_tile = SharedMemory::<F>::new((tile_size as usize) * (head_dim as usize));
 
     // Load Q tile cooperatively
     // Thread i loads Q[q_row_global, :] into q_tile[thread_in_tile, :]
-    for dim_idx in 0..head_dim {
-        let q_offset = base_offset + q_row_global * head_dim + dim_idx;
-        let tile_offset = thread_in_tile * head_dim + dim_idx;
+    for dim_idx in 0u32..(head_dim) {
+        let dim_idx_usize = dim_idx as usize;
+        let q_offset = base_offset + (q_row_global * (head_dim as usize) + dim_idx_usize);
+        let tile_offset = thread_in_tile_usize * (head_dim as usize) + dim_idx_usize;
         q_tile[tile_offset] = q[q_offset];
     }
     sync_cube();
@@ -403,35 +409,37 @@ fn flash_attention_tiled<F: Float>(
     let mut running_sum = F::new(0.0);
 
     // Output accumulator (head_dim elements per thread)
-    let mut out_acc = SharedMemory::<F>::new(tile_size * head_dim);
-    for dim_idx in 0..head_dim {
-        out_acc[thread_in_tile * head_dim + dim_idx] = F::new(0.0);
+    let mut out_acc = SharedMemory::<F>::new((tile_size as usize) * (head_dim as usize));
+    for dim_idx in 0u32..(head_dim) {
+        let dim_idx_usize = dim_idx as usize;
+        out_acc[thread_in_tile_usize * (head_dim as usize) + dim_idx_usize] = F::new(0.0);
     }
 
     // Iterate over KV tiles
-    for kv_tile_idx in 0..num_kv_tiles {
-        let kv_start = kv_tile_idx * tile_size;
+    for kv_tile_idx in 0u32..(num_kv_tiles) {
+        let kv_start = ((kv_tile_idx as usize) * (tile_size as usize));
         // Compute actual tile size (min of tile_size and remaining seq_len)
-        let kv_end = if kv_start + tile_size < seq_len {
-            kv_start + tile_size
+        let kv_end = if kv_start + (tile_size as usize) < (seq_len as usize) {
+            kv_start + (tile_size as usize)
         } else {
-            seq_len
+            seq_len as usize
         };
         let kv_tile_actual_size = kv_end - kv_start;
 
         // Allocate shared memory for K and V tiles
-        let mut k_tile = SharedMemory::<F>::new(tile_size * head_dim);
-        let mut v_tile = SharedMemory::<F>::new(tile_size * head_dim);
+        let mut k_tile = SharedMemory::<F>::new((tile_size as usize) * (head_dim as usize));
+        let mut v_tile = SharedMemory::<F>::new((tile_size as usize) * (head_dim as usize));
 
         // Load K and V tiles cooperatively
         // Each thread loads multiple rows if needed
-        for local_kv_idx in 0..kv_tile_actual_size {
-            if local_kv_idx % tile_size == thread_in_tile {
+        for local_kv_idx in 0usize..(kv_tile_actual_size) {
+            if local_kv_idx % (tile_size as usize) == thread_in_tile_usize {
                 let kv_row_global = kv_start + local_kv_idx;
-                for dim_idx in 0..head_dim {
-                    let k_offset = base_offset + kv_row_global * head_dim + dim_idx;
-                    let v_offset = base_offset + kv_row_global * head_dim + dim_idx;
-                    let tile_offset = local_kv_idx * head_dim + dim_idx;
+                for dim_idx in 0u32..(head_dim) {
+                    let dim_idx_usize = dim_idx as usize;
+                    let k_offset = base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
+                    let v_offset = base_offset + (kv_row_global * (head_dim as usize) + dim_idx_usize);
+                    let tile_offset = local_kv_idx * (head_dim as usize) + dim_idx_usize;
                     k_tile[tile_offset] = k[k_offset];
                     v_tile[tile_offset] = v[v_offset];
                 }
@@ -440,7 +448,7 @@ fn flash_attention_tiled<F: Float>(
         sync_cube();
 
         // Compute attention scores for this thread's Q row against all KV rows in tile
-        for local_kv_idx in 0..kv_tile_actual_size {
+        for local_kv_idx in 0usize..(kv_tile_actual_size) {
             let kv_row_global = kv_start + local_kv_idx;
 
             // Apply causal mask: if causal and q_row < kv_row, skip this KV row
@@ -454,9 +462,10 @@ fn flash_attention_tiled<F: Float>(
             if should_process {
                 // Compute dot product Q[thread_in_tile] @ K[local_kv_idx]
                 let mut score = F::new(0.0);
-                for dim_idx in 0..head_dim {
-                    let q_val = q_tile[thread_in_tile * head_dim + dim_idx];
-                    let k_val = k_tile[local_kv_idx * head_dim + dim_idx];
+                for dim_idx in 0u32..(head_dim) {
+                    let dim_idx_usize = dim_idx as usize;
+                    let q_val = q_tile[thread_in_tile_usize * (head_dim as usize) + dim_idx_usize];
+                    let k_val = k_tile[local_kv_idx * (head_dim as usize) + dim_idx_usize];
                     score = score + q_val * k_val;
                 }
                 score = score * scale;
@@ -470,10 +479,11 @@ fn flash_attention_tiled<F: Float>(
                 let new_sum = exp_old * running_sum + exp_new;
 
                 // Update output: O_new = (exp_old * l_old * O_old + exp_new * V) / l_new
-                for dim_idx in 0..head_dim {
-                    let out_offset = thread_in_tile * head_dim + dim_idx;
+                for dim_idx in 0u32..(head_dim) {
+                    let dim_idx_usize = dim_idx as usize;
+                    let out_offset = thread_in_tile_usize * (head_dim as usize) + dim_idx_usize;
                     let old_out = out_acc[out_offset];
-                    let v_val = v_tile[local_kv_idx * head_dim + dim_idx];
+                    let v_val = v_tile[local_kv_idx * (head_dim as usize) + dim_idx_usize];
 
                     // Apply correction and add new contribution
                     let corrected_old = exp_old * running_sum * old_out;
@@ -490,9 +500,10 @@ fn flash_attention_tiled<F: Float>(
     }
 
     // Write output to global memory
-    for dim_idx in 0..head_dim {
-        let out_offset = base_offset + q_row_global * head_dim + dim_idx;
-        let tile_offset = thread_in_tile * head_dim + dim_idx;
+    for dim_idx in 0u32..(head_dim) {
+        let dim_idx_usize = dim_idx as usize;
+        let out_offset = base_offset + (q_row_global * (head_dim as usize) + dim_idx_usize);
+        let tile_offset = thread_in_tile_usize * (head_dim as usize) + dim_idx_usize;
         out[out_offset] = out_acc[tile_offset];
     }
 }
@@ -538,7 +549,7 @@ pub fn flash_attention_kernel(
     scale: f64,
     mask: Option<&Tensor>,
     config: &FlashAttentionConfig,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     // Validate input shapes
     validate_attention_inputs(q, k, v)?;
 
@@ -576,7 +587,7 @@ fn launch_cubecl_attention(
     v: &Tensor,
     scale: f64,
     config: &FlashAttentionConfig,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     use super::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
     // Extract dimensions
@@ -616,9 +627,9 @@ fn launch_cubecl_attention(
     let client = CudaRuntime::client(&device);
 
     // Create CubeCL handles
-    let q_handle = client.create(&q_bytes);
-    let k_handle = client.create(&k_bytes);
-    let v_handle = client.create(&v_bytes);
+    let q_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(q_bytes));
+    let k_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(k_bytes));
+    let v_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(v_bytes));
     let out_handle = client.empty(num_elements * std::mem::size_of::<f32>());
 
     // Grid: (batch * heads, seq_len) - one block per (batch-head, q_row)
@@ -627,13 +638,13 @@ fn launch_cubecl_attention(
     // Block size: round up head_dim to next power of 2 for efficient reduction
     // Capped at MAX_BLOCK_SIZE (1024)
     let block_size = next_power_of_two(head_dim as u32).min(MAX_BLOCK_SIZE);
-    let cube_dim = CubeDim::new(block_size, 1, 1);
+    let cube_dim = CubeDim::new(&client, block_size as usize);
 
     // Scale as f32
     let scale_f32 = scale as f32;
 
     // Choose kernel based on causal masking
-    // SAFETY: ArrayArg::from_raw_parts requires handles to be valid and num_elements to match
+    // SAFETY: Handles are valid and properly sized for the kernel operation
     unsafe {
         if config.causal_mask {
             flash_attention_causal::launch::<f32, CudaRuntime>(
@@ -648,7 +659,7 @@ fn launch_cubecl_attention(
                 ScalarArg::new(seq_len as u32),
                 ScalarArg::new(head_dim as u32),
                 ScalarArg::new(block_size),
-            );
+            ).map_err(|e| UnslothError::Kernel(format!("flash_attention_causal kernel launch failed: {e}")))?;
         } else {
             flash_attention_tile::launch::<f32, CudaRuntime>(
                 &client,
@@ -662,7 +673,7 @@ fn launch_cubecl_attention(
                 ScalarArg::new(seq_len as u32),
                 ScalarArg::new(head_dim as u32),
                 ScalarArg::new(block_size),
-            );
+            ).map_err(|e| UnslothError::Kernel(format!("flash_attention_tile kernel launch failed: {e}")))?;
         }
     }
 
@@ -678,7 +689,7 @@ fn launch_cubecl_attention(
 }
 
 /// Validate attention input tensor shapes.
-fn validate_attention_inputs(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<()> {
+fn validate_attention_inputs(q: &Tensor, k: &Tensor, v: &Tensor) -> UnslothResult<()> {
     let q_dims = q.dims();
     let k_dims = k.dims();
     let v_dims = v.dims();
@@ -727,7 +738,7 @@ fn fallback_attention(
     scale: f64,
     mask: Option<&Tensor>,
     config: &FlashAttentionConfig,
-) -> Result<Tensor> {
+) -> UnslothResult<Tensor> {
     // Q @ K^T, scaled by 1/sqrt(head_dim)
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
     let scores = (scores * scale)?;
@@ -757,7 +768,7 @@ fn fallback_attention(
 }
 
 /// Create a causal mask tensor with -inf in upper triangle.
-fn create_causal_mask_tensor(seq_len: usize, device: &candle_core::Device) -> Result<Tensor> {
+fn create_causal_mask_tensor(seq_len: usize, device: &candle_core::Device) -> UnslothResult<Tensor> {
     let mut mask_data = vec![0.0f32; seq_len * seq_len];
     for i in 0..seq_len {
         for j in 0..seq_len {

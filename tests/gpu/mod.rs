@@ -100,6 +100,11 @@ pub fn get_gpu_info() -> Option<GpuInfo> {
 /// Skip a test if GPU is not available with informative message.
 ///
 /// This macro works with `Result<(), _>` return types by returning `Ok(())`.
+///
+/// # Usage
+///
+/// This macro should be used at the beginning of GPU tests. It checks for GPU
+/// availability and skips the test if no GPU is found.
 #[cfg(feature = "cuda")]
 #[macro_export]
 macro_rules! require_gpu {
@@ -132,11 +137,13 @@ macro_rules! require_gpu {
 
 /// Fallback implementations when CUDA feature is not enabled
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 pub fn is_gpu_available() -> bool {
     false
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 pub fn get_gpu_info() -> Option<()> {
     None
 }

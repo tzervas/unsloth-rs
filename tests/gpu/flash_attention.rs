@@ -22,17 +22,22 @@
 //! - **Reliability**: No memory leaks or device errors
 
 use anyhow::Result;
-use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn;
+
+#[cfg(feature = "cuda")]
 use std::time::Instant;
 
-use unsloth_rs::kernels::{
-    attention::{FusedAttention, FusedAttentionConfig},
-    attention_cubecl::{estimate_flash_attention_vram, flash_attention_cubecl, has_cubecl_support},
+#[cfg(feature = "cuda")]
+use unsloth_rs::kernels::attention::{FusedAttention, FusedAttentionConfig};
+
+use unsloth_rs::kernels::attention_cubecl::{
+    estimate_flash_attention_vram, flash_attention_cubecl, has_cubecl_support,
 };
 
 /// Test configuration for Flash Attention benchmarks.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct AttentionTestConfig {
     pub batch_size: usize,
     pub num_heads: usize,
@@ -58,6 +63,7 @@ impl AttentionTestConfig {
     }
 
     /// Medium configuration for performance tests.
+    #[allow(dead_code)]
     fn medium() -> Self {
         Self {
             batch_size: 2,
@@ -71,6 +77,7 @@ impl AttentionTestConfig {
     }
 
     /// Large configuration for scalability tests.
+    #[allow(dead_code)]
     fn large() -> Self {
         Self {
             batch_size: 4,
@@ -84,6 +91,7 @@ impl AttentionTestConfig {
     }
 
     /// Extra large configuration for stress tests.
+    #[allow(dead_code)]
     fn extra_large() -> Self {
         Self {
             batch_size: 4,
@@ -227,6 +235,7 @@ impl AccuracyMetrics {
 
 /// Performance measurement results.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct PerformanceMetrics {
     pub gpu_time_ms: f64,
     pub cpu_time_ms: f64,
@@ -235,6 +244,7 @@ struct PerformanceMetrics {
 }
 
 /// Calculate theoretical GFLOPS for attention computation.
+#[allow(dead_code)]
 fn calculate_attention_gflops(config: &AttentionTestConfig) -> f64 {
     let (batch, heads, seq_len, head_dim) = (
         config.batch_size as f64,
@@ -295,7 +305,10 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
         let q_gpu = q_cpu.to_device(&cuda_device)?;
         let k_gpu = k_cpu.to_device(&cuda_device)?;
         let v_gpu = v_cpu.to_device(&cuda_device)?;
-        let mask_gpu = mask_cpu.map(|m| m.to_device(&cuda_device)).transpose()?;
+        let mask_gpu = mask_cpu
+            .as_ref()
+            .map(|m| m.to_device(&cuda_device))
+            .transpose()?;
 
         // GPU Flash Attention computation
         let gpu_output = flash_attention_cubecl(&q_gpu, &k_gpu, &v_gpu, scale, mask_gpu.as_ref())?;
@@ -531,9 +544,13 @@ fn test_flash_attention_different_configs() -> Result<()> {
         dtype: DType::F32,
     };
 
-    // Test different head configurations (MHA only - GQA has separate ignored tests)
+    // Test different head configurations (MHA; optional GQA when feature enabled)
     let head_configs = vec![
         (4, 4), // MHA: same number of Q and KV heads
+        #[cfg(feature = "gqa_support")]
+        (8, 4), // GQA: more Q heads than KV heads
+        #[cfg(feature = "gqa_support")]
+        (8, 1), // Extreme GQA: many Q heads, single KV head
     ];
 
     for (q_heads, kv_heads) in head_configs {
@@ -759,7 +776,8 @@ fn test_flash_attention_large_sequences() -> Result<()> {
 
         // Reasonable execution time - CPU fallback is slower, so use generous limit
         // TODO: Tighten this once CubeCL kernel is optimized
-        let max_time_ms = (seq_len * seq_len / 30) as u128; // Allow for CPU fallback
+        // Use quadratic model with tighter cap, compute in u128 to avoid overflow
+        let max_time_ms = (((seq_len as u128) * (seq_len as u128)) / 3000).max(500); // Allow for CPU fallback
         assert!(
             execution_time_ms < max_time_ms,
             "Execution time {}ms too slow for seq_len={} (expected < {}ms)",

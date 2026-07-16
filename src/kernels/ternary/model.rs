@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_quantization_stats() {
-        let mut stats = QuantizationStats {
+        let stats = QuantizationStats {
             original_bytes: 1000,
             quantized_bytes: 100,
             ..Default::default()

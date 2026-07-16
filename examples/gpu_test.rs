@@ -1,12 +1,11 @@
 //! Simple GPU test to verify CubeCL CUDA is working
 
-use std::time::Instant;
-
 fn main() {
     #[cfg(feature = "cuda")]
     {
         use cubecl::prelude::*;
         use cubecl_cuda::CudaRuntime;
+        use std::time::Instant;
 
         println!("Testing CubeCL CUDA...");
 
@@ -53,9 +52,12 @@ fn main() {
 
             // Create tensors on CUDA device to actually test GPU kernel
             let cuda_device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
-            let q = Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
-            let k = Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
-            let v = Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let q =
+                Tensor::from_vec(q_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let k =
+                Tensor::from_vec(k_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
+            let v =
+                Tensor::from_vec(v_data, (batch, heads, seq_len, head_dim), &cuda_device).unwrap();
 
             let scale = 1.0 / (head_dim as f64).sqrt();
             let config = FlashAttentionConfig::default();
@@ -73,12 +75,14 @@ fn main() {
                 }
             }
         }
-        
+
         println!("\n✓ Flash Attention kernel tests passed!");
     }
 
     #[cfg(not(feature = "cuda"))]
     {
-        println!("CUDA feature not enabled. Run with: cargo run --example gpu_test --features cuda");
+        println!(
+            "CUDA feature not enabled. Run with: cargo run --example gpu_test --features cuda"
+        );
     }
 }

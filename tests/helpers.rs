@@ -24,11 +24,20 @@ pub struct TestMatrixConfig {
 #[derive(Debug, Clone)]
 pub enum ValueDistribution {
     /// Uniform distribution in [-max, max].
-    Uniform { max: f32 },
+    Uniform {
+        /// Maximum absolute value.
+        max: f32,
+    },
     /// Normal distribution with mean=0, std=sigma.
-    Normal { std: f32 },
+    Normal {
+        /// Standard deviation.
+        std: f32,
+    },
     /// Long-tail distribution (few large values, many small).
-    LongTail { scale: f32 },
+    LongTail {
+        /// Scale parameter.
+        scale: f32,
+    },
     /// Specific values for edge cases.
     EdgeCase(EdgeCaseType),
 }
@@ -41,11 +50,21 @@ pub enum EdgeCaseType {
     /// All ones.
     AllOnes,
     /// Single non-zero element.
-    SingleNonZero { row: usize, col: usize, value: f32 },
+    SingleNonZero {
+        /// Row index.
+        row: usize,
+        /// Column index.
+        col: usize,
+        /// Element value.
+        value: f32,
+    },
     /// Alternating pattern (+1, -1, +1, -1, ...).
     Alternating,
     /// Very large values that might cause overflow.
-    LargeValues { max: f32 },
+    LargeValues {
+        /// Maximum absolute value.
+        max: f32,
+    },
 }
 
 impl Default for TestMatrixConfig {

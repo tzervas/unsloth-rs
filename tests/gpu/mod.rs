@@ -169,15 +169,18 @@ macro_rules! require_gpu {
 
 /// Fallback implementations when CUDA feature is not enabled
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 pub fn is_gpu_available() -> bool {
     false
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 pub fn get_gpu_info() -> Option<()> {
     None
 }
 
+/// Fallback macro to require GPU when CUDA feature is disabled.
 #[cfg(not(feature = "cuda"))]
 #[macro_export]
 macro_rules! require_gpu {

@@ -44,3 +44,17 @@ pedantic = "warn"
 [[bench]]
 name = "kernels"
 harness = false
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.dependencies]
+candle-core = "0.9"
+candle-nn = "0.9"
+thiserror = "2.0"
+tracing = "0.1"
+cubecl = "0.9"
+cubecl-cuda = "0.9"
+criterion = "0.8"
+anyhow = "1.0"

@@ -155,11 +155,14 @@ impl Default for TrainingConfig {
 /// Convert tensor to specified precision.
 ///
 /// # Arguments
-/// * `tensor` - Input tensor
-/// * `precision` - Target precision mode
+/// * `tensor` - Input tensor to convert
+/// * `precision` - Target precision mode (FP32, FP16, or BF16)
 ///
 /// # Returns
 /// Tensor converted to target precision
+///
+/// # Errors
+/// Returns an error if the dtype conversion fails.
 pub fn convert_precision(tensor: &Tensor, precision: PrecisionMode) -> Result<Tensor> {
     let target_dtype = precision.to_dtype();
     if tensor.dtype() == target_dtype {
@@ -175,11 +178,14 @@ pub fn convert_precision(tensor: &Tensor, precision: PrecisionMode) -> Result<Te
 /// in lower precision formats.
 ///
 /// # Arguments
-/// * `loss` - Original loss tensor
-/// * `config` - Mixed precision configuration
+/// * `loss` - Original loss tensor to scale
+/// * `config` - Mixed precision configuration containing the loss scale factor
 ///
 /// # Returns
 /// Scaled loss tensor
+///
+/// # Errors
+/// Returns an error if tensor multiplication fails.
 pub fn scale_loss(loss: &Tensor, config: &MixedPrecisionConfig) -> Result<Tensor> {
     if (config.loss_scale - 1.0).abs() < f32::EPSILON {
         Ok(loss.clone())
@@ -222,10 +228,13 @@ pub fn unscale_gradients(
 /// Used to detect gradient overflow in mixed precision training.
 ///
 /// # Arguments
-/// * `gradients` - Gradients to check
+/// * `gradients` - Slice of gradient tensors to check for numerical instability
 ///
 /// # Returns
 /// `true` if any gradient contains NaN or Inf, `false` otherwise
+///
+/// # Errors
+/// Returns an error if tensor dtype conversion or flattening fails.
 pub fn has_inf_or_nan(gradients: &[Tensor]) -> Result<bool> {
     for grad in gradients {
         let grad_f32 = grad.to_dtype(DType::F32)?;
@@ -278,8 +287,19 @@ pub fn update_loss_scale(
 
 /// Compute gradient with optional checkpointing.
 ///
-/// # Errors
+/// This function performs gradient computation with activation checkpointing,
+/// which trades compute for memory by recomputing activations during the backward pass
+/// instead of storing them in memory.
 ///
+/// # Arguments
+/// * `_input` - Input tensor for the forward pass
+/// * `_forward_fn` - Function that computes the forward pass
+/// * `_config` - Checkpoint configuration specifying checkpointing strategy
+///
+/// # Returns
+/// Computed gradient tensor
+///
+/// # Errors
 /// Returns an error if gradient computation fails.
 ///
 /// # Note

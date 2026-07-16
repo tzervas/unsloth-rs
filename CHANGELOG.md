@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-01-25
+
+### Changed
+- Migrated transformer GPU kernels to CubeCL 0.9 API
+- Updated `Bytes::from_bytes_vec()` for buffer creation
+- Fixed `CubeDim::new()` 2-argument signature
+- Replace `F::new()` with `F::cast_from()` for float construction
+- Added `usize` suffix to SharedMemory::new() calls
+- Added proper usize casts at array index sites
+- Wrapped kernel launches in unsafe blocks with SAFETY comments
+- Added cfg guards for CUDA-only variables
+
+### Known Limitations
+- Flash Attention kernel has numerical accuracy issues (under investigation)
+- Some integration tests skip due to accuracy thresholds
+
+## [1.0.1] - 2026-01-24
+
+### Added
+- CPU fallback warning when CUDA is unavailable
+
+### Changed
+- Bumped minimum Rust version to 1.92
+- README badges added for crates.io and docs.rs
+
+## [1.0.0] - 2026-01-24
+
+### Added
+- **Examples directory** with runnable examples:
+  - `basic_attention.rs` - FusedAttention demonstration
+  - `ternary_quantization.rs` - Ternary quantization with compression stats
+- Comprehensive documentation for all training.rs functions
+- CLAUDE.md for Claude Code development workflow
+- Feature flags for experimental GPU kernels
+
+### Fixed
+- All clippy warnings resolved with strategic allows
+- Documentation formatting and completeness
+
+### Known Limitations (1.0)
+- Flash Attention uses CPU reference implementation with Candle CUDA dispatch (not fused CubeCL kernel)
+- Ternary quantization GPU kernels are experimental and not validated
+- Gradient checkpointing is stub-only (returns NotImplemented error)
+- Full CubeCL GPU kernel validation pending RTX 5080 hardware
+
 ### Fixed
 - Gradient checkpointing stub now returns proper error instead of panicking
 - Updated documentation to accurately reflect implemented vs planned features
@@ -107,12 +152,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Issue reports: https://github.com/tzervas/unsloth-rs/issues
 - Feature requests: https://github.com/tzervas/unsloth-rs/discussions
 - Email: tz-dev@vectorweight.com
-
-## [Unreleased]
-
-### Planned
-- Flash Attention CubeCL GPU kernel optimization
-- Additional fused GPU operations
-- Performance profiling and tuning
-- Extended documentation and tutorials
-- Additional model architectures support

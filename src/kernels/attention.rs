@@ -24,6 +24,17 @@ use candle_core::{Device, Tensor};
 
 use crate::error::Result;
 
+fn warn_cpu_fallback(device: &Device) {
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    if matches!(device, Device::Cpu) {
+        WARN_ONCE.call_once(|| {
+            eprintln!(
+                "unsloth-rs: CPU device in use. CUDA is the intended default; enable the 'cuda' feature and use Device::cuda_if_available(0) when possible."
+            );
+        });
+    }
+}
+
 /// Configuration for fused attention.
 #[derive(Debug, Clone)]
 pub struct FusedAttentionConfig {
@@ -80,6 +91,7 @@ impl FusedAttention {
     /// # Errors
     /// Returns error if tensor creation fails
     pub fn new(config: FusedAttentionConfig, device: &Device) -> Result<Self> {
+        warn_cpu_fallback(device);
         let hidden = config.hidden_size;
         let num_kv_heads = config.num_kv_heads.unwrap_or(config.num_heads);
 

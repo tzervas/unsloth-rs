@@ -16,7 +16,9 @@ permissions:
 jobs:
   reopen:
     name: Reopen issues closed off-main
-    runs-on: [self-hosted, linux, x64, podman]
+    # Meta workflow: GitHub-hosted is correct (no product build). Avoids self-hosted
+    # queue when runners are busy/down; only needs gh + GITHUB_TOKEN.
+    runs-on: ubuntu-latest
     if: >
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&

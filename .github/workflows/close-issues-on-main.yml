@@ -1,0 +1,67 @@
+# Close Fixes/Closes issues only when a PR merges into **main** (or master).
+# Feature PRs target **dev** and must leave issues open (use Refs #n).
+# Epics close only when a main-bound PR includes Closes #<epic>.
+name: close-issues-on-main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number (must be merged into main)"
+        type: string
+        required: true
+      dry_run:
+        description: "List issues without closing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked:
+    name: Close issues for main merge
+    runs-on: [self-hosted, linux, x64, podman]
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       (github.event.pull_request.base.ref == 'main' ||
+        github.event.pull_request.base.ref == 'master'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure gh
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null 2>&1 || {
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+            sudo apt-get update -qq && sudo apt-get install -y -qq gh
+          }
+          gh --version
+      - name: Close linked issues (main only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          DRY_INPUT: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/close-linked-issues.sh ]; then
+            echo "scripts/close-linked-issues.sh missing — fail" >&2
+            exit 1
+          fi
+          args=(--pr "$PR_NUMBER")
+          if [ "${DRY_INPUT}" = "true" ]; then args+=(--dry-run); fi
+          # Prefer main; allow master via RELAY_MAIN_BRANCH if needed
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          if [ "$DEFAULT_BRANCH" = "master" ]; then
+            args+=(--main-branch master)
+          fi
+          bash scripts/close-linked-issues.sh "${args[@]}"

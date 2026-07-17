@@ -1,0 +1,40 @@
+name: Fleet gap (CI / security / license)
+description: Catalog a gap from fleet-ci, fleet-security, REUSE, or license scan
+title: "[fleet-gap] "
+labels: ["fleet-gap"]
+body:
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source check
+      options:
+        - fleet-ci
+        - fleet-security
+        - gitleaks
+        - trivy
+        - reuse / SPDX
+        - license / NOTICE
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: Detail
+      description: What failed or is missing; link to workflow run if any
+    validations:
+      required: true
+  - type: input
+    id: run_url
+    attributes:
+      label: Workflow run URL (optional)

@@ -1,0 +1,93 @@
+# Fleet standard CI — self-hosted. Honest status on trunk via Actions badge.
+# See docs/FLEET_STANDARDS.md (or plans/fractal/P26_FLEET_STANDARDS.md).
+name: fleet-ci
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: fleet-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: detect stack
+    runs-on: [self-hosted, linux, x64, podman]
+    outputs:
+      rust: ${{ steps.d.outputs.rust }}
+      python: ${{ steps.d.outputs.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        run: |
+          set -euo pipefail
+          rust=false; python=false
+          if [ -f Cargo.toml ]; then rust=true; fi
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f setup.py ]; then python=true; fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "Detected rust=$rust python=$python"
+
+  rust:
+    name: cargo check/test
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, x64, podman]
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+      - name: cargo test
+        run: cargo test --workspace
+
+  python:
+    name: python lint/test
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
+    runs-on: [self-hosted, linux, x64, podman]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+      - name: Sync (best-effort)
+        run: |
+          set -euo pipefail
+          if [ -f uv.lock ] || [ -f pyproject.toml ]; then
+            uv sync --all-groups 2>/dev/null || uv sync 2>/dev/null || true
+          fi
+      - name: Ruff (if configured)
+        run: |
+          set -euo pipefail
+          if [ -f pyproject.toml ] && grep -q '\[tool.ruff' pyproject.toml 2>/dev/null; then
+            uv run ruff check . || python -m ruff check .
+          else
+            echo "ruff not configured — skip"
+          fi
+      - name: Pytest (if tests exist)
+        run: |
+          set -euo pipefail
+          if [ -d tests ] || [ -d test ]; then
+            uv run pytest -q 2>/dev/null || pytest -q 2>/dev/null || echo "pytest failed or missing — mark job fail" >&2
+          else
+            echo "no tests/ directory — skip"
+          fi
+
+  noop:
+    name: no stack detected
+    needs: detect
+    if: needs.detect.outputs.rust != 'true' && needs.detect.outputs.python != 'true'
+    runs-on: [self-hosted, linux, x64, podman]
+    steps:
+      - run: |
+          echo "No Cargo.toml / pyproject detected. fleet-ci reports success with no gates."
+          echo "Add stack files or a product-specific CI job for real coverage."

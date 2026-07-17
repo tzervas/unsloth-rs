@@ -1,0 +1,66 @@
+# GitHub natively closes issues on merge for any base branch when PR uses Closes #n.
+# This workflow reopens issues closed by merges into non-main branches so epics/tasks
+# stay open until delivered to trunk.
+name: reopen-issues-closed-off-main
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  reopen:
+    name: Reopen issues closed off-main
+    runs-on: [self-hosted, linux, x64, podman]
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref != 'main' &&
+      github.event.pull_request.base.ref != 'master'
+    steps:
+      - name: Reopen linked issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          body=$(gh api "repos/$REPO/pulls/$PR" --jq .body)
+          title=$(gh api "repos/$REPO/pulls/$PR" --jq .title)
+          # Extract Closes/Fixes/Resolves #N
+          nums=$(TITLE="$title" BODY="$body" python3 <<'PY'
+import os, re
+text = (os.environ.get("TITLE") or "") + "\n" + (os.environ.get("BODY") or "")
+kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
+found = set()
+for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&/and\s]+#?\d+)*))", text):
+    prefix = text[max(0, m.start() - 24) : m.start()].lower()
+    if re.search(r"(?:no|not|without|dont)\W*$", prefix):
+        continue
+    for n in re.findall(r"\d+", m.group(1)):
+        found.add(n)
+print("\n".join(sorted(found, key=int)))
+PY
+)
+          if [ -z "${nums}" ]; then
+            echo "No closing keywords — nothing to reopen"
+            exit 0
+          fi
+          while IFS= read -r n; do
+            [ -z "$n" ] && continue
+            state=$(gh api "repos/$REPO/issues/$n" --jq .state 2>/dev/null || echo missing)
+            if [ "$state" = "closed" ]; then
+              gh api -X PATCH "repos/$REPO/issues/$n" -f state=open >/dev/null
+              gh api -X POST "repos/$REPO/issues/$n/comments" \
+                -f body="Reopened automatically: closing keywords on PR #${PR} merged into \`${BASE}\` (not main). Issues close only when work reaches **main**. Prefer \`Refs #${n}\` on non-main PRs." >/dev/null
+              echo "reopened #$n"
+            else
+              echo "skip #$n state=$state"
+            fi
+          done <<< "$nums"

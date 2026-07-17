@@ -150,7 +150,7 @@ fn attention_reference_cpu(
 ) -> Result<Tensor> {
     // Compute Q·K^T
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
-    let scores = (scores / scale)?;
+    let scores = (scores * scale)?;
 
     // Apply mask if provided
     let scores = match mask {

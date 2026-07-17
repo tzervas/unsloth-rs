@@ -583,8 +583,7 @@ mod tests {
             .collect();
 
         // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
-        for row in 0..4 {
-            let row_bitmap = bitmap[row];
+        for (row, &row_bitmap) in bitmap.iter().enumerate().take(4) {
             // Chunk 0 (words 0-1): word 0 is active, so chunk is active
             assert_ne!(
                 row_bitmap & 0x1,

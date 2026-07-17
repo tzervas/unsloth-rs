@@ -1,5 +1,10 @@
 # unsloth-rs
 
+<!-- FLEET-BADGES:BEGIN -->
+[![CI](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-ci.yml/badge.svg?branch=main)](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-ci.yml?query=branch%3Amain)
+[![Security](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-security.yml/badge.svg?branch=main)](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-security.yml?query=branch%3Amain)
+<!-- FLEET-BADGES:END -->
+
 Rust implementations of transformer building blocks for LLM inference and fine-tuning.
 
 [![Crates.io](https://img.shields.io/crates/v/unsloth-rs.svg)](https://crates.io/crates/unsloth-rs)

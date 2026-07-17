@@ -371,7 +371,7 @@ mod tests {
         let config = MixedPrecisionConfig::default();
         assert_eq!(config.compute_precision, PrecisionMode::Half);
         assert_eq!(config.master_precision, PrecisionMode::Full);
-        assert_eq!(config.loss_scale, 65536.0);
+        assert!((config.loss_scale - 65536.0).abs() < f32::EPSILON);
         assert!(config.dynamic_loss_scale);
     }
 
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(config.compute_precision, PrecisionMode::Full);
         assert_eq!(config.master_precision, PrecisionMode::Full);
         assert!(!config.dynamic_loss_scale);
-        assert_eq!(config.loss_scale, 1.0);
+        assert!((config.loss_scale - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -420,8 +420,10 @@ mod tests {
         let device = Device::Cpu;
         let loss = Tensor::full(2.0f32, (), &device).unwrap(); // scalar tensor
 
-        let mut config = MixedPrecisionConfig::default();
-        config.loss_scale = 4.0;
+        let config = MixedPrecisionConfig {
+            loss_scale: 4.0,
+            ..Default::default()
+        };
 
         let scaled = scale_loss(&loss, &config).unwrap();
         let value: f32 = scaled.to_scalar().unwrap();
@@ -437,8 +439,10 @@ mod tests {
 
         let gradients = vec![grad1, grad2];
 
-        let mut config = MixedPrecisionConfig::default();
-        config.loss_scale = 4.0;
+        let config = MixedPrecisionConfig {
+            loss_scale: 4.0,
+            ..Default::default()
+        };
 
         let unscaled = unscale_gradients(&gradients, &config).unwrap();
 
@@ -483,8 +487,8 @@ mod tests {
 
         // Test backoff on overflow
         let new_scale = update_loss_scale(&mut config, true, 0);
-        assert_eq!(new_scale, 500.0);
-        assert_eq!(config.loss_scale, 500.0);
+        assert!((new_scale - 500.0).abs() < f32::EPSILON);
+        assert!((config.loss_scale - 500.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -498,18 +502,20 @@ mod tests {
 
         // Test growth after many successful steps
         let new_scale = update_loss_scale(&mut config, false, 100);
-        assert_eq!(new_scale, 200.0);
-        assert_eq!(config.loss_scale, 200.0);
+        assert!((new_scale - 200.0).abs() < f32::EPSILON);
+        assert!((config.loss_scale - 200.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_update_loss_scale_no_change() {
-        let mut config = MixedPrecisionConfig::default();
-        config.loss_scale = 100.0;
+        let mut config = MixedPrecisionConfig {
+            loss_scale: 100.0,
+            ..Default::default()
+        };
 
         // No change if not enough steps and no overflow
         let new_scale = update_loss_scale(&mut config, false, 10);
-        assert_eq!(new_scale, 100.0);
+        assert!((new_scale - 100.0).abs() < f32::EPSILON);
     }
 
     #[test]

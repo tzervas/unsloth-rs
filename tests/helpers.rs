@@ -3,6 +3,21 @@
 //! This module provides reusable test data generation, comparison utilities,
 //! and common fixtures for integration testing.
 
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::needless_range_loop,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::cast_lossless,
+    clippy::ignored_unit_patterns,
+    clippy::pedantic
+)]
+
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use std::collections::HashMap;

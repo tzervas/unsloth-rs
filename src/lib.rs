@@ -55,6 +55,8 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::struct_field_names)]
+#![allow(clippy::unreadable_literal)]
+#![allow(unused_imports)]
 #![allow(clippy::doc_overindented_list_items)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::manual_div_ceil)]

@@ -45,6 +45,22 @@
 //! - **Robustness**: Graceful handling of edge cases
 //! - **Performance**: No significant regression in inference time
 
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::cast_precision_loss,
+    clippy::useless_vec,
+    clippy::unnecessary_wraps,
+    clippy::float_cmp,
+    clippy::field_reassign_with_default,
+    clippy::too_many_lines,
+    clippy::doc_markdown,
+    clippy::len_zero,
+    clippy::let_unit_value,
+    clippy::ignored_unit_patterns,
+    clippy::unreadable_literal,
+    clippy::similar_names
+)]
+
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use unsloth_rs::error::UnslothError;

@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
 //! Integration tests for unsloth-rs ternary quantization system.
 //!
 //! This test suite provides comprehensive validation of the ternary quantization

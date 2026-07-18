@@ -14,7 +14,7 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | `test_flash_attention_gpu_numerical_equivalence` | **Not run** | Requires CUDA device + `cuda` feature |
-| `cargo test --features cuda --test integration` | **Blocked** | Past evidence: missing `use candle_core::IndexOp` at `tests/gpu/flash_attention.rs` (~768) when `cuda` enabled |
+| `cargo test --features cuda --test integration` | **Resolved** | Added missing `use candle_core::IndexOp` import in `tests/gpu/flash_attention.rs` |
 | Host GPU runtime | **BLOCKED:env** | Evidence: missing `/dev/nvidia0`, `CUDA_ERROR_NO_DEVICE`; Blackwell CC 12.0 needs `CUDA_COMPUTE_CAP=90` for nvcc 12.0 candle-kernels build |
 | `./scripts/gpu-test.sh` full validate | **BLOCKED:env** | Documented in L1-F `env-snapshot.log` |
 

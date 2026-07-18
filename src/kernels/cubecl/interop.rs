@@ -301,6 +301,7 @@ pub fn sparsity_metadata_to_cubecl_bytes(
 /// # Returns
 /// Flattened bitmap [out_features, bitmap_words] as bytes
 #[must_use]
+#[allow(clippy::needless_range_loop)]
 pub fn create_sparsity_bitmap_for_tensor(
     tensor: &crate::kernels::ternary::TernaryTensor,
     chunk_size: usize,
@@ -465,6 +466,10 @@ pub fn cubecl_to_u32_candle_tensor(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::all)]
+    #![allow(clippy::pedantic)]
+    #![allow(clippy::unreadable_literal)]
+    #![allow(clippy::needless_range_loop)]
     use super::*;
 
     #[test]

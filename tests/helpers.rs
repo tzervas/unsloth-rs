@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
 //! Test utilities and fixtures for ternary quantization integration tests.
 //!
 //! This module provides reusable test data generation, comparison utilities,

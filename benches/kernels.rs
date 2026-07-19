@@ -2,10 +2,10 @@
 //!
 //! This benchmark suite measures performance for all kernel implementations:
 //! - Attention (multi-head with GQA support)
-//! - Flash Attention (CubeCL / fallback)
-//! - RoPE (Rotary Position Embeddings)
-//! - RMSNorm
-//! - SwiGLU activation
+//! - Flash Attention (`CubeCL` / fallback)
+//! - `RoPE` (Rotary Position Embeddings)
+//! - `RMSNorm`
+//! - `SwiGLU` activation
 //!
 //! ## Running Benchmarks
 //!
@@ -18,6 +18,13 @@
 //! ```bash
 //! CUBECL_PROFILE=1 cargo bench -p unsloth-rs --features cuda
 //! ```
+
+#![allow(
+    clippy::manual_let_else,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use unsloth_rs::kernels::{
@@ -56,7 +63,7 @@ fn benchmark_attention(c: &mut Criterion) {
                 Err(_) => continue,
             };
 
-            let id = format!("b{}_s{}", batch_size, seq_len);
+            let id = format!("b{batch_size}_s{seq_len}");
             group.bench_with_input(
                 BenchmarkId::new("cpu", &id),
                 &(&attention, &input),
@@ -79,7 +86,7 @@ fn benchmark_attention(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark RoPE (Rotary Position Embedding) forward pass
+/// Benchmark `RoPE` (Rotary Position Embedding) forward pass
 fn benchmark_rope(c: &mut Criterion) {
     let mut group = c.benchmark_group("rope");
     let device = Device::Cpu;
@@ -119,7 +126,7 @@ fn benchmark_rope(c: &mut Criterion) {
                 Err(_) => continue,
             };
 
-            let id = format!("b{}_s{}", batch_size, seq_len);
+            let id = format!("b{batch_size}_s{seq_len}");
             group.bench_with_input(
                 BenchmarkId::new("cpu", &id),
                 &(&rope, &q, &k, &pos),
@@ -133,7 +140,7 @@ fn benchmark_rope(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark RMSNorm forward pass
+/// Benchmark `RMSNorm` forward pass
 fn benchmark_rmsnorm(c: &mut Criterion) {
     let mut group = c.benchmark_group("rmsnorm");
     let device = Device::Cpu;
@@ -152,7 +159,7 @@ fn benchmark_rmsnorm(c: &mut Criterion) {
                         Err(_) => continue,
                     };
 
-                let id = format!("b{}_s{}_h{}", batch_size, seq_len, hidden_size);
+                let id = format!("b{batch_size}_s{seq_len}_h{hidden_size}");
                 group.bench_with_input(
                     BenchmarkId::new("cpu", &id),
                     &(&norm, &input),
@@ -167,7 +174,7 @@ fn benchmark_rmsnorm(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SwiGLU forward pass
+/// Benchmark `SwiGLU` forward pass
 fn benchmark_swiglu(c: &mut Criterion) {
     let mut group = c.benchmark_group("swiglu");
     let device = Device::Cpu;
@@ -189,7 +196,7 @@ fn benchmark_swiglu(c: &mut Criterion) {
                         Err(_) => continue,
                     };
 
-                let id = format!("b{}_s{}_h{}", batch_size, seq_len, hidden_size);
+                let id = format!("b{batch_size}_s{seq_len}_h{hidden_size}");
                 group.bench_with_input(
                     BenchmarkId::new("cpu", &id),
                     &(&swiglu, &input),
@@ -214,9 +221,9 @@ fn benchmark_swiglu(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Flash Attention (CubeCL kernel or Candle fallback)
+/// Benchmark Flash Attention (`CubeCL` kernel or Candle fallback)
 ///
-/// Run with CUBECL_PROFILE=1 for kernel-level timing:
+/// Run with `CUBECL_PROFILE=1` for kernel-level timing:
 /// ```bash
 /// CUBECL_PROFILE=1 cargo bench -p unsloth-rs --features cuda flash_attention
 /// ```
@@ -303,7 +310,7 @@ fn format_flops(flops: f64) -> String {
     } else if flops >= 1e6 {
         format!("{:.2} MFLOP", flops / 1e6)
     } else {
-        format!("{:.0} FLOP", flops)
+        format!("{flops:.0} FLOP")
     }
 }
 

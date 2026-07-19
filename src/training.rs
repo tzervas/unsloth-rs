@@ -329,6 +329,7 @@ pub fn scale_gradients(gradients: &[Tensor], scale: f32) -> Result<Vec<Tensor>> 
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use candle_core::Device;

@@ -2,6 +2,16 @@
 //!
 //! This test suite provides comprehensive validation of the ternary quantization
 //! pipeline, ensuring correctness, performance, and robustness across various scenarios.
+
+#![allow(
+    clippy::float_cmp,
+    clippy::too_many_lines,
+    clippy::field_reassign_with_default,
+    clippy::cast_precision_loss,
+    clippy::unreadable_literal,
+    clippy::similar_names,
+    clippy::unnecessary_wraps
+)]
 //!
 //! ## Test Coverage
 //!
@@ -11,7 +21,7 @@
 //! - Memory compression ratios
 //! - Numerical accuracy bounds vs FP32 baseline
 //! - Edge cases and error handling
-//! - TernaryLinear layer integration
+//! - `TernaryLinear` layer integration
 //!
 //! ### Model-Level Integration
 //! - End-to-end model quantization
@@ -108,7 +118,7 @@ fn test_full_quantization_pipeline() -> Result<()> {
     let scenarios = TestFixtures::standard_test_scenarios();
 
     for (name, config) in scenarios {
-        println!("  Testing scenario: {}", name);
+        println!("  Testing scenario: {name}");
 
         // Generate test matrix
         let original = TestFixtures::generate_matrix(&config)?;
@@ -132,7 +142,7 @@ fn test_full_quantization_pipeline() -> Result<()> {
         ];
 
         for (method_name, ternary_config) in configs {
-            println!("    Using calibration method: {}", method_name);
+            println!("    Using calibration method: {method_name}");
 
             // Time the quantization process
             let (quantization_result, quantization_time) =
@@ -149,13 +159,11 @@ fn test_full_quantization_pipeline() -> Result<()> {
             // Validate timing performance
             assert!(
                 TimingUtils::validate_performance(quantization_time, 1000.0),
-                "Quantization took too long: {:.2}ms",
-                quantization_time
+                "Quantization took too long: {quantization_time:.2}ms"
             );
             assert!(
                 TimingUtils::validate_performance(reconstruction_time, 500.0),
-                "Reconstruction took too long: {:.2}ms",
-                reconstruction_time
+                "Reconstruction took too long: {reconstruction_time:.2}ms"
             );
 
             // Calculate accuracy metrics
@@ -184,8 +192,7 @@ fn test_full_quantization_pipeline() -> Result<()> {
                 memory_stats.actual_sparsity * 100.0
             );
             println!(
-                "      Timing - Quantize: {:.2}ms, Reconstruct: {:.2}ms",
-                quantization_time, reconstruction_time
+                "      Timing - Quantize: {quantization_time:.2}ms, Reconstruct: {reconstruction_time:.2}ms"
             );
 
             // Assertions for pipeline validation (ternary quantization is lossy)
@@ -261,10 +268,7 @@ fn test_sparsity_detection_accuracy() -> Result<()> {
             // Validate sparsity preservation (±30% tolerance due to quantization effects)
             assert!(
                 sparsity_error <= 0.30 || detected_sparsity >= actual_orig_sparsity,
-                "Sparsity detection error too high: original={:.3}, detected={:.3}, error={:.3}",
-                actual_orig_sparsity,
-                detected_sparsity,
-                sparsity_error
+                "Sparsity detection error too high: original={actual_orig_sparsity:.3}, detected={detected_sparsity:.3}, error={sparsity_error:.3}"
             );
 
             println!(
@@ -371,7 +375,7 @@ fn test_numerical_accuracy_bounds() -> Result<()> {
 
     for (method_name, method) in calibration_methods {
         for (range_name, scale) in &value_ranges {
-            println!("  Testing {} with {}", method_name, range_name);
+            println!("  Testing {method_name} with {range_name}");
 
             let config = TernaryConfig {
                 calibration_method: method,
@@ -446,7 +450,7 @@ fn test_edge_cases_and_error_handling() -> Result<()> {
     let config = TernaryConfig::default();
 
     for (name, test_config) in edge_scenarios {
-        println!("  Testing edge case: {}", name);
+        println!("  Testing edge case: {name}");
 
         let original = TestFixtures::generate_matrix(&test_config)?;
 
@@ -498,8 +502,7 @@ fn test_edge_cases_and_error_handling() -> Result<()> {
                 for &value in &recon_data {
                     assert!(
                         value.is_finite(),
-                        "Reconstructed value should be finite: {}",
-                        value
+                        "Reconstructed value should be finite: {value}"
                     );
                 }
             }
@@ -508,13 +511,12 @@ fn test_edge_cases_and_error_handling() -> Result<()> {
                 // General case - should not panic or error
                 assert!(
                     quantization_result.is_ok(),
-                    "Quantization should succeed for {}",
-                    name
+                    "Quantization should succeed for {name}"
                 );
             }
         }
 
-        println!("    Edge case '{}' handled successfully", name);
+        println!("    Edge case '{name}' handled successfully");
     }
 
     // Test error conditions
@@ -574,7 +576,7 @@ fn test_ternary_linear_integration() -> Result<()> {
     ];
 
     for (pattern_name, distribution) in input_patterns {
-        println!("  Testing with input pattern: {}", pattern_name);
+        println!("  Testing with input pattern: {pattern_name}");
 
         let input_config = helpers::TestMatrixConfig {
             shape: (batch_size, in_features),
@@ -609,11 +611,10 @@ fn test_ternary_linear_integration() -> Result<()> {
         // Validate timing
         assert!(
             TimingUtils::validate_performance(forward_time, 100.0),
-            "Forward pass took too long: {:.2}ms",
-            forward_time
+            "Forward pass took too long: {forward_time:.2}ms"
         );
 
-        println!("    Forward pass time: {:.2}ms", forward_time);
+        println!("    Forward pass time: {forward_time:.2}ms");
     }
 
     println!("TernaryLinear layer integration tests passed!");
@@ -628,7 +629,7 @@ fn test_integration_performance_bounds() -> Result<()> {
     // This test ensures the entire integration test suite runs in reasonable time
     let max_total_time_ms = 30_000.0; // 30 seconds max for all integration tests
 
-    let (_, total_time) = TimingUtils::time_execution(|| {
+    let ((), total_time) = TimingUtils::time_execution(|| {
         // Run a subset of operations that represent the full test suite
         let config = TernaryConfig::default();
 
@@ -651,15 +652,10 @@ fn test_integration_performance_bounds() -> Result<()> {
 
     assert!(
         total_time <= max_total_time_ms,
-        "Integration test performance regression: {:.2}ms > {:.2}ms max",
-        total_time,
-        max_total_time_ms
+        "Integration test performance regression: {total_time:.2}ms > {max_total_time_ms:.2}ms max"
     );
 
-    println!(
-        "Performance test completed in {:.2}ms (max: {:.2}ms)",
-        total_time, max_total_time_ms
-    );
+    println!("Performance test completed in {total_time:.2}ms (max: {max_total_time_ms:.2}ms)");
     Ok(())
 }
 
@@ -787,16 +783,12 @@ fn test_attention_vram_estimation() -> Result<()> {
         let vram_mb = vram_bytes as f64 / (1024.0 * 1024.0);
 
         println!(
-            "Config: batch={}, seq={}, hidden={}, heads={} -> {:.2} MB",
-            batch_size, seq_len, hidden_size, num_heads, vram_mb
+            "Config: batch={batch_size}, seq={seq_len}, hidden={hidden_size}, heads={num_heads} -> {vram_mb:.2} MB"
         );
 
         assert!(
             vram_mb >= min_mb && vram_mb <= max_mb,
-            "VRAM estimate {:.2} MB outside expected range [{:.2}, {:.2}] MB",
-            vram_mb,
-            min_mb,
-            max_mb
+            "VRAM estimate {vram_mb:.2} MB outside expected range [{min_mb:.2}, {max_mb:.2}] MB"
         );
 
         // Verify components make sense
@@ -824,8 +816,7 @@ fn test_attention_vram_estimation() -> Result<()> {
     let seq_ratio = double_seq_vram as f64 / base_vram as f64;
     assert!(
         seq_ratio > 3.0 && seq_ratio < 5.0,
-        "Sequence scaling ratio {:.2} unexpected",
-        seq_ratio
+        "Sequence scaling ratio {seq_ratio:.2} unexpected"
     );
 
     println!("✅ Attention VRAM estimation test passed");
@@ -885,10 +876,7 @@ fn test_checkpoint_memory_savings() -> Result<()> {
 
         assert!(
             reduction_factor >= min_factor && reduction_factor <= max_factor,
-            "Memory reduction factor {:.3} outside expected range [{:.3}, {:.3}]",
-            reduction_factor,
-            min_factor,
-            max_factor
+            "Memory reduction factor {reduction_factor:.3} outside expected range [{min_factor:.3}, {max_factor:.3}]"
         );
 
         // Test reduction factor calculation consistency
@@ -896,9 +884,7 @@ fn test_checkpoint_memory_savings() -> Result<()> {
         let expected_factor = (num_layers / checkpoint_every) as f64 / num_layers as f64;
         assert!(
             (calculated_factor - expected_factor).abs() < 0.01,
-            "Reduction factor calculation mismatch: {:.3} vs {:.3}",
-            calculated_factor,
-            expected_factor
+            "Reduction factor calculation mismatch: {calculated_factor:.3} vs {expected_factor:.3}"
         );
     }
 
@@ -934,12 +920,8 @@ fn test_memory_formatting() -> Result<()> {
 
     for (bytes, expected) in test_cases {
         let formatted = format_bytes(bytes);
-        assert_eq!(
-            formatted, expected,
-            "Formatting mismatch for {} bytes",
-            bytes
-        );
-        println!("{} bytes -> {}", bytes, formatted);
+        assert_eq!(formatted, expected, "Formatting mismatch for {bytes} bytes");
+        println!("{bytes} bytes -> {formatted}");
     }
 
     // Test realistic memory sizes from actual model scenarios
@@ -951,13 +933,12 @@ fn test_memory_formatting() -> Result<()> {
 
     for vram in attention_sizes {
         let formatted = format_bytes(vram);
-        println!("VRAM estimate: {} -> {}", vram, formatted);
+        println!("VRAM estimate: {vram} -> {formatted}");
 
         // Should be reasonable format (MB or GB for these sizes)
         assert!(
             formatted.contains("MB") || formatted.contains("GB"),
-            "Expected MB or GB format for {}",
-            formatted
+            "Expected MB or GB format for {formatted}"
         );
     }
 
@@ -984,8 +965,7 @@ fn test_memory_pool_efficiency() -> Result<()> {
     let efficiency = pool.efficiency();
     assert!(
         (efficiency - 0.25).abs() < 0.01,
-        "Efficiency should be 0.25, got {}",
-        efficiency
+        "Efficiency should be 0.25, got {efficiency}"
     );
 
     // Scenario 3: Memory usage pattern simulation
@@ -1007,8 +987,7 @@ fn test_memory_pool_efficiency() -> Result<()> {
     // This should definitely be inefficient
     assert!(
         efficiency < 0.5,
-        "Final efficiency should show significant waste, got {}",
-        efficiency
+        "Final efficiency should show significant waste, got {efficiency}"
     );
 
     // Scenario 4: Reset and recovery
@@ -1073,8 +1052,7 @@ fn test_memory_error_conditions() -> Result<()> {
             // 9th should fail (9 * 600 = 5400 > 5000)
             assert!(
                 allocation_result.is_err(),
-                "Allocation {} should have failed",
-                i
+                "Allocation {i} should have failed"
             );
             break;
         }
@@ -1265,9 +1243,7 @@ fn test_gradient_scaling_and_unscaling() -> Result<()> {
         for (orig, unsc) in orig_values.iter().zip(unsc_values.iter()) {
             assert!(
                 (orig - unsc).abs() < 1e-5,
-                "Round-trip failed: {} != {}",
-                orig,
-                unsc
+                "Round-trip failed: {orig} != {unsc}"
             );
         }
     }
@@ -1643,15 +1619,11 @@ fn test_checkpointing_integration() -> Result<()> {
     // (selective checkpointing saves the most memory by storing fewer layers)
     assert!(
         selective_checkpoint_memory <= full_checkpoint_memory,
-        "Selective ({}) should use less memory than full ({})",
-        selective_checkpoint_memory,
-        full_checkpoint_memory
+        "Selective ({selective_checkpoint_memory}) should use less memory than full ({full_checkpoint_memory})"
     );
     assert!(
         full_checkpoint_memory <= no_checkpoint_memory,
-        "Full checkpointing ({}) should use less than no checkpointing ({})",
-        full_checkpoint_memory,
-        no_checkpoint_memory
+        "Full checkpointing ({full_checkpoint_memory}) should use less than no checkpointing ({no_checkpoint_memory})"
     );
 
     // Test 2: Mixed precision impact on memory usage
@@ -1669,7 +1641,7 @@ fn test_checkpointing_integration() -> Result<()> {
     // (exact ratio depends on implementation details)
 
     // Test 3: Checkpoint integration with gradient scaling
-    let sample_activations = vec![
+    let sample_activations = [
         Tensor::randn(
             0f32,
             1.0f32,
@@ -1725,11 +1697,7 @@ fn test_checkpointing_integration() -> Result<()> {
         // Should not run out of memory with proper checkpointing for most layers
         if layer < 6 {
             // Reduced from 8 to be more conservative with memory limits
-            assert!(
-                allocation_result.is_ok(),
-                "Layer {} allocation failed",
-                layer
-            );
+            assert!(allocation_result.is_ok(), "Layer {layer} allocation failed");
         }
     }
 
@@ -1775,7 +1743,7 @@ fn test_checkpointing_integration() -> Result<()> {
 /// Test error conditions related to tensor operations.
 ///
 /// Validates that tensor shape mismatches, invalid operations, and device
-/// placement issues produce appropriate UnslothError variants with clear messages.
+/// placement issues produce appropriate `UnslothError` variants with clear messages.
 #[test]
 fn test_tensor_error_conditions() -> Result<()> {
     println!("🧪 Testing tensor error conditions...");
@@ -1795,10 +1763,10 @@ fn test_tensor_error_conditions() -> Result<()> {
 
     if let Err(error) = result {
         // Verify it's converted to appropriate error type through the chain
-        let error_msg = format!("{}", error);
-        println!("  ✓ Shape mismatch error: {}", error_msg);
+        let error_msg = format!("{error}");
+        println!("  ✓ Shape mismatch error: {error_msg}");
         // Just verify we got some error message
-        assert!(error_msg.len() > 0);
+        assert!(!error_msg.is_empty());
     } else {
         println!("  ✓ Quantization succeeded (different behavior than expected)");
     }
@@ -1811,8 +1779,8 @@ fn test_tensor_error_conditions() -> Result<()> {
     match result {
         Ok(_) => println!("  ✓ Zero dimension tensor handled gracefully"),
         Err(error) => {
-            let error_msg = format!("{}", error);
-            println!("  ✓ Zero dimension error: {}", error_msg);
+            let error_msg = format!("{error}");
+            println!("  ✓ Zero dimension error: {error_msg}");
         }
     }
 
@@ -1824,8 +1792,8 @@ fn test_tensor_error_conditions() -> Result<()> {
     match result {
         Ok(_) => println!("  ✓ CPU tensor quantization succeeded"),
         Err(error) => {
-            let error_msg = format!("{}", error);
-            println!("  ✓ CPU tensor error: {}", error_msg);
+            let error_msg = format!("{error}");
+            println!("  ✓ CPU tensor error: {error_msg}");
         }
     }
 
@@ -1852,9 +1820,9 @@ fn test_quantization_error_scenarios() -> Result<()> {
     match result {
         Ok(_) => println!("  ✓ Tiny tensor quantization succeeded"),
         Err(error) => {
-            let error_msg = format!("{}", error);
-            assert!(error_msg.len() > 0);
-            println!("  ✓ Tiny tensor quantization error: {}", error_msg);
+            let error_msg = format!("{error}");
+            assert!(!error_msg.is_empty());
+            println!("  ✓ Tiny tensor quantization error: {error_msg}");
         }
     }
 
@@ -1867,8 +1835,8 @@ fn test_quantization_error_scenarios() -> Result<()> {
     match result {
         Ok(_) => println!("  ✓ NaN tensor handled gracefully"),
         Err(error) => {
-            let error_msg = format!("{}", error);
-            println!("  ✓ NaN tensor error: {}", error_msg);
+            let error_msg = format!("{error}");
+            println!("  ✓ NaN tensor error: {error_msg}");
         }
     }
 
@@ -1880,8 +1848,8 @@ fn test_quantization_error_scenarios() -> Result<()> {
     match result {
         Ok(_) => println!("  ✓ Infinity tensor handled gracefully"),
         Err(error) => {
-            let error_msg = format!("{}", error);
-            println!("  ✓ Infinity tensor error: {}", error_msg);
+            let error_msg = format!("{error}");
+            println!("  ✓ Infinity tensor error: {error_msg}");
         }
     }
 
@@ -1892,7 +1860,7 @@ fn test_quantization_error_scenarios() -> Result<()> {
 /// Test memory-related error handling for error handling integration tests.
 ///
 /// Validates out-of-memory scenarios, allocation failures, and memory pool
-/// constraint handling with appropriate UnslothError variants.
+/// constraint handling with appropriate `UnslothError` variants.
 #[test]
 fn test_error_handling_memory_scenarios() -> Result<()> {
     println!("🧪 Testing memory error handling...");
@@ -1911,18 +1879,15 @@ fn test_error_handling_memory_scenarios() -> Result<()> {
     {
         assert_eq!(required, 2048);
         assert_eq!(available, 1024);
-        println!(
-            "  ✓ Out of memory error: required {} bytes, available {} bytes",
-            required, available
-        );
+        println!("  ✓ Out of memory error: required {required} bytes, available {available} bytes");
     } else {
         panic!("Expected OutOfMemory error");
     }
 
     // Test 2: Multiple allocations leading to exhaustion
     let mut pool = MemoryPool::new(Some(1000));
-    let _alloc1 = pool.allocate(400)?;
-    let _alloc2 = pool.allocate(400)?;
+    pool.allocate(400)?;
+    pool.allocate(400)?;
 
     // This should fail - we have 800 allocated, trying to allocate 300 more (total 1100 > 1000)
     let result = pool.allocate(300);
@@ -1936,8 +1901,7 @@ fn test_error_handling_memory_scenarios() -> Result<()> {
         assert_eq!(required, 1100); // 800 + 300
         assert_eq!(available, 200); // 1000 - 800
         println!(
-            "  ✓ Memory exhaustion error: required {} bytes, available {} bytes",
-            required, available
+            "  ✓ Memory exhaustion error: required {required} bytes, available {available} bytes"
         );
     }
 
@@ -1946,7 +1910,7 @@ fn test_error_handling_memory_scenarios() -> Result<()> {
     let result = estimate_attention_vram(64, large_seq_len, 32, 12); // Add num_heads parameter
 
     // Should handle large sequences gracefully
-    println!("  ✓ Large sequence estimation: {} bytes", result);
+    println!("  ✓ Large sequence estimation: {result} bytes");
 
     // Clean up allocations
     pool.free(400);
@@ -1973,7 +1937,7 @@ fn test_device_error_conditions() -> Result<()> {
     // Test 2: GPU device error handling (when CUDA not available)
     match Device::new_cuda(0) {
         Ok(gpu_device) => {
-            println!("  ✓ GPU device available: {:?}", gpu_device);
+            println!("  ✓ GPU device available: {gpu_device:?}");
 
             // Test GPU tensor operations
             let gpu_tensor = Tensor::randn(0.0, 1.0, (4, 4), &gpu_device)?;
@@ -1981,7 +1945,7 @@ fn test_device_error_conditions() -> Result<()> {
             println!("  ✓ GPU tensor operations working");
         }
         Err(error) => {
-            println!("  ✓ GPU device unavailable (expected): {}", error);
+            println!("  ✓ GPU device unavailable (expected): {error}");
             // This is expected on systems without CUDA
         }
     }
@@ -2012,7 +1976,7 @@ fn test_configuration_error_validation() -> Result<()> {
     // Test invalid batch size (set to 0)
     let invalid_batch_size = 0;
     assert_eq!(invalid_batch_size, 0);
-    println!("  ✓ Invalid batch size detected: {}", invalid_batch_size);
+    println!("  ✓ Invalid batch size detected: {invalid_batch_size}");
 
     // Test 2: Mixed precision configuration
     let mixed_precision = MixedPrecisionConfig {
@@ -2063,66 +2027,66 @@ fn test_error_message_clarity() -> Result<()> {
         required: 1048576,
         available: 524288,
     };
-    let error_msg = format!("{}", oom_error);
+    let error_msg = format!("{oom_error}");
 
     assert!(error_msg.contains("out of memory"));
     assert!(error_msg.contains("1048576"));
     assert!(error_msg.contains("524288"));
     assert!(error_msg.contains("required"));
     assert!(error_msg.contains("available"));
-    println!("  ✓ OutOfMemory error message: {}", error_msg);
+    println!("  ✓ OutOfMemory error message: {error_msg}");
 
     // Test 2: ShapeMismatch error message format
     let shape_error = UnslothError::ShapeMismatch {
         expected: vec![4, 8],
         actual: vec![4, 6],
     };
-    let error_msg = format!("{}", shape_error);
+    let error_msg = format!("{shape_error}");
 
     assert!(error_msg.contains("shape mismatch"));
     assert!(error_msg.contains("[4, 8]"));
     assert!(error_msg.contains("[4, 6]"));
     assert!(error_msg.contains("expected"));
-    println!("  ✓ ShapeMismatch error message: {}", error_msg);
+    println!("  ✓ ShapeMismatch error message: {error_msg}");
 
     // Test 3: DeviceNotAvailable error message
     let device_error = UnslothError::DeviceNotAvailable(
         "CUDA device 0 not available: no CUDA-capable devices found".to_string(),
     );
-    let error_msg = format!("{}", device_error);
+    let error_msg = format!("{device_error}");
 
     assert!(error_msg.contains("device not available"));
     assert!(error_msg.contains("CUDA"));
-    println!("  ✓ DeviceNotAvailable error message: {}", error_msg);
+    println!("  ✓ DeviceNotAvailable error message: {error_msg}");
 
     // Test 4: InvalidConfig error message
     let config_error =
         UnslothError::InvalidConfig("learning rate must be positive, got -0.1".to_string());
-    let error_msg = format!("{}", config_error);
+    let error_msg = format!("{config_error}");
 
     assert!(error_msg.contains("invalid configuration"));
     assert!(error_msg.contains("learning rate"));
-    println!("  ✓ InvalidConfig error message: {}", error_msg);
+    println!("  ✓ InvalidConfig error message: {error_msg}");
 
     // Test 5: Quantization error message
     let quant_error = UnslothError::Quantization(
         "tensor contains NaN values which cannot be quantized".to_string(),
     );
-    let error_msg = format!("{}", quant_error);
+    let error_msg = format!("{quant_error}");
 
     assert!(error_msg.contains("quantization error"));
     assert!(error_msg.contains("NaN"));
-    println!("  ✓ Quantization error message: {}", error_msg);
+    println!("  ✓ Quantization error message: {error_msg}");
 
     // Test 6: Ternary operation error message
     let ternary_error = UnslothError::Ternary(
         "unsupported tensor shape for ternary linear layer: [1, 3, 5]".to_string(),
     );
-    let error_msg = format!("{}", ternary_error);
+    let error_msg = format!("{ternary_error}");
 
     assert!(error_msg.contains("ternary operation error"));
     assert!(error_msg.contains("unsupported"));
-    println!("  ✓ Ternary error message: {}", error_msg);
+    println!("  ✓ Ternary error message: {error_msg}");
 
     println!("✅ Error message clarity test passed");
     Ok(())
@@ -2156,10 +2120,7 @@ fn test_multi_layer_transformer() -> Result<()> {
     let mut hidden_states =
         Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, hidden_size), &device)?;
 
-    println!(
-        "  Configuration: {} layers, hidden_size={}, seq_len={}",
-        num_layers, hidden_size, seq_len
-    );
+    println!("  Configuration: {num_layers} layers, hidden_size={hidden_size}, seq_len={seq_len}");
 
     // Create reusable norm layer
     let norm = RmsNorm::new(hidden_size, 1e-5, &device)?;
@@ -2243,8 +2204,7 @@ fn test_long_sequence_attention() -> Result<()> {
     let head_dim = 64;
 
     println!(
-        "  Configuration: seq_len={}, hidden_size={}, num_heads={}",
-        seq_len, hidden_size, num_heads
+        "  Configuration: seq_len={seq_len}, hidden_size={hidden_size}, num_heads={num_heads}"
     );
 
     // Create attention layer
@@ -2275,10 +2235,7 @@ fn test_long_sequence_attention() -> Result<()> {
     let variance: f32 =
         output_data.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / output_data.len() as f32;
     let std_dev = variance.sqrt();
-    println!(
-        "  Output statistics: mean={:.4}, std_dev={:.4}",
-        mean, std_dev
-    );
+    println!("  Output statistics: mean={mean:.4}, std_dev={std_dev:.4}");
 
     assert!(mean.abs() < 1.0, "Mean should be close to 0");
     assert!(
@@ -2306,10 +2263,7 @@ fn test_large_batch_processing() -> Result<()> {
     let in_features = 512;
     let out_features = 512;
 
-    println!(
-        "  Configuration: batch_size={}, seq_len={}, features={}",
-        batch_size, seq_len, in_features
-    );
+    println!("  Configuration: batch_size={batch_size}, seq_len={seq_len}, features={in_features}");
 
     // Create ternary linear layer
     let weights = Tensor::randn(0.0f32, 0.1, (out_features, in_features), &device)?;
@@ -2388,7 +2342,7 @@ fn test_gradient_checkpointing_config() -> Result<()> {
     );
 
     let reduction_percent = (1.0 - mem_with_checkpoint as f64 / mem_no_checkpoint as f64) * 100.0;
-    println!("  Memory reduction: {:.1}%", reduction_percent);
+    println!("  Memory reduction: {reduction_percent:.1}%");
 
     // Checkpointing should reduce memory usage
     assert!(

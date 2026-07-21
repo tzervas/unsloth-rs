@@ -1,3 +1,4 @@
+#![allow(warnings)]
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 

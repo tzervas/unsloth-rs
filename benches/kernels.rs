@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 //! Kernel benchmarking suite for CPU performance profiling.
 //!
 //! This benchmark suite measures performance for all kernel implementations:

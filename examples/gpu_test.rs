@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 //! Simple GPU test to verify CubeCL CUDA is working
 
 fn main() {

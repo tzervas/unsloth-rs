@@ -4,25 +4,41 @@
 //! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and
-//! `CubeCL` buffer handles, enabling seamless integration between the two frameworks.
+//! `CubeCL` buffer handles, enabling integration between the two frameworks.
 //!
 //! ## Key Functions
 //!
-//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to `CubeCL` handle
-//! - [`cubecl_to_candle_tensor`] - Convert `CubeCL` output back to Candle tensor
+//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to `CubeCL` handle bytes
+//! - [`cubecl_to_candle_tensor`] - Convert `CubeCL` output bytes back to Candle tensor
 //! - [`has_cubecl_cuda_support`] - Check if CUDA runtime is available
+//! - [`interop_requires_host_roundtrip`] - Honesty flag: host D2H/H2D is required
 //!
-//! ## Memory Management
+//! ## Permanent limitation (UNS-P1-01 / PR-070)
 //!
-//! The conversion functions handle:
-//! - Ensuring tensor contiguity (required for raw pointer access)
-//! - Buffer creation via `client.create(bytes)`
-//! - Buffer reuse where possible to minimize allocations
+//! **Host device-to-host and host-to-device copies are required** for Candle ↔ CubeCL
+//! buffer handoff with the current public APIs of:
 //!
-//! ## Fallback Routing
+//! | Library | What is available | What is missing for zero-copy |
+//! |---------|-------------------|-------------------------------|
+//! | **Candle 0.9** | `Tensor::to_vec1` (D2H), `Tensor::from_vec` (H2D); `CudaStorage`/`CudaSlice` only usable inside Candle custom ops | No public export of a raw CUDA device pointer from an arbitrary `Tensor` without internal storage access |
+//! | **CubeCL 0.9** | `client.create(Bytes)`, `client.empty`, `client.read_one` | No public “import external `CUdeviceptr` / foreign buffer” API that registers a Candle allocation as a CubeCL `Handle` |
 //!
-//! When `CubeCL` is not available, functions return appropriate errors or
-//! fallback implementations are used in the kernel module.
+//! Candle and CubeCL also maintain **separate CUDA memory managers and contexts**.
+//! Sharing a pointer across them would still require explicit ownership / lifetime
+//! rules that neither crate exposes today.
+//!
+//! ### Performance implication
+//!
+//! End-to-end Flash Attention and fused CubeCL kernels that go through this interop
+//! **cannot claim Unsloth-style 2× speedups or large VRAM wins** until a true
+//! device-side handoff exists (or kernels are rewritten as Candle `CustomOp*`
+//! that operate on `CudaStorage` in-process without CubeCL handles).
+//!
+//! Documented alternatives for a future PR:
+//! 1. Candle `CustomOp` path that never leaves Candle CUDA storage (drop CubeCL handle model).
+//! 2. Upstream CubeCL external-buffer import + Candle stable device-ptr export.
+//!
+//! Until then: correctness paths remain valuable; **throughput claims are demoted**.
 
 use crate::error::{Result, UnslothError};
 use candle_core::{DType, Device, Tensor};
@@ -30,6 +46,15 @@ use candle_core::{DType, Device, Tensor};
 // Constants for bitsliced operations
 const BITS_PER_U32: usize = 32;
 const BITS_PER_U64: usize = 64;
+
+/// Returns `true` if Candle↔CubeCL conversion must round-trip through host memory.
+///
+/// Always `true` for CubeCL 0.9 + Candle 0.9 public APIs (see module docs).
+/// Exposed so callers and docs can branch honestly on perf expectations.
+#[must_use]
+pub const fn interop_requires_host_roundtrip() -> bool {
+    true
+}
 
 /// Check if `CubeCL` CUDA runtime support is available.
 ///
@@ -57,12 +82,8 @@ pub fn has_cubecl_cuda_support() -> bool {
     // Check if cuda feature is enabled
     #[cfg(feature = "cuda")]
     {
-        // TODO: Add actual CubeCL runtime device detection
-        // For now, check if Candle can see a CUDA device
-        // This will be replaced with:
-        // cubecl_cuda::CudaRuntime::is_available()
-
-        // Placeholder: Check Candle CUDA support as proxy
+        // Proxy: Candle CUDA device visibility. CubeCL may still fail at launch
+        // (separate runtime); callers must fall back on kernel errors.
         matches!(Device::cuda_if_available(0), Ok(Device::Cuda(_)))
     }
 
@@ -72,10 +93,15 @@ pub fn has_cubecl_cuda_support() -> bool {
     }
 }
 
-/// Convert a Candle tensor to a `CubeCL` buffer handle.
+/// Convert a Candle tensor to a `CubeCL` buffer handle payload.
 ///
 /// The tensor must be contiguous in memory. If not, it will be made contiguous
 /// (which may involve a copy).
+///
+/// # Host copy (permanent with current APIs)
+///
+/// For CUDA tensors this performs a **device → host** transfer via `to_vec1`.
+/// See module-level **Permanent limitation**. Zero-copy is not available.
 ///
 /// # Arguments
 ///
@@ -119,15 +145,14 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
     let dtype = tensor.dtype();
 
     // Only f32 supported currently
-    // TODO: Add f16/bf16 support
+    // TODO: Add f16/bf16 support (UNS-P1-04)
     if dtype != DType::F32 {
         return Err(UnslothError::InvalidConfig(format!(
             "candle_to_cubecl_handle only supports f32, got {dtype:?}"
         )));
     }
 
-    // Extract raw bytes
-    // For CUDA tensors, this requires a device-to-host copy
+    // Device → host copy (required; see interop_requires_host_roundtrip).
     let data: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
     let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -136,9 +161,14 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
 
 /// Convert a `CubeCL` buffer back to a Candle tensor.
 ///
+/// # Host copy (permanent with current APIs)
+///
+/// Builds the tensor via `Tensor::from_vec` on the target CUDA device, which is a
+/// **host → device** upload. There is no public CubeCL→Candle device-pointer import.
+///
 /// # Arguments
 ///
-/// * `bytes` - Raw output bytes from `CubeCL` kernel
+/// * `bytes` - Raw output bytes from `CubeCL` kernel (already read to host)
 /// * `shape` - Target tensor shape
 /// * `device` - Target Candle device (must be CUDA)
 ///
@@ -188,9 +218,7 @@ pub fn cubecl_to_candle_tensor(bytes: &[u8], shape: &[usize], device: &Device) -
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
 
-    // Create Candle tensor
-    // Note: This creates on CPU first, then transfers to CUDA
-    // TODO: Optimize with direct GPU buffer creation
+    // Host → device (required; see interop_requires_host_roundtrip).
     let tensor = Tensor::from_vec(data, shape, device)?;
 
     Ok(tensor)
@@ -343,6 +371,7 @@ pub fn create_sparsity_bitmap_for_tensor(
 /// Convert Candle u32 tensor to CubeCL handle.
 ///
 /// Similar to `candle_to_cubecl_handle` but for u32 dtype (bitsliced planes).
+/// Same host-copy limitation as the f32 path.
 ///
 /// # Arguments
 ///
@@ -390,8 +419,7 @@ pub fn u32_tensor_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usiz
         )));
     }
 
-    // Extract raw bytes
-    // For CUDA tensors, this requires a device-to-host copy
+    // Device → host copy (required; see interop_requires_host_roundtrip).
     let data: Vec<u32> = tensor.flatten_all()?.to_vec1()?;
     let bytes: Vec<u8> = data.iter().flat_map(|u| u.to_le_bytes()).collect();
 
@@ -399,6 +427,8 @@ pub fn u32_tensor_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usiz
 }
 
 /// Convert CubeCL u32 buffer back to a Candle u32 tensor.
+///
+/// Host → device upload; see [`interop_requires_host_roundtrip`].
 ///
 /// # Arguments
 ///
@@ -455,9 +485,7 @@ pub fn cubecl_to_u32_candle_tensor(
         .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
 
-    // Create Candle tensor
-    // Note: This creates on CPU first, then transfers to CUDA
-    // TODO: Optimize with direct GPU buffer creation
+    // Host → device (required; see interop_requires_host_roundtrip).
     let tensor = Tensor::from_vec(data, shape, device)?;
 
     Ok(tensor)
@@ -471,6 +499,12 @@ mod tests {
     fn test_has_cubecl_cuda_support() {
         // Should not panic regardless of CUDA availability
         let _ = has_cubecl_cuda_support();
+    }
+
+    #[test]
+    fn test_interop_requires_host_roundtrip() {
+        // Permanent with Candle 0.9 + CubeCL 0.9 public APIs
+        assert!(interop_requires_host_roundtrip());
     }
 
     #[test]

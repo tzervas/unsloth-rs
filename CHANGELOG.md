@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Flash Attention scale** in `FusedAttention::forward_flash_attention`: pass `1/sqrt(head_dim)` into the multiply-scale API (was incorrectly using `sqrt(head_dim)`).
+- **crates.io packaging case collision**: removed duplicate lowercase `roadmap.md`; keep only `ROADMAP.md`.
+
+### Changed
+- README / crate docs: honest **kernels-only** positioning (not an Unsloth product port; no unproven 2× / 70% VRAM claims).
+- PUBLISHING.md aligned with version 1.0.2 and packaging verification steps.
+- Documented `CUDA_COMPUTE_CAP` pin and **FAIL_ENV** classification for missing GPU / toolkit mismatch (GPU_SETUP.md, DEBT.md, CI comments).
+- **PR-070:** Documented permanent Candle↔CubeCL **host D2H/H2D** interop limitation; demoted FA speed claims; `interop_requires_host_roundtrip()`.
+- **PR-071:** GPU numerical equivalence test is `#[ignore]` with MAE thresholds and **BLOCKED:env** vs **FAIL (accuracy)** classification.
+- **PR-083:** Removed public always-`Err` `compute_gradient_checkpointed` stub; checkpoint config remains for memory estimates only.
+
+### Added
+- Unit test `test_flash_path_scale_matches_cpu_one_over_sqrt_d` to catch scale regressions.
+- `interop_requires_host_roundtrip()` honesty helper.
+- GPU numerical gate env instructions in `tests/gpu/flash_attention.rs` and DEBT.md.
+
+
 ## [1.0.2] - 2026-01-25
 
 ### Changed

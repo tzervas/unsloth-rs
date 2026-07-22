@@ -44,6 +44,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: cargo check
         run: cargo check --workspace --all-targets
+      # CPU default. Do not add a silent GPU job that passes without a device.
+      # GPU builds: CUDA_COMPUTE_CAP pin + FAIL_ENV when no /dev/nvidia* (GPU_SETUP.md).
       - name: cargo test
         run: cargo test --workspace
 

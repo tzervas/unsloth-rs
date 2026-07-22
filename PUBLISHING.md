@@ -2,285 +2,135 @@
 
 ## Publication Status
 
-**Current Version**: `0.1.0` (pre-release)
-**Publication Status**: Ready for alpha/beta release
-**Last Updated**: January 9, 2026
+| Field | Value |
+|-------|--------|
+| **Cargo.toml version** | `1.0.2` |
+| **Git tags (local/origin)** | `v1.0.0`, `v1.0.1`, `v1.0.2` (and older alpha) |
+| **docs.rs** | Builds for 1.0.2 |
+| **crates.io tarball** | **Broken for 1.0.2** — historical dual-path case collision (`ROADMAP.md` + `roadmap.md`) caused `Invalid path … Duplicate path conflicts` |
+| **Fix in this tree** | Only `ROADMAP.md` remains; verify with `cargo package --list` before next publish |
+| **Last docs refresh** | 2026-07-22 (gap-close Wave-3 PR-012) |
 
-## Pre-Publication Checklist
+**Do not `cargo publish` from this workstream unless the release train explicitly opens a publish gate.** Prefer dry-run / `--list` only.
 
-### ✅ Completed Items
-- [x] Cargo.toml metadata (name, version, authors, description, license, repository, keywords, categories)
-- [x] README.md with usage examples and status badges
-- [x] LICENSE file (MIT)
-- [x] Comprehensive test suite (114 unit tests + 34 integration tests)
-- [x] Documentation (`cargo doc` generates full API docs)
-- [x] Benchmarking suite
-- [x] Quality gates (86% clippy warning reduction)
+## Product positioning (must stay honest)
 
-### 📋 Pre-Publication Requirements
+- Crate is **Candle/CubeCL transformer building blocks**, not a full Unsloth product port.
+- Do **not** advertise Unsloth “2× training” or “~70% VRAM” claims for this crate without measured evidence from this repo.
+- Training/LoRA lives in sister crates (peft-rs, qlora-rs, axolotl-rs).
 
-1. **Version Tagging**
-   - Decide on version number (suggest `0.1.0-alpha.1` for first alpha release)
-   - Update `Cargo.toml` version field
-   - Create git tag: `git tag -s v0.1.0-alpha.1 -m "Alpha release 0.1.0-alpha.1"`
+## Pre-publication checklist
 
-2. **Documentation Review**
-   - Ensure all public APIs have documentation
-   - Run `cargo doc --open` to verify docs render correctly
-   - Add examples to critical functions
+### Metadata
 
-3. **Final Testing**
-   ```bash
-   cargo test --all-features
-   cargo clippy --all-features -- -D warnings
-   cargo fmt -- --check
-   cargo bench
-   ```
+- [x] `Cargo.toml`: name, version, authors, description, license, repository, keywords, categories
+- [x] `README.md` with honest scope + non-goals
+- [x] `LICENSE` (MIT)
+- [x] `CHANGELOG.md` present
+- [ ] Next version (e.g. `1.0.3`) only after packaging case fix is verified and changelog updated
 
-4. **Package Verification**
-   ```bash
-   cargo package --allow-dirty
-   cargo package --list
-   ```
+### Packaging (case collision)
 
-## GPG Signing Configuration
+crates.io packages on a case-sensitive archive model that still rejects
+case-colliding paths (Windows / macOS consumers). **Never ship both
+`ROADMAP.md` and `roadmap.md`.**
 
-### Maintainer Identity
-- **Name**: Tyler Zervas
-- **Email**: tz-dev@vectorweight.com
-- **Username**: tzervas
-- **GPG Key**: Required for signed releases
-
-### Setting Up GPG Signing
-
-1. **Verify GPG Key Exists**
-   ```bash
-   gpg --list-secret-keys --keyid-format=long tz-dev@vectorweight.com
-   ```
-
-2. **Create GPG Key (if needed)**
-   ```bash
-   gpg --full-generate-key
-   # Select: RSA and RSA (default)
-   # Key size: 4096
-   # Expiration: 0 (no expiration) or your preference
-   # Real name: Tyler Zervas
-   # Email: tz-dev@vectorweight.com
-   # Comment: unsloth-rs package signing
-   ```
-
-3. **Configure Git to Use GPG**
-   ```bash
-   # Get your GPG key ID
-   gpg --list-secret-keys --keyid-format=long tz-dev@vectorweight.com
-   
-   # Configure git globally
-   git config --global user.signingkey <YOUR_GPG_KEY_ID>
-   git config --global commit.gpgsign true
-   git config --global tag.gpgSign true
-   
-   # Or configure for this repo only
-   git config user.signingkey <YOUR_GPG_KEY_ID>
-   git config commit.gpgsign true
-   git config tag.gpgSign true
-   ```
-
-4. **Export Public Key to GitHub/GitLab**
-   ```bash
-   gpg --armor --export tz-dev@vectorweight.com
-   ```
-   Then add to GitHub: Settings → SSH and GPG keys → New GPG key
-
-### Signed Git Tags
-
-Create signed release tags:
 ```bash
-# Alpha release
-git tag -s v0.1.0-alpha.1 -m "Alpha release 0.1.0-alpha.1
+# Must succeed and list only one roadmap path
+cargo package --allow-dirty --list | rg -i roadmap
 
-- Initial alpha release
-- Core transformer building blocks
-- CPU reference implementations
-- GPU infrastructure ready
-- 114 unit tests + 34 integration tests passing"
-
-# Push tag
-git push origin v0.1.0-alpha.1
-
-# Verify signature
-git tag -v v0.1.0-alpha.1
+# Dry-run package (does not publish)
+cargo package --allow-dirty
 ```
 
-## Publishing Workflow
+If `cargo package` reports a duplicate-path conflict, stop — do not publish.
 
-### Step 1: Prepare Release
-
-1. **Update Version**
-   ```bash
-   # Update Cargo.toml version field
-   # For alpha: 0.1.0-alpha.1
-   # For beta: 0.1.0-beta.1
-   # For stable: 0.1.0
-   ```
-
-2. **Update CHANGELOG.md** (create if needed)
-   ```markdown
-   # Changelog
-   
-   ## [0.1.0-alpha.1] - 2026-01-09
-   
-   ### Added
-   - Multi-head attention with GQA support
-   - Flash Attention infrastructure (CPU fallback ready)
-   - Ternary quantization system
-   - RoPE, RMSNorm, SwiGLU implementations
-   - Memory tracking and VRAM estimation
-   - Mixed precision training support
-   - Comprehensive test suite (148 tests)
-   
-   ### Notes
-   - Alpha release for early testing
-   - GPU kernels require CUDA feature flag
-   - Production use not recommended yet
-   ```
-
-3. **Final Quality Check**
-   ```bash
-   cargo test --all-features
-   cargo clippy --all-features -- -D warnings
-   cargo doc --no-deps --open
-   ```
-
-### Step 2: Package and Verify
+### Quality gates (CPU default)
 
 ```bash
-# Create package (dry run)
+cargo test --workspace --no-default-features
+cargo test --workspace   # default features (currently empty default)
+cargo clippy --all-targets -- -D warnings   # optional stricter gate
+cargo fmt -- --check
+cargo doc --no-deps
+```
+
+### CUDA (optional; not required for crates.io CPU package)
+
+GPU builds are **environment-gated**. Missing device nodes or toolkit/arch
+mismatch is **`FAIL_ENV`**, not a green CI pass. See [GPU_SETUP.md](GPU_SETUP.md)
+and [DEBT.md](DEBT.md).
+
+```bash
+# Often required when host reports CC 12.0 but nvcc is older (≤ sm_90)
+CUDA_COMPUTE_CAP=90 cargo check --features cuda
+```
+
+## GPG signing (maintainer)
+
+- **Name**: Tyler Zervas  
+- **Email**: tz-dev@vectorweight.com  
+- **Username**: tzervas  
+
+```bash
+gpg --list-secret-keys --keyid-format=long tz-dev@vectorweight.com
+git config user.signingkey <YOUR_GPG_KEY_ID>
+git config commit.gpgsign true
+git config tag.gpgSign true
+```
+
+### Signed tags
+
+```bash
+# Example for a future packaging fix release
+git tag -s v1.0.3 -m "v1.0.3: packaging case fix + docs honesty"
+git push origin v1.0.3
+git tag -v v1.0.3
+```
+
+## Publishing workflow (when release train opens)
+
+### 1. Prepare
+
+1. Bump `Cargo.toml` version and `CHANGELOG.md`.
+2. Confirm single roadmap filename and honest README.
+3. Run CPU tests + `cargo package --allow-dirty --list`.
+
+### 2. Package verify
+
+```bash
 cargo package --allow-dirty
-
-# Verify package contents
 cargo package --list
-
-# Check package size
 ls -lh target/package/unsloth-rs-*.crate
 ```
 
-### Step 3: Publish to crates.io
-
-You're already logged in via `cargo login`. To publish:
+### 3. Publish (only with explicit gate)
 
 ```bash
-# Publish (dry run first)
+# Requires crates.io token; do not run from gap-close agents by default
 cargo publish --dry-run
-
-# Actual publish
-cargo publish
-
-# For alpha/beta releases, consider:
-cargo publish --allow-dirty  # if there are uncommitted changes
+# cargo publish
 ```
 
-### Step 4: Post-Publication
+### 4. Post-publish
 
-1. **Create GitHub Release**
-   - Go to repository releases page
-   - Create release from tag `v0.1.0-alpha.1`
-   - Add release notes from CHANGELOG.md
-   - Mark as "pre-release" for alpha/beta
+- Confirm crates.io page unpacks without path errors.
+- Confirm docs.rs build for the new version.
+- Note any remaining GPU/env debt in DEBT.md (do not claim GPU green).
 
-2. **Verify Publication**
-   ```bash
-   # Check on crates.io
-   open https://crates.io/crates/unsloth-rs
-   
-   # Test installation
-   cargo install unsloth-rs --version 0.1.0-alpha.1
-   ```
+## Historical failure mode (1.0.2)
 
-3. **Announce**
-   - Update README.md with installation instructions
-   - Consider announcing in Rust ML communities if appropriate
-
-## Versioning Strategy
-
-### Alpha Releases (0.1.0-alpha.x)
-- **Purpose**: Early testing, API exploration, feedback gathering
-- **Stability**: APIs may change significantly
-- **Target Users**: Early adopters, contributors
-- **Recommended For**: Testing, experimentation, feedback
-
-### Beta Releases (0.1.0-beta.x)
-- **Purpose**: Feature-complete, API stabilization
-- **Stability**: APIs unlikely to change (but possible)
-- **Target Users**: Early production testing
-- **Recommended For**: Pre-production validation
-
-### Stable Releases (0.1.0+)
-- **Purpose**: Production use
-- **Stability**: Semantic versioning (breaking changes → major version)
-- **Target Users**: Production deployments
-- **Recommended For**: Production workloads
-
-## Current Recommendation
-
-**Suggested First Release**: `0.1.0-alpha.1`
-
-**Rationale**:
-- ✅ Core functionality implemented and tested (148 tests passing)
-- ✅ Quality gates established (86% clippy improvement)
-- ✅ Documentation complete
-- ⚠️ GPU kernels still in development (CubeCL integration)
-- ⚠️ Performance optimization ongoing
-- ⚠️ API may evolve based on feedback
-
-**Alpha Release Notes**:
 ```
-unsloth-rs 0.1.0-alpha.1 - Early Alpha Release
-
-This is an early alpha release for testing and feedback. The crate provides
-Rust implementations of transformer building blocks:
-
-✅ Working:
-- Multi-head attention (CPU reference + Candle CUDA backend)
-- RoPE, RMSNorm, SwiGLU
-- Ternary quantization system
-- Memory tracking and VRAM estimation
-- Mixed precision training support
-- Comprehensive test suite (148 tests)
-
-🚧 In Development:
-- Flash Attention CubeCL GPU kernels
-- Performance optimization
-- Additional fused operations
-
-⚠️ Note: This is an alpha release. APIs may change. Not recommended for 
-production use yet. Feedback welcome!
+Invalid path 'unsloth-rs-1.0.2/roadmap.md':
+Duplicate path conflicts with 'ROADMAP.md'
 ```
 
-## Quick Publish Commands
+**Root cause:** two roadmap files differing only by case.  
+**Remediation:** keep `ROADMAP.md` only; ternary phased notes live under
+`TERNARY_GPU_IMPLEMENTATION.md` / other docs — not a second `roadmap.md`.
 
-When ready to publish:
+## References
 
-```bash
-# 1. Update version in Cargo.toml to "0.1.0-alpha.1"
-# 2. Commit changes
-git add -A
-git commit -S -m "Release 0.1.0-alpha.1"
-
-# 3. Create signed tag
-git tag -s v0.1.0-alpha.1 -m "Alpha release 0.1.0-alpha.1"
-
-# 4. Push
-git push origin testing
-git push origin v0.1.0-alpha.1
-
-# 5. Publish to crates.io
-cargo publish
-
-# 6. Create GitHub release from tag
-```
-
-## Contact
-
-- **Maintainer**: Tyler Zervas (tzervas)
-- **Email**: tz-dev@vectorweight.com
-- **Repository**: https://github.com/tzervas/unsloth-rs
+- [GPU_SETUP.md](GPU_SETUP.md) — `CUDA_COMPUTE_CAP`, FAIL_ENV
+- [DEBT.md](DEBT.md) — residual GPU gates
+- [CHANGELOG.md](CHANGELOG.md)

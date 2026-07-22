@@ -579,9 +579,14 @@ pub fn flash_attention_kernel(
 ///
 /// This is the internal implementation that handles:
 /// 1. CubeCL runtime initialization
-/// 2. Tensor conversion to CubeCL handles
+/// 2. Tensor conversion to CubeCL handles (**host D2H/H2D** — see `interop`)
 /// 3. Kernel launch with proper grid/block configuration
-/// 4. Result conversion back to Candle tensor
+/// 4. Result conversion back to Candle tensor (**host readback**)
+///
+/// # Perf note
+/// Because step 2/4 copy through host memory (`interop_requires_host_roundtrip()`),
+/// this path is a correctness / experimental kernel launch, **not** a throughput
+/// competitor for Candle native attention. Do not claim 2× speedups from this path.
 #[cfg(feature = "cuda")]
 fn launch_cubecl_attention(
     q: &Tensor,

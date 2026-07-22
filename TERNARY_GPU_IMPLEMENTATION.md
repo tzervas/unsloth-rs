@@ -215,4 +215,4 @@ candle-nn = "0.9.1"
 - [CubeCL Documentation](https://docs.rs/cubecl/0.8.1) - GPU kernel framework
 - [math.md](./math.md) - Mathematical proofs (entropy, SNR bounds)
 - [details.md](./details.md) - Project specification
-- [roadmap.md](./roadmap.md) - 6-phase implementation plan
+- [ROADMAP.md](./ROADMAP.md) / [TERNARY_GPU_IMPLEMENTATION.md](./TERNARY_GPU_IMPLEMENTATION.md) - plans (single roadmap filename for crates.io)

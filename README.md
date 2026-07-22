@@ -5,60 +5,87 @@
 [![Security](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-security.yml/badge.svg?branch=main)](https://github.com/tzervas/unsloth-rs/actions/workflows/fleet-security.yml?query=branch%3Amain)
 <!-- FLEET-BADGES:END -->
 
-Rust implementations of transformer building blocks for LLM inference and fine-tuning.
+Candle/CubeCL **transformer kernel building blocks** for LLM inference experiments.
 
 [![Crates.io](https://img.shields.io/crates/v/unsloth-rs.svg)](https://crates.io/crates/unsloth-rs)
 [![Documentation](https://docs.rs/unsloth-rs/badge.svg)](https://docs.rs/unsloth-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Overview
+> **Not a product port of [Unsloth](https://github.com/unslothai/unsloth).**  
+> This crate does **not** provide LoRA/QLoRA trainers, a model zoo, HuggingFace
+> fine-tune pipelines, or proven Unsloth-style training speed/VRAM gains.
+> Do **not** claim “2× faster” or “~70% less VRAM” for this crate without
+> published measurements from this codebase.
 
-`unsloth-rs` provides Rust implementations of common transformer operations built on the [Candle](https://github.com/huggingface/candle) ML framework:
+## What this crate is
 
-- Multi-head attention with grouped-query attention (GQA) support
-- Rotary position embeddings (RoPE)
-- RMS normalization
-- SwiGLU activation
+`unsloth-rs` is a MIT Rust library of **common transformer ops** built on
+[Candle](https://github.com/huggingface/candle), with optional CubeCL CUDA
+kernels:
 
-## Status
+| Building block | CPU (Candle) | CUDA feature |
+|----------------|--------------|--------------|
+| Multi-head attention + GQA | ✅ | Candle CUDA + optional Flash path |
+| RoPE | ✅ | Elementwise CubeCL (partial) |
+| RMSNorm | ✅ | Elementwise CubeCL (partial) |
+| SwiGLU | ✅ | Elementwise CubeCL + CPU fallback |
+| Memory / checkpoint **estimates** | ✅ (math only) | n/a |
+| Ternary quant / linear (CPU) | ✅ experimental | GPU modules largely unwired |
+| Mixed-precision helpers | ✅ config + scale utils | not a trainer |
+| LoRA / QLoRA / SFT trainer | ❌ | use peft-rs / qlora-rs / axolotl-rs |
 
-**Version 1.0.0** - Core functionality stable. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
+## Status (honest)
 
-### Implemented
-- ✅ Multi-head attention (CPU reference, Candle CUDA backend)
-- ✅ Rotary position embeddings (RoPE)
-- ✅ RMS normalization
-- ✅ SwiGLU activation
-- ✅ Memory estimation utilities
-- ✅ Ternary quantization (5-15x compression achieved)
-- ✅ Mixed precision training utilities (FP32/FP16/BF16)
-- ✅ Benchmarking suite (CPU)
-- ✅ 160 passing tests (100% pass rate)
+**Version:** `1.0.2` (see `Cargo.toml`). Semver 1.x means the **public CPU
+kernel APIs** are intended to be usable; GPU paths and training utilities are
+still incomplete.
 
-### In Progress
-- 🚧 Flash Attention CubeCL GPU kernel (Phase 1 complete, Phase 2 ready for RTX 5080 validation)
-- 🚧 Ternary GPU kernels (Phase 2-4 implemented, awaiting GPU profiling)
-- 🚧 CI/CD pipeline setup
+### Solid today
 
-### Planned
-- ⏳ Gradient checkpointing (configuration exists, implementation planned)
-- ⏳ GPU performance validation on RTX 5080/3090 Ti
-- ⏳ RoPE, RMSNorm, SwiGLU GPU kernels
-- ⏳ Advanced sparsity optimizations
-- ⏳ Multi-GPU support
+- Multi-head attention (CPU reference; correct `1/√head_dim` scaling)
+- RoPE, RMSNorm, SwiGLU on CPU
+- Memory estimation helpers
+- Default-feature CPU test suite (unit + integration)
+
+### Partial / experimental
+
+- Flash Attention via CubeCL (`cuda` feature): real kernels exist; **host D2H/H2D
+  interop is a permanent limitation** with Candle 0.9 + CubeCL 0.9 public APIs
+  (`interop_requires_host_roundtrip()` → true). **No end-to-end speedup claims.**
+- GPU numerical equivalence gate: structured, `#[ignore]`, needs `/dev/nvidia0`
+  (see [DEBT.md](DEBT.md)); **BLOCKED:env** on hosts without full device nodes
+- Ternary quantization experiments (CPU compression ratios only)
+- Mixed-precision **utilities** (no end-to-end trainer); checkpoint **estimates**
+  only (no recompute training API)
+
+### Explicit non-goals (for this crate)
+
+- Unsloth product parity (model matrix, packing, RL/GRPO, multi-GPU train)
+- Claiming training speedups or VRAM savings without evidence
+- Shipping a fine-tuning CLI (that belongs in orchestration crates)
+
+See [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md) for residual risk and
+CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV` classification).
 
 ## Installation
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.0"
+unsloth-rs = "1.0.2"
 ```
 
-For CUDA support (uses Candle's CUDA backend):
+CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.0", features = ["cuda"] }
+unsloth-rs = { version = "1.0.2", features = ["cuda"] }
+```
+
+On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0
+reported but toolkit only builds ≤ 9.0):
+
+```bash
+CUDA_COMPUTE_CAP=90 cargo check --features cuda
 ```
 
 ## Usage
@@ -71,27 +98,24 @@ use candle_core::{Device, Tensor};
 
 fn main() -> anyhow::Result<()> {
     let device = Device::Cpu;
-    
+
     let config = FusedAttentionConfig {
         hidden_size: 768,
         num_heads: 12,
         head_dim: 64,
-        num_kv_heads: Some(4),  // GQA support
+        num_kv_heads: Some(4), // GQA support
         ..Default::default()
     };
-    
+
     let attention = FusedAttention::new(config, &device)?;
-    
-    // Create random input tensor: randn(mean, std_dev, shape, device)
-    // 0.0f32 is Rust syntax for a 32-bit float literal with value 0.0
     let hidden_states = Tensor::randn(0.0f32, 1.0, (1, 128, 768), &device)?;
     let output = attention.forward(&hidden_states, None, None)?;
-    
+
     Ok(())
 }
 ```
 
-### Memory Estimation
+### Memory estimation
 
 ```rust
 use unsloth_rs::memory::{estimate_forward_memory, CheckpointConfig};
@@ -101,7 +125,7 @@ fn main() {
         enabled: true,
         checkpoint_every: 2,
     };
-    
+
     let mem_bytes = estimate_forward_memory(
         4,     // batch_size
         2048,  // seq_len
@@ -109,37 +133,53 @@ fn main() {
         32,    // num_layers
         &checkpoint,
     );
-    
-    println!("Estimated memory: {} GB", mem_bytes as f64 / 1e9);
+
+    println!("Estimated activation memory (model): {} GB", mem_bytes as f64 / 1e9);
 }
 ```
 
 ## Benchmarks
 
-Run benchmarks with:
-
 ```bash
 cargo bench
 ```
 
-Benchmarks test CPU performance across various configurations. GPU benchmarks require the `cuda` feature.
+Benchmarks measure **CPU** kernel performance by default. GPU benches need
+`features = ["cuda"]` and a working device (not exercised as green in default CI).
 
-## Development Roadmap
+**Do not** publish CubeCL Flash Attention as 2× faster than Candle while host
+interop round-trips remain (`DEBT.md` / UNS-P1-01). Kernel-only microbenchmarks
+that ignore D2H/H2D are not product evidence.
 
-For detailed development plans and task breakdowns, see:
+## Development docs
 
-- **[ROADMAP.md](ROADMAP.md)** - Strategic development plan with phases and timelines
-- **[TASKS.md](TASKS.md)** - Actionable task list with priorities and estimates
-- **[SUMMARY.md](SUMMARY.md)** - Project review summary and execution guide
+- **[ROADMAP.md](ROADMAP.md)** — strategic plan (single roadmap file; do not add a
+  case-colliding `roadmap.md` — crates.io packaging fails on case-insensitive FS)
+- **[TASKS.md](TASKS.md)** — task list
+- **[PUBLISHING.md](PUBLISHING.md)** — packaging notes for crates.io
+- **[GPU_SETUP.md](GPU_SETUP.md)** — CUDA toolkit / `CUDA_COMPUTE_CAP` contract
+- **[DEBT.md](DEBT.md)** — residual technical debt and env blocks
+
+## Packaging note
+
+Only **`ROADMAP.md`** is kept. A historical lowercase `roadmap.md` was removed
+because crates.io rejects tarballs with path case collisions
+(`roadmap.md` vs `ROADMAP.md`).
+
+Verify before any release:
+
+```bash
+cargo package --allow-dirty --list
+# must not error with "Duplicate path conflicts"
+```
 
 ## Contributing
 
-Contributions are welcome, particularly:
-- GPU kernel implementations using CubeCL
-- Performance optimizations
-- Additional transformer operations
+Contributions welcome, especially:
 
-See [TASKS.md](TASKS.md) for specific tasks that need implementation.
+- Device-side Candle↔CubeCL handoff (needs upstream APIs or Candle `CustomOp` path)
+- GPU numerical gate runs with published MAE when `/dev/nvidia0` is healthy
+- Additional transformer ops (e.g. fused CE) with CPU references first
 
 ## License
 

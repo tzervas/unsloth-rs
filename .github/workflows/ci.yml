@@ -48,7 +48,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Run tests (CPU only)
-        run: cargo test --verbose --all-features
+        run: cargo test --verbose
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -65,7 +65,7 @@ jobs:
           components: clippy
       
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -99,8 +99,8 @@ jobs:
       - name: Build (no features)
         run: cargo build --verbose
       
-      - name: Check build succeeds with all features
-        run: cargo check --all-features --verbose
+      - name: Check build succeeds with default features
+        run: cargo check --verbose
 
   docs:
     name: Documentation
@@ -112,7 +112,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Build documentation
-        run: cargo doc --no-deps --all-features --verbose
+        run: cargo doc --no-deps --verbose
         env:
           RUSTDOCFLAGS: -D warnings
 

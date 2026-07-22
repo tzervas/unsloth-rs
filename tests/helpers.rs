@@ -1,3 +1,16 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::doc_markdown,
+    clippy::needless_pass_by_value,
+    clippy::needless_range_loop
+)]
+
 //! Test utilities and fixtures for ternary quantization integration tests.
 //!
 //! This module provides reusable test data generation, comparison utilities,

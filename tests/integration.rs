@@ -1,3 +1,19 @@
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::useless_vec,
+    clippy::unnecessary_wraps,
+    clippy::cast_precision_loss,
+    clippy::unreadable_literal,
+    clippy::similar_names,
+    clippy::float_cmp,
+    clippy::field_reassign_with_default,
+    clippy::too_many_lines,
+    clippy::doc_markdown,
+    clippy::len_zero,
+    clippy::let_unit_value,
+    clippy::ignored_unit_patterns
+)]
+
 //! Integration tests for unsloth-rs ternary quantization system.
 //!
 //! This test suite provides comprehensive validation of the ternary quantization

@@ -17,7 +17,7 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 
 ## Status
 
-**Version 1.0.0** - Core functionality stable. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
+**Version 1.0.2** - Core functionality stable. Current implementations are CPU reference implementations with GPU dispatch that uses Candle's CUDA backend.
 
 ### Implemented
 - ✅ Multi-head attention (CPU reference, Candle CUDA backend)
@@ -46,14 +46,14 @@ Rust implementations of transformer building blocks for LLM inference and fine-t
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.0"
+unsloth-rs = "1.0.2"
 ```
 
 For CUDA support (uses Candle's CUDA backend):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.0", features = ["cuda"] }
+unsloth-rs = { version = "1.0.2", features = ["cuda"] }
 ```
 
 ## Usage

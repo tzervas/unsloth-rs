@@ -83,6 +83,34 @@ Default `cargo test` (no `cuda` feature) never compiles this gate — CPU stays 
 With `--features cuda` and missing `/dev/nvidia0`, the gate fails as **BLOCKED:env**
 by design (no silent pass).
 
+
+## WSL / libcuda path (STACK-UNS-FINISH evidence)
+
+On this finish host (WSL-style layout), **system** `libcuda.so.1` may point at
+an older stub (`libcuda.so.535.*`) while `nvidia-smi` reports a newer driver
+(e.g. 610.x). Candle often still works; **CubeCL/cudarc** may panic with
+`CUDA_ERROR_NO_DEVICE` unless the WSL driver library is preferred:
+
+```bash
+export LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDA_COMPUTE_CAP=90
+cargo test --features cuda
+# or numerical gate only:
+cargo test --features cuda --test integration   test_flash_attention_gpu_numerical_equivalence -- --nocapture
+```
+
+| Observation | Classification |
+|-------------|----------------|
+| `/dev/nvidia0` missing | **BLOCKED:env** |
+| Candle `Device::new_cuda` fails | **BLOCKED:env** |
+| CubeCL panics `CUDA_ERROR_NO_DEVICE` (wrong libcuda) | **BLOCKED:env** for CubeCL path; may still fall back to Candle CUDA |
+| Gate MAE within thresholds on effective path | **PASS** (document fallback vs CubeCL kernel) |
+| Metrics out of bounds | **FAIL (accuracy)** |
+
+**Do not** claim 2× speedups from Flash Attention while host D2H/H2D interop
+remains (`interop_requires_host_roundtrip()`).
+
+
 ---
 
 ## Installing CUDA Toolkit

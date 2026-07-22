@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented `CUDA_COMPUTE_CAP` pin and **FAIL_ENV** classification for missing GPU / toolkit mismatch (GPU_SETUP.md, DEBT.md, CI comments).
 - **PR-070:** Documented permanent Candle↔CubeCL **host D2H/H2D** interop limitation; demoted FA speed claims; `interop_requires_host_roundtrip()`.
 - **PR-071 / FINISH:** GPU numerical equivalence gate runs under `--features cuda` (not `#[ignore]`); MAE thresholds; **BLOCKED:env** vs **FAIL (accuracy)** classification. Default (no cuda) stays green.
+- **FINISH:** CubeCL FA launch wraps `CudaRuntime::client` in `catch_unwind` (cudarc can panic `CUDA_ERROR_NO_DEVICE`); falls back to Candle CUDA. Document WSL `LD_LIBRARY_PATH=/usr/lib/wsl/lib` for healthy CubeCL on WSL hosts.
 - **PR-083:** Removed public always-`Err` `compute_gradient_checkpointed` stub; checkpoint config remains for memory estimates only.
 
 ### Added

@@ -25,10 +25,10 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | `test_flash_attention_gpu_numerical_equivalence` | **Runs under `--features cuda`** | Not `#[ignore]`; MAE&lt;1e-5, RMSE&lt;1e-4, cosine&gt;0.999; **BLOCKED:env** vs **FAIL (accuracy)** |
-| Gate run (STACK-UNS-FINISH) | **PASS (fallback path)** | `/dev/nvidia0` present; `CUDA_COMPUTE_CAP=90`; MAE ~2e-8. CubeCL `CudaRuntime::client` **panics** `CUDA_ERROR_NO_DEVICE` (cudarc); caught → Candle CUDA fallback. **Not** CubeCL-kernel-only PASS. |
+| Gate run (STACK-UNS-FINISH) | **PASS** | RTX 5080, `/dev/nvidia0`, `CUDA_COMPUTE_CAP=90`, `LD_LIBRARY_PATH=/usr/lib/wsl/lib:...`. Full `cargo test --features cuda`: lib 137, integration 45 ok / 3 ignored. Numerical gate MAE ~2e-8, cosine 1.0. Without WSL libcuda, CubeCL may panic `CUDA_ERROR_NO_DEVICE` → Candle fallback. **No 2× claims.** |
 | Default `cargo test` (no cuda) | **Green** | Gate not compiled without feature |
 | Host GPU compile pin | **Documented** | Blackwell CC 12.0 + nvcc 12.0 often needs `CUDA_COMPUTE_CAP=90` |
-| CubeCL cudarc init | **BLOCKED:env** | Panic unwrap in cubecl-cuda 0.9 runtime.rs; Candle CUDA still works on same host |
+| CubeCL cudarc init | **env-sensitive** | Needs correct `libcuda` (WSL: prefer `/usr/lib/wsl/lib`). Panic unwrap in cubecl-cuda 0.9 if wrong; catch_unwind → Candle fallback. |
 
 **Classification vocabulary:**
 

@@ -297,7 +297,11 @@ pub fn convert_linear_with_config(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::pedantic, clippy::unreadable_literal, clippy::no_effect_underscore_binding)]
+    #![allow(
+        clippy::pedantic,
+        clippy::unreadable_literal,
+        clippy::no_effect_underscore_binding
+    )]
     use super::*;
     use candle_core::Device;
 

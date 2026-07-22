@@ -27,14 +27,18 @@
 //! ```bash
 //! # Requires: cuda feature, /dev/nvidia0 (not only nvidiactl), healthy toolkit
 //! # On many hosts also: CUDA_COMPUTE_CAP=90
+//! # Runs automatically when built with --features cuda (not #[ignore]).
 //! CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
-//!   test_flash_attention_gpu_numerical_equivalence -- --ignored --nocapture
+//!   test_flash_attention_gpu_numerical_equivalence -- --nocapture
 //! ```
 //!
-//! Default `cargo test` does **not** run ignored GPU gates (CPU path stays green).
+//! Default `cargo test` (no `cuda` feature) never builds this test — CPU stays green.
+//! Missing `/dev/nvidia0` with `--features cuda` fails as **BLOCKED:env** (not silent Ok).
 
 use anyhow::Result;
-use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_core::{DType, Device, Tensor};
+#[cfg(feature = "cuda")]
+use candle_core::IndexOp;
 use candle_nn;
 
 #[cfg(feature = "cuda")]
@@ -295,15 +299,15 @@ fn calculate_attention_gflops(config: &AttentionTestConfig) -> f64 {
 ///
 /// ```bash
 /// # Needs full NVIDIA device nodes (e.g. /dev/nvidia0), not only /dev/nvidiactl.
+/// # Built only with --features cuda; not compiled into default cargo test.
 /// CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
-///   test_flash_attention_gpu_numerical_equivalence -- --ignored --nocapture
+///   test_flash_attention_gpu_numerical_equivalence -- --nocapture
 /// ```
 ///
-/// Marked `#[ignore]` so default CI/`cargo test` stays CPU-green and never pretends
-/// the GPU numerical gate ran.
+/// **Not** `#[ignore]`: when the `cuda` feature is enabled this gate runs.
+/// Default CI omits `cuda`, so CPU green is preserved. Missing device ⇒ **BLOCKED:env**.
 #[cfg(feature = "cuda")]
 #[test]
-#[ignore = "GPU numerical gate: requires /dev/nvidia0 + --features cuda; run with --ignored (see DEBT.md / GPU_SETUP.md)"]
 fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
     // Hard env check: do not silent-Ok on missing GPU (that would fake a green gate).
     if !std::path::Path::new("/dev/nvidia0").exists() {
@@ -349,7 +353,9 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
             .map(|m| m.to_device(&cuda_device))
             .transpose()?;
 
-        // GPU Flash Attention computation (may fall back to Candle on CUDA device)
+        // GPU path: tries CubeCL, falls back to Candle ops on the CUDA device if
+        // CubeCL/cudarc panics or errors (see launch_cubecl_attention catch_unwind).
+        // MAE gate validates the *effective* path, not a claim that CubeCL executed.
         let gpu_output = flash_attention_cubecl(&q_gpu, &k_gpu, &v_gpu, scale, mask_gpu.as_ref())?;
 
         // Move GPU result back to CPU for comparison
@@ -376,7 +382,9 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
         );
     }
 
-    println!("✅ GPU Flash Attention numerical equivalence test PASSED (accuracy gate)");
+    println!(
+        "✅ GPU Flash Attention numerical equivalence test PASSED (accuracy gate)\n            Note: CubeCL may have fallen back to Candle CUDA (cudarc init can panic with\n            CUDA_ERROR_NO_DEVICE even when /dev/nvidia0 + Candle CUDA work). MAE validates\n            the effective path. Do not claim CubeCL kernel-only PASS without separate evidence."
+    );
     Ok(())
 }
 
@@ -632,7 +640,7 @@ fn test_flash_attention_different_configs() -> Result<()> {
     }
 
     // Test different data types
-    let dtypes = vec![DType::F32]; // TODO: Add F16, BF16 when supported
+    let dtypes = vec![DType::F32]; // UNS-P1-04: CubeCL interop is f32-only for 1.0.x
 
     for dtype in dtypes {
         let config = AttentionTestConfig {

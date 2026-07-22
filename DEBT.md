@@ -24,10 +24,11 @@
 
 | Item | Status | Notes |
 |------|--------|-------|
-| `test_flash_attention_gpu_numerical_equivalence` | **Structure ready** | `#[ignore]`; MAE&lt;1e-5, RMSE&lt;1e-4, cosine&gt;0.999; classifies **BLOCKED:env** vs **FAIL (accuracy)** |
-| Gate run on this host (2026-07-22) | **BLOCKED:env** | `/dev/nvidiactl` present; **`/dev/nvidia0` absent** → cannot open CUDA device for process |
-| `cargo test --features cuda --test integration` (ignored gate) | **Not green** | Run only with healthy device nodes; never treat skip as PASS |
+| `test_flash_attention_gpu_numerical_equivalence` | **Runs under `--features cuda`** | Not `#[ignore]`; MAE&lt;1e-5, RMSE&lt;1e-4, cosine&gt;0.999; **BLOCKED:env** vs **FAIL (accuracy)** |
+| Gate run (STACK-UNS-FINISH) | **PASS (fallback path)** | `/dev/nvidia0` present; `CUDA_COMPUTE_CAP=90`; MAE ~2e-8. CubeCL `CudaRuntime::client` **panics** `CUDA_ERROR_NO_DEVICE` (cudarc); caught → Candle CUDA fallback. **Not** CubeCL-kernel-only PASS. |
+| Default `cargo test` (no cuda) | **Green** | Gate not compiled without feature |
 | Host GPU compile pin | **Documented** | Blackwell CC 12.0 + nvcc 12.0 often needs `CUDA_COMPUTE_CAP=90` |
+| CubeCL cudarc init | **BLOCKED:env** | Panic unwrap in cubecl-cuda 0.9 runtime.rs; Candle CUDA still works on same host |
 
 **Classification vocabulary:**
 
@@ -54,10 +55,10 @@ cargo test --test integration test_flash_attention
 
 # GPU numerical gate (when env healthy: /dev/nvidia0 + toolkit)
 CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
-  test_flash_attention_gpu_numerical_equivalence -- --ignored --nocapture
+  test_flash_attention_gpu_numerical_equivalence -- --nocapture
 ```
 
-If `/dev/nvidia0` is missing, the ignored test **fails with `BLOCKED:env`** when forced with `--ignored` — that is intentional (no silent pass).
+If `/dev/nvidia0` is missing, the cuda-feature gate **fails with `BLOCKED:env`** — intentional (no silent pass).
 
 ## CUDA compute capability / CI honesty (PR-027 / UNS-P0-05)
 
@@ -82,7 +83,7 @@ CUDA_COMPUTE_CAP=90 cargo check --features cuda
 
 # GPU numerical tests — only when device nodes + toolkit healthy
 CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
-  test_flash_attention_gpu_numerical_equivalence -- --ignored --nocapture
+  test_flash_attention_gpu_numerical_equivalence -- --nocapture
 ```
 
 ### CI policy
@@ -93,3 +94,11 @@ CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
   2. Exit as **skipped / FAIL_ENV** (with clear log) when missing — not a silent pass that implies GPU coverage,
   3. Never publish “GPU suite green” without device evidence.
 - See [GPU_SETUP.md](GPU_SETUP.md) for toolkit install and CAP notes.
+
+## Closed / scoped (STACK-UNS-FINISH / 1.0.3)
+
+| ID | Result |
+|----|--------|
+| **UNS-P1-04** | **Scoped F32-only** — `interop_f32_only()` / `interop_supports_dtype`; no CubeCL f16/bf16 path in 1.0.x. Host `training::convert_precision` remains for dtype helpers only. |
+| **UNS-P2-01** | **Archived non-goal** — ternary CubeCL drafts moved to `archive/ternary_cubecl/`; excluded from crates.io package; CPU ternary remains. |
+

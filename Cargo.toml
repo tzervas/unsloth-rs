@@ -1,14 +1,20 @@
 [package]
 name = "unsloth-rs"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 rust-version = "1.92"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
-description = "Rust implementations of transformer building blocks for LLM inference"
+description = "Candle/CubeCL transformer kernel building blocks (not an Unsloth product port)"
 repository = "https://github.com/tzervas/unsloth-rs"
 keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
 categories = ["science", "mathematics"]
+exclude = [
+    "archive/**",
+    "docs/archive/**",
+    "target/**",
+    ".github/**",
+]
 
 [dependencies]
 candle-core = { workspace = true }
@@ -32,7 +38,9 @@ anyhow = { workspace = true }
 [features]
 default = []
 cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
+# Empty placeholder only — does NOT compile archive/ternary_cubecl (UNS-P2-01 non-goal)
 _ternary_cubecl_todo = []
+# Experimental tiled FA-2; gated off until CubeCL comptime issues resolved
 _phase2_tiled_kernel = []
 
 [lints.rust]

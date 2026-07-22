@@ -6,8 +6,8 @@
 ## Current Status
 
 ✅ **GPU Available**: RTX 5080 detected  
-✅ **NVIDIA Driver**: 590.48.01 installed  
-❌ **CUDA Toolkit**: Not installed (required for compilation)
+✅ **NVIDIA Driver**: check `nvidia-smi` (finish host used 610.x)  
+✅ **CUDA Toolkit**: nvcc present on finish host (verify with `nvcc --version`; pin CAP as needed)
 
 ## Prerequisites
 
@@ -73,13 +73,15 @@ See also [DEBT.md](DEBT.md).
 | **BLOCKED:env** | No `/dev/nvidia0`, `Device::new_cuda` fails, or gate not run |
 
 ```bash
-# Only when /dev/nvidia0 exists and toolkit is healthy
+# Only when /dev/nvidia0 exists and toolkit is healthy (nvcc + CUDA_COMPUTE_CAP pin)
+# Gate is NOT #[ignore]: it runs whenever --features cuda is used.
 CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
-  test_flash_attention_gpu_numerical_equivalence -- --ignored --nocapture
+  test_flash_attention_gpu_numerical_equivalence -- --nocapture
 ```
 
-Default `cargo test` **ignores** this gate (CPU green). Forcing `--ignored` without
-a device fails with `BLOCKED:env` by design (no silent pass).
+Default `cargo test` (no `cuda` feature) never compiles this gate — CPU stays green.
+With `--features cuda` and missing `/dev/nvidia0`, the gate fails as **BLOCKED:env**
+by design (no silent pass).
 
 ---
 
@@ -309,5 +311,5 @@ Default CI (`.github/workflows/ci.yml`, `fleet-ci.yml`) is **CPU-only**:
 
 ---
 
-**Status**: CAP/FAIL_ENV documented; interop host-copy permanent (PR-070); GPU numerical gate structured+ignored (PR-071); host without `/dev/nvidia0` ⇒ **BLOCKED:env**  
-**Next**: Full device nodes + matching toolkit, then run ignored GPU numerical gate and record MAE
+**Status**: CAP/FAIL_ENV documented; interop host-copy permanent (PR-070); GPU numerical gate structured under --features cuda (PR-071 / FINISH; not #[ignore]); host without `/dev/nvidia0` ⇒ **BLOCKED:env**  
+**Next**: On hosts with `/dev/nvidia0` + healthy toolkit, run CUDA gate and record PASS / FAIL (accuracy) / BLOCKED:env

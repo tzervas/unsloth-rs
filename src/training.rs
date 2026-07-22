@@ -4,7 +4,8 @@
 //! Training utilities (helpers only — not a trainer).
 //!
 //! This module provides **tensor-level** training helpers:
-//! - Mixed precision training support (FP32, FP16, BF16)
+//! - Mixed precision **dtype helpers** (FP32, FP16, BF16 convert/scale)
+//!   Note: CubeCL interop/kernels remain **f32-only** (`interop_f32_only`).
 //! - Gradient scaling for numerical stability
 //! - Optional [`CheckpointConfig`](crate::memory::CheckpointConfig) for **memory estimates**
 //!

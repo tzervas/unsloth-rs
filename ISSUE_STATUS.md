@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-07-22  
 **CubeCL Version**: **0.9** (see `Cargo.toml` workspace deps; older notes referring to 0.8.1 are historical)  
-**Crate version**: 1.0.2  
+**Crate version**: 1.0.3  
 
 This document is a **historical tracker** of open issues relative to early experimental-branch work.
 It is **not** a claim that GPU Flash Attention or Unsloth product parity is complete.

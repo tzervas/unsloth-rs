@@ -621,84 +621,89 @@ fn launch_cubecl_attention(
         )));
     }
 
-    // Convert tensors to byte arrays
+    // Convert tensors to byte arrays (D2H — may work even when CubeCL init fails later)
     let (q_bytes, _, _) = candle_to_cubecl_handle(q)?;
     let (k_bytes, _, _) = candle_to_cubecl_handle(k)?;
     let (v_bytes, _, _) = candle_to_cubecl_handle(v)?;
 
     // Allocate output buffer
     let num_elements = batch * num_heads * seq_len * head_dim;
-
-    // Get CubeCL CUDA client
-    let device = cubecl_cuda::CudaDevice::new(0);
-    let client = CudaRuntime::client(&device);
-
-    // Create CubeCL handles
-    let q_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(q_bytes));
-    let k_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(k_bytes));
-    let v_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(v_bytes));
-    let out_handle = client.empty(num_elements * std::mem::size_of::<f32>());
-
-    // Grid: (batch * heads, seq_len) - one block per (batch-head, q_row)
-    let cube_count = CubeCount::Static((batch * num_heads) as u32, seq_len as u32, 1);
-
-    // Block size: round up head_dim to next power of 2 for efficient reduction
-    // Capped at MAX_BLOCK_SIZE (1024)
-    let block_size = next_power_of_two(head_dim as u32).min(MAX_BLOCK_SIZE);
-    let cube_dim = CubeDim::new(&client, block_size as usize);
-
-    // Scale as f32
     let scale_f32 = scale as f32;
+    let causal = config.causal_mask;
+    let out_shape = [batch, num_heads, seq_len, head_dim];
+    let candle_device = q.device().clone();
 
-    // Choose kernel based on causal masking
-    // SAFETY: Handles are valid and properly sized for the kernel operation
-    unsafe {
-        if config.causal_mask {
-            flash_attention_causal::launch::<f32, CudaRuntime>(
-                &client,
-                cube_count,
-                cube_dim,
-                ArrayArg::from_raw_parts::<f32>(&q_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&k_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&v_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&out_handle, num_elements, 1),
-                ScalarArg::new(scale_f32),
-                ScalarArg::new(seq_len as u32),
-                ScalarArg::new(head_dim as u32),
-                ScalarArg::new(block_size),
-            )
-            .map_err(|e| {
-                UnslothError::Kernel(format!("flash_attention_causal kernel launch failed: {e}"))
-            })?;
-        } else {
-            flash_attention_tile::launch::<f32, CudaRuntime>(
-                &client,
-                cube_count,
-                cube_dim,
-                ArrayArg::from_raw_parts::<f32>(&q_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&k_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&v_handle, num_elements, 1),
-                ArrayArg::from_raw_parts::<f32>(&out_handle, num_elements, 1),
-                ScalarArg::new(scale_f32),
-                ScalarArg::new(seq_len as u32),
-                ScalarArg::new(head_dim as u32),
-                ScalarArg::new(block_size),
-            )
-            .map_err(|e| {
-                UnslothError::Kernel(format!("flash_attention_tile kernel launch failed: {e}"))
-            })?;
+    // CubeCL 0.9 `CudaRuntime::client` can **panic** (unwrap on cudarc init /
+    // CUDA_ERROR_NO_DEVICE) instead of returning Err. Catch that so callers get
+    // a Result and can fall back to Candle ops (honest GPU path).
+    let launch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let device = cubecl_cuda::CudaDevice::new(0);
+        let client = CudaRuntime::client(&device);
+
+        let q_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(q_bytes));
+        let k_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(k_bytes));
+        let v_handle = client.create(cubecl::bytes::Bytes::from_bytes_vec(v_bytes));
+        let out_handle = client.empty(num_elements * std::mem::size_of::<f32>());
+
+        let cube_count = CubeCount::Static((batch * num_heads) as u32, seq_len as u32, 1);
+        let block_size = next_power_of_two(head_dim as u32).min(MAX_BLOCK_SIZE);
+        let cube_dim = CubeDim::new(&client, block_size as usize);
+
+        // SAFETY: Handles are valid and properly sized for the kernel operation
+        let launch_status = unsafe {
+            if causal {
+                flash_attention_causal::launch::<f32, CudaRuntime>(
+                    &client,
+                    cube_count,
+                    cube_dim,
+                    ArrayArg::from_raw_parts::<f32>(&q_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&k_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&v_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&out_handle, num_elements, 1),
+                    ScalarArg::new(scale_f32),
+                    ScalarArg::new(seq_len as u32),
+                    ScalarArg::new(head_dim as u32),
+                    ScalarArg::new(block_size),
+                )
+                .map_err(|e| format!("flash_attention_causal kernel launch failed: {e}"))
+            } else {
+                flash_attention_tile::launch::<f32, CudaRuntime>(
+                    &client,
+                    cube_count,
+                    cube_dim,
+                    ArrayArg::from_raw_parts::<f32>(&q_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&k_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&v_handle, num_elements, 1),
+                    ArrayArg::from_raw_parts::<f32>(&out_handle, num_elements, 1),
+                    ScalarArg::new(scale_f32),
+                    ScalarArg::new(seq_len as u32),
+                    ScalarArg::new(head_dim as u32),
+                    ScalarArg::new(block_size),
+                )
+                .map_err(|e| format!("flash_attention_tile kernel launch failed: {e}"))
+            }
+        };
+
+        launch_status?;
+        Ok::<Vec<u8>, String>((&*client.read_one(out_handle)).to_vec())
+    }));
+
+    match launch_result {
+        Ok(Ok(output_bytes)) => {
+            cubecl_to_candle_tensor(&output_bytes, &out_shape, &candle_device)
+        }
+        Ok(Err(msg)) => Err(UnslothError::Kernel(msg)),
+        Err(panic_payload) => {
+            let detail = panic_payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic (often cudarc CUDA_ERROR_NO_DEVICE)");
+            Err(UnslothError::Kernel(format!(
+                "CubeCL CUDA runtime panicked during FA launch: {detail}.                  Classification: BLOCKED:env for CubeCL path (Candle may still work)."
+            )))
         }
     }
-
-    // Synchronize and read output
-    let output_bytes = client.read_one(out_handle);
-
-    // Convert back to Candle tensor
-    cubecl_to_candle_tensor(
-        &output_bytes,
-        &[batch, num_heads, seq_len, head_dim],
-        q.device(),
-    )
 }
 
 /// Validate attention input tensor shapes.

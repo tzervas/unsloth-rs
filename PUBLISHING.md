@@ -4,12 +4,12 @@
 
 | Field | Value |
 |-------|--------|
-| **Cargo.toml version** | `1.0.2` |
-| **Git tags (local/origin)** | `v1.0.0`, `v1.0.1`, `v1.0.2` (and older alpha) |
-| **docs.rs** | Builds for 1.0.2 |
-| **crates.io tarball** | **Broken for 1.0.2** — historical dual-path case collision (`ROADMAP.md` + `roadmap.md`) caused `Invalid path … Duplicate path conflicts` |
-| **Fix in this tree** | Only `ROADMAP.md` remains; verify with `cargo package --list` before next publish |
-| **Last docs refresh** | 2026-07-22 (gap-close Wave-3 PR-012) |
+| **Cargo.toml version** | `1.0.3` |
+| **Git tags (local/origin)** | `v1.0.0`, `v1.0.1`, `v1.0.2` (and older alpha); **tag `v1.0.3` after publish** |
+| **docs.rs** | Builds for 1.0.2 historically; expect 1.0.3 after publish |
+| **crates.io tarball 1.0.2** | **Broken** — dual-path case collision (`ROADMAP.md` + `roadmap.md`) |
+| **Fix in this tree (1.0.3)** | Only `ROADMAP.md` remains; `cargo package` succeeds |
+| **Last docs refresh** | 2026-07-22 (gap-close Wave-3/4 honesty + packaging) |
 
 **Do not `cargo publish` from this workstream unless the release train explicitly opens a publish gate.** Prefer dry-run / `--list` only.
 
@@ -26,8 +26,8 @@
 - [x] `Cargo.toml`: name, version, authors, description, license, repository, keywords, categories
 - [x] `README.md` with honest scope + non-goals
 - [x] `LICENSE` (MIT)
-- [x] `CHANGELOG.md` present
-- [ ] Next version (e.g. `1.0.3`) only after packaging case fix is verified and changelog updated
+- [x] `CHANGELOG.md` section for **1.0.3**
+- [x] Packaging case fix verified (`cargo package --allow-dirty`)
 
 ### Packaging (case collision)
 
@@ -82,7 +82,6 @@ git config tag.gpgSign true
 ### Signed tags
 
 ```bash
-# Example for a future packaging fix release
 git tag -s v1.0.3 -m "v1.0.3: packaging case fix + docs honesty"
 git push origin v1.0.3
 git tag -v v1.0.3
@@ -92,7 +91,7 @@ git tag -v v1.0.3
 
 ### 1. Prepare
 
-1. Bump `Cargo.toml` version and `CHANGELOG.md`.
+1. Confirm `Cargo.toml` version **1.0.3** and `CHANGELOG.md` section.
 2. Confirm single roadmap filename and honest README.
 3. Run CPU tests + `cargo package --allow-dirty --list`.
 
@@ -117,6 +116,7 @@ cargo publish --dry-run
 - Confirm crates.io page unpacks without path errors.
 - Confirm docs.rs build for the new version.
 - Note any remaining GPU/env debt in DEBT.md (do not claim GPU green).
+- Optional: human-only yank of broken **1.0.2** after 1.0.3 is confirmed live.
 
 ## Historical failure mode (1.0.2)
 

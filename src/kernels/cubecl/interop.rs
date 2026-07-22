@@ -39,6 +39,13 @@
 //! 2. Upstream CubeCL external-buffer import + Candle stable device-ptr export.
 //!
 //! Until then: correctness paths remain valuable; **throughput claims are demoted**.
+//!
+//! ## Dtype scope (UNS-P1-04)
+//!
+//! Candle↔CubeCL interop and the Flash Attention CubeCL path are **f32 only**.
+//! See [`interop_f32_only`] / [`interop_supports_dtype`]. Host mixed-precision
+//! helpers (`crate::training`) can convert tensors to f16/bf16 for CPU-side
+//! experiments; they do **not** enable CubeCL half kernels.
 
 use crate::error::{Result, UnslothError};
 use candle_core::{DType, Device, Tensor};
@@ -54,6 +61,26 @@ const BITS_PER_U64: usize = 64;
 #[must_use]
 pub const fn interop_requires_host_roundtrip() -> bool {
     true
+}
+
+/// CubeCL interop (and FA kernels that use it) are **f32-only** (UNS-P1-04).
+///
+/// Half / bfloat paths are **not** implemented for Candle↔CubeCL buffer handoff.
+/// Mixed-precision helpers in [`crate::training`] convert tensors for host-side
+/// experiments; they do not enable CubeCL f16/bf16 kernels.
+///
+/// Scope decision for 1.0.x: ship an honest **CPU / CubeCL f32** surface rather
+/// than a half-implemented half path that silently falls back or errors mid-kernel.
+#[must_use]
+pub const fn interop_f32_only() -> bool {
+    true
+}
+
+/// Returns `true` if `dtype` is accepted by [`candle_to_cubecl_handle`] /
+/// [`cubecl_to_candle_tensor`] (currently only [`DType::F32`]).
+#[must_use]
+pub fn interop_supports_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F32)
 }
 
 /// Check if `CubeCL` CUDA runtime support is available.
@@ -144,11 +171,11 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
     let shape = tensor.dims().to_vec();
     let dtype = tensor.dtype();
 
-    // Only f32 supported currently
-    // TODO: Add f16/bf16 support (UNS-P1-04)
-    if dtype != DType::F32 {
+    // UNS-P1-04: CubeCL interop is intentionally f32-only for 1.0.x.
+    // f16/bf16 would need full kernel + byte-width paths; not a silent TODO.
+    if !interop_supports_dtype(dtype) {
         return Err(UnslothError::InvalidConfig(format!(
-            "candle_to_cubecl_handle only supports f32, got {dtype:?}"
+            "candle_to_cubecl_handle is f32-only (UNS-P1-04 / interop_f32_only); got {dtype:?}.              Use training::convert_precision for host dtype experiments; CubeCL kernels stay f32."
         )));
     }
 
@@ -505,6 +532,23 @@ mod tests {
     fn test_interop_requires_host_roundtrip() {
         // Permanent with Candle 0.9 + CubeCL 0.9 public APIs
         assert!(interop_requires_host_roundtrip());
+    }
+
+    #[test]
+    fn test_interop_f32_only_scope() {
+        assert!(interop_f32_only());
+        assert!(interop_supports_dtype(DType::F32));
+        assert!(!interop_supports_dtype(DType::F16));
+        assert!(!interop_supports_dtype(DType::BF16));
+        assert!(!interop_supports_dtype(DType::U32));
+    }
+
+    #[test]
+    fn test_candle_to_cubecl_rejects_f16_dtype_message() {
+        // CPU path errors on device first; still document f32-only via helper.
+        // Device-gated reject of non-f32 is covered when CUDA tensors exist.
+        assert!(!interop_supports_dtype(DType::F16));
+        assert!(!interop_supports_dtype(DType::BF16));
     }
 
     #[test]

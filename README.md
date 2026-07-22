@@ -30,13 +30,13 @@ kernels:
 | RMSNorm | ✅ | Elementwise CubeCL (partial) |
 | SwiGLU | ✅ | Elementwise CubeCL + CPU fallback |
 | Memory / checkpoint **estimates** | ✅ (math only) | n/a |
-| Ternary quant / linear (CPU) | ✅ experimental | GPU modules largely unwired |
+| Ternary quant / linear (CPU) | ✅ experimental | GPU CubeCL **archived non-goal** |
 | Mixed-precision helpers | ✅ config + scale utils | not a trainer |
 | LoRA / QLoRA / SFT trainer | ❌ | use peft-rs / qlora-rs / axolotl-rs |
 
 ## Status (honest)
 
-**Version:** `1.0.2` (see `Cargo.toml`). Semver 1.x means the **public CPU
+**Version:** `1.0.3` (see `Cargo.toml`). Semver 1.x means the **public CPU
 kernel APIs** are intended to be usable; GPU paths and training utilities are
 still incomplete.
 
@@ -52,9 +52,10 @@ still incomplete.
 - Flash Attention via CubeCL (`cuda` feature): real kernels exist; **host D2H/H2D
   interop is a permanent limitation** with Candle 0.9 + CubeCL 0.9 public APIs
   (`interop_requires_host_roundtrip()` → true). **No end-to-end speedup claims.**
-- GPU numerical equivalence gate: structured, `#[ignore]`, needs `/dev/nvidia0`
-  (see [DEBT.md](DEBT.md)); **BLOCKED:env** on hosts without full device nodes
-- Ternary quantization experiments (CPU compression ratios only)
+- GPU numerical equivalence gate: runs under `--features cuda` (not default CI);
+  needs `/dev/nvidia0` (see [DEBT.md](DEBT.md)); **BLOCKED:env** without full device nodes
+- Ternary quantization experiments (CPU compression ratios only; GPU ternary archived)
+- CubeCL / Flash path **f32-only** (`interop_f32_only()`); host mixed-precision helpers only
 - Mixed-precision **utilities** (no end-to-end trainer); checkpoint **estimates**
   only (no recompute training API)
 
@@ -63,6 +64,8 @@ still incomplete.
 - Unsloth product parity (model matrix, packing, RL/GRPO, multi-GPU train)
 - Claiming training speedups or VRAM savings without evidence
 - Shipping a fine-tuning CLI (that belongs in orchestration crates)
+- Ternary CubeCL GPU kernels (archived under `archive/ternary_cubecl/`)
+- CubeCL f16/bf16 kernels in 1.0.x (explicit f32-only interop scope)
 
 See [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md) for residual risk and
 CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV` classification).
@@ -71,14 +74,14 @@ CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV` classification).
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.2"
+unsloth-rs = "1.0.3"
 ```
 
 CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.2", features = ["cuda"] }
+unsloth-rs = { version = "1.0.3", features = ["cuda"] }
 ```
 
 On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0

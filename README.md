@@ -67,9 +67,12 @@ still incomplete.
 - Ternary CubeCL GPU kernels (archived under `archive/ternary_cubecl/`)
 - CubeCL f16/bf16 kernels in 1.0.x (explicit f32-only interop scope)
 
-See [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md) for residual risk and
-CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV` classification).
+**Docs:** [CHANGELOG.md](CHANGELOG.md) · [ROADMAP.md](ROADMAP.md) · [DEBT.md](DEBT.md) ·
+[GPU_SETUP.md](GPU_SETUP.md) · [PUBLISHING.md](PUBLISHING.md) ·
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles).
 
+Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are in
+[DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md).
 ## Installation
 
 ```toml

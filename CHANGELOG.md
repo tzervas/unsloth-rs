@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
+- README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.
+
 ## [1.0.3] - 2026-07-22
 
 ### Fixed

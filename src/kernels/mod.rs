@@ -7,7 +7,7 @@
 //!
 //! ## Core Operations
 //! - [`cubecl`] - Flash Attention with online softmax (O(N) memory)
-//! - [`fused_rmsnorm_rope`] - Fused RMSNorm + Rotary Position Embedding
+//! - [`mod@fused_rmsnorm_rope`] - Fused RMSNorm + Rotary Position Embedding
 //! - [`fused_swiglu`] - Fused SwiGLU activation for FFN blocks
 //!
 //! ## Legacy Operations (Candle-based)

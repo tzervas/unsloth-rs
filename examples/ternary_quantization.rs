@@ -1,4 +1,4 @@
-#![allow(warnings)]
+#![allow(clippy::uninlined_format_args, clippy::cast_precision_loss)]
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 

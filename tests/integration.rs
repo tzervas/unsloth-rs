@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::uninlined_format_args)]
+
 //! Integration tests for unsloth-rs ternary quantization system.
 //!
 //! This test suite provides comprehensive validation of the ternary quantization
@@ -1548,11 +1550,13 @@ fn test_training_config_validation() -> Result<()> {
     assert_eq!(mp_config.loss_scale, 65536.0);
 
     // Test 5: Invalid configurations edge cases
-    let mut edge_config = MixedPrecisionConfig::default();
+    let mut edge_config = MixedPrecisionConfig {
+        loss_scale: 0.1,
+        min_loss_scale: 1.0,
+        ..Default::default()
+    };
 
     // Loss scale too small (should clamp to min)
-    edge_config.loss_scale = 0.1;
-    edge_config.min_loss_scale = 1.0;
     update_loss_scale(&mut edge_config, true, 0);
     assert_eq!(edge_config.loss_scale, 1.0);
 
@@ -1669,7 +1673,7 @@ fn test_checkpointing_integration() -> Result<()> {
     // (exact ratio depends on implementation details)
 
     // Test 3: Checkpoint integration with gradient scaling
-    let sample_activations = vec![
+    let sample_activations = [
         Tensor::randn(
             0f32,
             1.0f32,
@@ -1798,7 +1802,7 @@ fn test_tensor_error_conditions() -> Result<()> {
         let error_msg = format!("{}", error);
         println!("  ✓ Shape mismatch error: {}", error_msg);
         // Just verify we got some error message
-        assert!(error_msg.len() > 0);
+        assert!(!error_msg.is_empty());
     } else {
         println!("  ✓ Quantization succeeded (different behavior than expected)");
     }
@@ -1853,7 +1857,7 @@ fn test_quantization_error_scenarios() -> Result<()> {
         Ok(_) => println!("  ✓ Tiny tensor quantization succeeded"),
         Err(error) => {
             let error_msg = format!("{}", error);
-            assert!(error_msg.len() > 0);
+            assert!(!error_msg.is_empty());
             println!("  ✓ Tiny tensor quantization error: {}", error_msg);
         }
     }
@@ -1921,8 +1925,8 @@ fn test_error_handling_memory_scenarios() -> Result<()> {
 
     // Test 2: Multiple allocations leading to exhaustion
     let mut pool = MemoryPool::new(Some(1000));
-    let _alloc1 = pool.allocate(400)?;
-    let _alloc2 = pool.allocate(400)?;
+    pool.allocate(400)?;
+    pool.allocate(400)?;
 
     // This should fail - we have 800 allocated, trying to allocate 300 more (total 1100 > 1000)
     let result = pool.allocate(300);

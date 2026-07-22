@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::uninlined_format_args)]
+
 //! Flash Attention GPU tests for unsloth-rs.
 //!
 //! This module provides comprehensive GPU testing for the CubeCL Flash Attention
@@ -24,6 +26,9 @@
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn;
+
+#[cfg(feature = "cuda")]
+use candle_core::IndexOp;
 
 #[cfg(feature = "cuda")]
 use std::time::Instant;

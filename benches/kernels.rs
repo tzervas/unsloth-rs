@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::uninlined_format_args, clippy::manual_let_else, clippy::cast_precision_loss)]
+
 //! Kernel benchmarking suite for CPU performance profiling.
 //!
 //! This benchmark suite measures performance for all kernel implementations:

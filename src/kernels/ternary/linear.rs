@@ -34,7 +34,7 @@ use candle_core::{Module, Tensor};
 /// # Memory Layout
 ///
 /// - Weights: `TernaryTensor` with +plane/-plane u32 arrays + f32 scales
-/// - Bias: Optional f32 tensor [`out_features`]
+/// - Bias: Optional f32 tensor `[out_features]`
 ///
 /// # Forward Pass
 ///
@@ -60,7 +60,7 @@ impl TernaryLinear {
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `bias` - Optional bias tensor `[out_features]`
     ///
     /// # Errors
     ///
@@ -74,7 +74,7 @@ impl TernaryLinear {
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `bias` - Optional bias tensor `[out_features]`
     /// * `config` - Ternary configuration
     ///
     /// # Errors
@@ -233,8 +233,8 @@ impl TernaryLinearBuilder {
     ///
     /// # Arguments
     ///
-    /// * `weights` - FP32 weight tensor [`out_features`, `in_features`]
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `weights` - FP32 weight tensor `[out_features, in_features]`
+    /// * `bias` - Optional bias tensor `[out_features]`
     ///
     /// # Errors
     ///
@@ -297,6 +297,11 @@ pub fn convert_linear_with_config(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::unreadable_literal,
+        clippy::no_effect_underscore_binding
+    )]
     use super::*;
     use candle_core::Device;
 

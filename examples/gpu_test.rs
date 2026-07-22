@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::uninlined_format_args)]
+
 //! Simple GPU test to verify CubeCL CUDA is working
 
 fn main() {

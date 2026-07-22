@@ -1,3 +1,9 @@
+#![allow(
+    clippy::pedantic,
+    clippy::uninlined_format_args,
+    clippy::needless_range_loop
+)]
+
 //! Test utilities and fixtures for ternary quantization integration tests.
 //!
 //! This module provides reusable test data generation, comparison utilities,

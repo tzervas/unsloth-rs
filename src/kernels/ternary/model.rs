@@ -116,8 +116,8 @@ impl Default for ModelQuantizationConfig {
 ///
 /// # Arguments
 ///
-/// * `weight` - Weight tensor [`out_features`, `in_features`]
-/// * `bias` - Optional bias tensor [`out_features`]
+/// * `weight` - Weight tensor `[out_features, in_features]`
+/// * `bias` - Optional bias tensor `[out_features]`
 /// * `name` - Layer name for logging
 /// * `config` - Quantization configuration
 /// * `_device` - Target device (currently unused; weights remain on their original device).

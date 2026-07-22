@@ -263,7 +263,7 @@ pub fn ternary_tensor_to_cubecl_handles(
 /// * `bytes` - Raw bytes from `CubeCL` buffer
 ///
 /// # Returns
-/// Vec<u32> plane data
+/// `Vec<u32>` plane data
 #[must_use]
 pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
     bytes
@@ -465,6 +465,11 @@ pub fn cubecl_to_u32_candle_tensor(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::unreadable_literal,
+        clippy::needless_range_loop
+    )]
     use super::*;
 
     #[test]

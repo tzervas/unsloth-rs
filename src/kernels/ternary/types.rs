@@ -309,9 +309,9 @@ impl TernaryTensor {
     ///
     /// # Arguments
     ///
-    /// * `plus_plane` - Flattened [rows × `k_words`] positive plane
-    /// * `minus_plane` - Flattened [rows × `k_words`] negative plane
-    /// * `scales` - Per-row scale factors [rows]
+    /// * `plus_plane` - Flattened `[rows × k_words]` positive plane
+    /// * `minus_plane` - Flattened `[rows × k_words]` negative plane
+    /// * `scales` - Per-row scale factors `[rows]`
     /// * `shape` - Original (`out_features`, `in_features`)
     ///
     /// # Panics

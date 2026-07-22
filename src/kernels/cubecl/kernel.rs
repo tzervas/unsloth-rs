@@ -689,9 +689,7 @@ fn launch_cubecl_attention(
     }));
 
     match launch_result {
-        Ok(Ok(output_bytes)) => {
-            cubecl_to_candle_tensor(&output_bytes, &out_shape, &candle_device)
-        }
+        Ok(Ok(output_bytes)) => cubecl_to_candle_tensor(&output_bytes, &out_shape, &candle_device),
         Ok(Err(msg)) => Err(UnslothError::Kernel(msg)),
         Err(panic_payload) => {
             let detail = panic_payload

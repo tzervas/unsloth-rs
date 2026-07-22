@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 
-//! Basic attention example demonstrating FusedAttention operations.
+//! Basic attention example demonstrating `FusedAttention` operations.
 //!
 //! This example shows how to:
-//! - Create a FusedAttention layer with FusedAttentionConfig
+//! - Create a `FusedAttention` layer with `FusedAttentionConfig`
 //! - Perform a forward pass with Q, K, V tensors
 //! - Print output shape and verify the result
 //!
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     let hidden_size = config.hidden_size;
 
     println!("Creating input tensor:");
-    println!("  Shape: [{}, {}, {}]", batch_size, seq_len, hidden_size);
+    println!("  Shape: [{batch_size}, {seq_len}, {hidden_size}]");
     let input = Tensor::randn(0.0f32, 1.0, (batch_size, seq_len, hidden_size), &device)?;
     println!("  Input tensor created.\n");
 
@@ -60,10 +60,7 @@ fn main() -> Result<()> {
     let output_shape = output.shape();
     println!("Output:");
     println!("  Shape: {:?}", output_shape.dims());
-    println!(
-        "  Expected shape: [{}, {}, {}]",
-        batch_size, seq_len, hidden_size
-    );
+    println!("  Expected shape: [{batch_size}, {seq_len}, {hidden_size}]");
 
     // Verify output shape
     assert_eq!(
@@ -78,8 +75,8 @@ fn main() -> Result<()> {
     let output_sum = output.sum_all()?.to_scalar::<f32>()?;
 
     println!("Output statistics:");
-    println!("  Mean: {:.6}", output_mean);
-    println!("  Sum: {:.6}", output_sum);
+    println!("  Mean: {output_mean:.6}");
+    println!("  Sum: {output_sum:.6}");
 
     // Verify no NaN values
     assert!(!output_mean.is_nan(), "Output contains NaN values");
@@ -90,7 +87,7 @@ fn main() -> Result<()> {
     let vram_bytes = attention.vram_estimate(batch_size, seq_len);
     let vram_mb = vram_bytes as f32 / (1024.0 * 1024.0);
     println!("Memory estimate:");
-    println!("  VRAM usage: {:.2} MB ({} bytes)", vram_mb, vram_bytes);
+    println!("  VRAM usage: {vram_mb:.2} MB ({vram_bytes} bytes)");
 
     println!("\n=== Example completed successfully! ===");
 

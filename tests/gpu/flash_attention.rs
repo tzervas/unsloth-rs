@@ -1,6 +1,6 @@
 //! Flash Attention GPU tests for unsloth-rs.
 //!
-//! This module provides comprehensive GPU testing for the CubeCL Flash Attention
+//! This module provides comprehensive GPU testing for the `CubeCL` Flash Attention
 //! implementation, covering numerical accuracy, performance validation, memory
 //! efficiency, and edge cases.
 //!
@@ -17,7 +17,7 @@
 //! ## Expected gates (honest)
 //!
 //! - **Accuracy (GPU numerical)**: MAE < 1e-5, RMSE < 1e-4, cosine > 0.999 (f32)
-//! - **Speed**: **not claimed** for CubeCL path while host D2H/H2D interop remains
+//! - **Speed**: **not claimed** for `CubeCL` path while host D2H/H2D interop remains
 //!   (`interop_requires_host_roundtrip()`); performance tests are experimental only
 //! - **Env**: missing `/dev/nvidia0` or CUDA device ⇒ **BLOCKED:env** / `FAIL_ENV`, not accuracy FAIL
 //! - **Reliability**: No memory leaks or device errors when device is healthy
@@ -36,9 +36,9 @@
 //! Missing `/dev/nvidia0` with `--features cuda` fails as **BLOCKED:env** (not silent Ok).
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
 #[cfg(feature = "cuda")]
 use candle_core::IndexOp;
+use candle_core::{DType, Device, Tensor};
 use candle_nn;
 
 #[cfg(feature = "cuda")]
@@ -992,7 +992,7 @@ pub fn test_flash_attention_basic_functionality() -> Result<()> {
     // Validate output sanity
     let values: Vec<f32> = output.flatten_all()?.to_vec1()?;
     for v in values.iter().take(100) {
-        assert!(!v.is_nan() && !v.is_infinite(), "Invalid output: {}", v);
+        assert!(!v.is_nan() && !v.is_infinite(), "Invalid output: {v}");
     }
 
     println!("✅ Basic Flash Attention functionality test passed");
@@ -1020,7 +1020,7 @@ pub fn test_flash_attention_cpu_fallback_accuracy() -> Result<()> {
     // Calculate accuracy metrics
     let metrics = calculate_accuracy_metrics(&fallback_output, &reference_output)?;
 
-    println!("CPU fallback accuracy metrics: {:?}", metrics);
+    println!("CPU fallback accuracy metrics: {metrics:?}");
 
     // Should be nearly identical
     assert!(
@@ -1035,11 +1035,11 @@ pub fn test_flash_attention_cpu_fallback_accuracy() -> Result<()> {
     Ok(())
 }
 
-/// Test CubeCL support detection without requiring actual CUDA.
+/// Test `CubeCL` support detection without requiring actual CUDA.
 #[test]
 pub fn test_cubecl_support_detection() {
     let has_support = has_cubecl_support();
-    println!("CubeCL support detected: {}", has_support);
+    println!("CubeCL support detected: {has_support}");
 
     // This test should not fail regardless of actual support
     // It just validates that the detection function doesn't panic
@@ -1059,17 +1059,13 @@ pub fn test_flash_attention_vram_estimation() {
         let vram_bytes = estimate_flash_attention_vram(batch, heads, seq_len, head_dim, tile_size);
         let vram_mb = vram_bytes as f64 / 1e6;
 
-        println!(
-            "Config {}x{}x{}x{} (tile={}): {:.1}MB",
-            batch, heads, seq_len, head_dim, tile_size, vram_mb
-        );
+        println!("Config {batch}x{heads}x{seq_len}x{head_dim} (tile={tile_size}): {vram_mb:.1}MB");
 
         // Sanity checks
         assert!(vram_bytes > 0, "VRAM estimate should be positive");
         assert!(
             vram_mb < 100_000.0,
-            "VRAM estimate unreasonably high: {:.1}MB",
-            vram_mb
+            "VRAM estimate unreasonably high: {vram_mb:.1}MB"
         );
 
         // Memory should scale with sequence length
@@ -1108,7 +1104,7 @@ pub fn test_flash_attention_sequence_scaling() -> Result<()> {
             ..base_config.clone()
         };
 
-        println!("Testing sequence length: {}", seq_len);
+        println!("Testing sequence length: {seq_len}");
 
         let (q, k, v, mask) = create_test_tensors(&config, &device)?;
         let scale = 1.0 / (config.head_dim as f64).sqrt();
@@ -1131,9 +1127,7 @@ pub fn test_flash_attention_sequence_scaling() -> Result<()> {
         for v in values.iter().take(10) {
             assert!(
                 !v.is_nan() && !v.is_infinite(),
-                "Invalid output at seq_len={}: {}",
-                seq_len,
-                v
+                "Invalid output at seq_len={seq_len}: {v}"
             );
         }
     }

@@ -241,8 +241,10 @@ pub fn cubecl_to_candle_tensor(bytes: &[u8], shape: &[usize], device: &Device) -
 
     // Convert bytes to f32
     let data: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect();
 
     // Host → device (required; see interop_requires_host_roundtrip).
@@ -322,8 +324,10 @@ pub fn ternary_tensor_to_cubecl_handles(
 #[must_use]
 pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
     bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -508,8 +512,10 @@ pub fn cubecl_to_u32_candle_tensor(
 
     // Convert bytes to u32
     let data: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect();
 
     // Host → device (required; see interop_requires_host_roundtrip).
@@ -566,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_u32_planes_to_bytes_roundtrip() {
-        let original: Vec<u32> = vec![0xDEADBEEF, 0xCAFEBABE, 0x12345678];
+        let original: Vec<u32> = vec![0xDEAD_BEEF, 0xCAFE_BABE, 0x1234_5678];
         let bytes = u32_planes_to_cubecl_bytes(&original);
         let recovered = cubecl_bytes_to_u32_plane(&bytes);
         assert_eq!(original, recovered);
@@ -579,8 +585,8 @@ mod tests {
         let shape = (4, 64); // 4 rows, 64 cols
         let k_words = 2; // 64 / 32 = 2
 
-        let plus = vec![0xAAAAAAAAu32; 4 * k_words];
-        let minus = vec![0x55555555u32; 4 * k_words];
+        let plus = vec![0xAAAA_AAAAu32; 4 * k_words];
+        let minus = vec![0x5555_5555u32; 4 * k_words];
         let scales = vec![1.5f32; 4];
 
         let expected_plus = plus.clone();
@@ -613,7 +619,12 @@ mod tests {
     fn test_u32_bytes_roundtrip() {
         // Test u32 bytes conversion roundtrip
         let original: Vec<u32> = vec![
-            0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
+            0x1234_5678,
+            0xABCD_EF01,
+            0xDEAD_BEEF,
+            0xCAFE_BABE,
+            0xFFFF_FFFF,
+            0x0000_0000,
         ];
         let bytes = u32_planes_to_cubecl_bytes(&original);
         let recovered = cubecl_bytes_to_u32_plane(&bytes);
@@ -633,9 +644,9 @@ mod tests {
         // Create 50% sparse pattern: alternating active/inactive words
         let mut plus = vec![0u32; 4 * k_words];
         for row in 0..4 {
-            plus[row * k_words] = 0xFFFFFFFF; // Word 0: active
+            plus[row * k_words] = 0xFFFF_FFFF; // Word 0: active
             plus[row * k_words + 1] = 0x0; // Word 1: inactive
-            plus[row * k_words + 2] = 0xFFFFFFFF; // Word 2: active
+            plus[row * k_words + 2] = 0xFFFF_FFFF; // Word 2: active
             plus[row * k_words + 3] = 0x0; // Word 3: inactive
         }
         let minus = vec![0u32; 4 * k_words];
@@ -652,17 +663,14 @@ mod tests {
 
         // Convert back to u64 for validation
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
-        for row in 0..4 {
-            let row_bitmap = bitmap[row];
+        for (row, &row_bitmap) in bitmap.iter().enumerate().take(4) {
             // Chunk 0 (words 0-1): word 0 is active, so chunk is active
             assert_ne!(
                 row_bitmap & 0x1,
@@ -696,12 +704,10 @@ mod tests {
 
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // All chunks should be inactive
@@ -721,7 +727,7 @@ mod tests {
         let k_words = 4;
 
         // All active (fully dense)
-        let plus = vec![0xFFFFFFFFu32; 2 * k_words];
+        let plus = vec![0xFFFF_FFFFu32; 2 * k_words];
         let minus = vec![0u32; 2 * k_words];
         let scales = vec![1.0f32; 2];
 
@@ -729,12 +735,10 @@ mod tests {
 
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // All chunks should be active
@@ -783,8 +787,14 @@ mod tests {
                 if matches!(device, Device::Cuda(_)) {
                     // Create u32 tensor with known pattern
                     let data: Vec<u32> = vec![
-                        0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
-                        0xAAAAAAAA, 0x55555555,
+                        0x1234_5678,
+                        0xABCD_EF01,
+                        0xDEAD_BEEF,
+                        0xCAFE_BABE,
+                        0xFFFF_FFFF,
+                        0x0000_0000,
+                        0xAAAA_AAAA,
+                        0x5555_5555,
                     ];
                     let shape = (2, 4); // 2 rows, 4 columns
                     let original = Tensor::from_vec(data.clone(), shape, &device).unwrap();
@@ -823,7 +833,7 @@ mod tests {
 
                     // Generate pattern: alternating bits
                     let data: Vec<u32> = (0..total)
-                        .map(|i| if i % 2 == 0 { 0xAAAAAAAA } else { 0x55555555 })
+                        .map(|i| if i % 2 == 0 { 0xAAAA_AAAA } else { 0x5555_5555 })
                         .collect();
 
                     let original =

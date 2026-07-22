@@ -471,7 +471,7 @@ mod tests {
         let attn = FusedAttention::new(config, &device).unwrap();
 
         // Deterministic input
-        let n = 1 * 4 * 64;
+        let n = 4 * 64; // batch=1, seq=4, dim=64
         let data: Vec<f32> = (0..n).map(|i| ((i % 17) as f32) * 0.01 - 0.08).collect();
         let input = Tensor::from_vec(data, (1, 4, 64), &device).unwrap();
 

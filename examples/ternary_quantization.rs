@@ -11,6 +11,8 @@
 //!
 //! Run with: `cargo run --example ternary_quantization`
 
+#![allow(clippy::cast_precision_loss)]
+
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use unsloth_rs::kernels::ternary::{quantize_tensor, TernaryConfig};

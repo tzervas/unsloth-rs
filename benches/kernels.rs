@@ -19,6 +19,13 @@
 //! CUBECL_PROFILE=1 cargo bench -p unsloth-rs --features cuda
 //! ```
 
+#![allow(
+    clippy::manual_let_else,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use unsloth_rs::kernels::{
     cubecl::{flash_attention_kernel, FlashAttentionConfig},

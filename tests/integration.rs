@@ -2,6 +2,16 @@
 //!
 //! This test suite provides comprehensive validation of the ternary quantization
 //! pipeline, ensuring correctness, performance, and robustness across various scenarios.
+
+#![allow(
+    clippy::float_cmp,
+    clippy::too_many_lines,
+    clippy::field_reassign_with_default,
+    clippy::cast_precision_loss,
+    clippy::unreadable_literal,
+    clippy::similar_names,
+    clippy::unnecessary_wraps
+)]
 //!
 //! ## Test Coverage
 //!

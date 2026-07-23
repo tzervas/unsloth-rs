@@ -525,6 +525,7 @@ pub fn cubecl_to_u32_candle_tensor(
 }
 
 #[cfg(test)]
+#[allow(clippy::unreadable_literal, clippy::needless_range_loop)]
 mod tests {
     use super::*;
 

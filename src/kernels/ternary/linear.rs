@@ -296,6 +296,7 @@ pub fn convert_linear_with_config(
 }
 
 #[cfg(test)]
+#[allow(clippy::unreadable_literal, clippy::no_effect_underscore_binding)]
 mod tests {
     use super::*;
     use candle_core::Device;

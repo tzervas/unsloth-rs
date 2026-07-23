@@ -1,0 +1,70 @@
+name: jules-automerge
+# Event-driven auto-merge for Jules PRs — no cron, no external actor.
+# Fires when a check suite completes; merges the PR only if it is a Jules PR,
+# is mergeable, and every non-skipped check has concluded success.
+on:
+  check_suite:
+    types: [completed]
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge for green Jules PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Collect candidate open PRs (from the triggering PR, or all open on suite events).
+            let prs = [];
+            if (context.payload.pull_request) {
+              prs = [context.payload.pull_request];
+            } else {
+              const { data } = await github.rest.pulls.list({ owner, repo, state: 'open' });
+              prs = data;
+            }
+
+            for (const pr of prs) {
+              const head = pr.head.ref || '';
+              const login = (pr.user && pr.user.login) || '';
+              const isJules = /jules/i.test(head) || /jules|google-labs/i.test(login);
+              if (!isJules) continue;
+
+              // Re-fetch for fresh mergeable state.
+              const { data: full } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
+              if (full.draft) continue;
+              if (full.mergeable_state === 'dirty' || full.mergeable === false) {
+                core.info(`#${pr.number}: not mergeable (${full.mergeable_state}) — skip`);
+                continue;
+              }
+
+              // Gate on the combined check-runs for the head SHA: every non-skipped,
+              // non-neutral check must be success. Skipped checks do not block.
+              const { data: runs } = await github.rest.checks.listForRef({
+                owner, repo, ref: full.head.sha, per_page: 100,
+              });
+              const blocking = runs.check_runs.filter(c =>
+                !['skipped', 'neutral'].includes(c.conclusion));
+              const pending = blocking.filter(c => c.status !== 'completed');
+              const failed = blocking.filter(c => c.conclusion !== 'success');
+              if (pending.length) { core.info(`#${pr.number}: ${pending.length} checks pending`); continue; }
+              if (failed.length) { core.info(`#${pr.number}: ${failed.length} checks not green`); continue; }
+
+              try {
+                await github.rest.pulls.merge({
+                  owner, repo, pull_number: pr.number, merge_method: 'squash',
+                });
+                core.info(`#${pr.number}: MERGED (Jules, all non-skipped checks green)`);
+              } catch (e) {
+                core.warning(`#${pr.number}: merge failed — ${e.message}`);
+              }
+            }

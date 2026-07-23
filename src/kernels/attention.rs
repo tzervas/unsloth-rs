@@ -313,10 +313,11 @@ impl FusedAttention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        // Scale factor
-        let scale = (head_dim as f64).sqrt();
+        // Flash / fallback path multiplies scores by `scale` (see attention_cubecl).
+        // Must be 1/sqrt(head_dim) to match CPU path which divides by sqrt(head_dim).
+        let scale = 1.0 / (head_dim as f64).sqrt();
 
-        // Call Flash Attention CubeCL kernel
+        // Call Flash Attention CubeCL kernel (or CPU fallback when CubeCL unavailable)
         let attn_output = crate::kernels::attention_cubecl::flash_attention_cubecl(
             &q,
             &k,
@@ -451,5 +452,64 @@ mod tests {
         // Should be substantial (several GB for this config)
         assert!(vram > 100 * 1024 * 1024); // > 100 MB
         assert!(vram < 100 * 1024 * 1024 * 1024); // < 100 GB (sanity check)
+    }
+
+    /// Regression: FusedAttention flash path must use multiply-by-1/sqrt(d),
+    /// matching CPU divide-by-sqrt(d). Using sqrt(d) as the multiply scale
+    /// inverts the attention temperature and diverges from the CPU path.
+    #[test]
+    fn test_flash_path_scale_matches_cpu_one_over_sqrt_d() {
+        let config = FusedAttentionConfig {
+            hidden_size: 64,
+            num_heads: 2,
+            head_dim: 32,
+            num_kv_heads: Some(2),
+            dropout: 0.0,
+            use_flash: true,
+        };
+        let device = Device::Cpu;
+        let attn = FusedAttention::new(config, &device).unwrap();
+
+        // Deterministic input
+        let n = 4 * 64; // batch=1, seq=4, dim=64
+        let data: Vec<f32> = (0..n).map(|i| ((i % 17) as f32) * 0.01 - 0.08).collect();
+        let input = Tensor::from_vec(data, (1, 4, 64), &device).unwrap();
+
+        let cpu = attn.forward_cpu(&input, None).unwrap();
+        let flash = attn.forward_flash_attention(&input, None).unwrap();
+
+        let cpu_v: Vec<f32> = cpu.flatten_all().unwrap().to_vec1().unwrap();
+        let flash_v: Vec<f32> = flash.flatten_all().unwrap().to_vec1().unwrap();
+        assert_eq!(cpu_v.len(), flash_v.len());
+
+        let mut max_abs = 0.0f32;
+        let mut sum_abs = 0.0f32;
+        for (a, b) in cpu_v.iter().zip(flash_v.iter()) {
+            let d = (a - b).abs();
+            max_abs = max_abs.max(d);
+            sum_abs += d;
+        }
+        let mae = sum_abs / cpu_v.len() as f32;
+
+        // Correct scale (1/sqrt(d)): paths should match closely on CPU fallback.
+        // Wrong scale (sqrt(d) multiply): MAE is typically O(0.1–1), not ~1e-5.
+        assert!(
+            max_abs < 1e-4,
+            "flash vs cpu max abs diff {max_abs} (MAE {mae}); likely wrong flash scale"
+        );
+        assert!(
+            mae < 1e-5,
+            "flash vs cpu MAE {mae} too high; expected ~0 for 1/sqrt(head_dim) scale"
+        );
+
+        // Sanity: inverted scale (sqrt(d) as multiply factor) would not match.
+        let head_dim = 32f64;
+        let bad_scale = head_dim.sqrt();
+        let good_scale = 1.0 / head_dim.sqrt();
+        assert!((bad_scale * good_scale - 1.0).abs() < 1e-12);
+        assert!(
+            (bad_scale - good_scale).abs() > 1.0,
+            "test setup expects sqrt(d) and 1/sqrt(d) to differ substantially"
+        );
     }
 }

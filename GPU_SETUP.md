@@ -1,13 +1,13 @@
 # GPU Development Setup Guide
 
-**Last Updated**: 2026-01-10  
+**Last Updated**: 2026-07-22
 **Target GPU**: NVIDIA GeForce RTX 5080 (Compute Capability 12.0)
 
 ## Current Status
 
 ✅ **GPU Available**: RTX 5080 detected  
-✅ **NVIDIA Driver**: 590.48.01 installed  
-❌ **CUDA Toolkit**: Not installed (required for compilation)
+✅ **NVIDIA Driver**: check `nvidia-smi` (finish host used 610.x)
+✅ **CUDA Toolkit**: nvcc present on finish host (verify with `nvcc --version`; pin CAP as needed)
 
 ## Prerequisites
 
@@ -24,6 +24,94 @@ nvidia-smi
 nvidia-smi --query-gpu=driver_version --format=csv,noheader
 # Should show: 590.48.01 or newer
 ```
+
+
+## CUDA_COMPUTE_CAP pin (required on many hosts)
+
+Candle CUDA kernels and related build scripts honor **`CUDA_COMPUTE_CAP`**
+(SM arch as an integer, e.g. `90` for sm_90, `80` for sm_80).
+
+### Why pin to 90?
+
+- Hosts may report **Compute Capability 12.0** (e.g. RTX 5080 / Blackwell) via `nvidia-smi`.
+- Older **nvcc 12.0** toolchains often **cannot target arch 120** and fail with errors like
+  `nvcc cannot target gpu architecture 'compute_120'`.
+- Pinning is a **compile workaround**, not proof that kernels are optimized for Blackwell:
+
+```bash
+export CUDA_COMPUTE_CAP=90
+cargo check --features cuda
+cargo test --features cuda   # still needs a real device for runtime tests
+```
+
+| Env | Meaning |
+|-----|---------|
+| unset / auto → 120 on Blackwell + old nvcc | **FAIL_ENV** at compile |
+| `CUDA_COMPUTE_CAP=90` + nvcc ≤12.0 | Often compiles; runtime may still be FAIL_ENV without device nodes |
+| Matching toolkit + full `/dev/nvidia*` | Eligible for real GPU tests |
+
+### FAIL_ENV classification (do not fake green)
+
+Treat the following as **environment failures**, not product test passes:
+
+1. Missing GPU device nodes (`/dev/nvidia0` absent).
+2. `CUDA_ERROR_NO_DEVICE` / no CUDA device from Candle.
+3. Toolkit/arch mismatch (compile failure under default CAP).
+4. GPU numerical equivalence suite **not run**.
+
+**CI:** Default GitHub workflows are CPU-only. Absence of a GPU must be logged as
+skip / FAIL_ENV if a GPU job exists — never as a green “GPU validated” result.
+
+See also [DEBT.md](DEBT.md).
+
+### GPU numerical gate (PR-071)
+
+| Label | When |
+|-------|------|
+| **PASS** | `test_flash_attention_gpu_numerical_equivalence` runs on device; MAE&lt;1e-5 |
+| **FAIL (accuracy)** | Device open succeeded; metrics out of bounds |
+| **BLOCKED:env** | No `/dev/nvidia0`, `Device::new_cuda` fails, or gate not run |
+
+```bash
+# Only when /dev/nvidia0 exists and toolkit is healthy (nvcc + CUDA_COMPUTE_CAP pin)
+# Gate is NOT #[ignore]: it runs whenever --features cuda is used.
+CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
+  test_flash_attention_gpu_numerical_equivalence -- --nocapture
+```
+
+Default `cargo test` (no `cuda` feature) never compiles this gate — CPU stays green.
+With `--features cuda` and missing `/dev/nvidia0`, the gate fails as **BLOCKED:env**
+by design (no silent pass).
+
+
+## WSL / libcuda path (STACK-UNS-FINISH evidence)
+
+On this finish host (WSL-style layout), **system** `libcuda.so.1` may point at
+an older stub (`libcuda.so.535.*`) while `nvidia-smi` reports a newer driver
+(e.g. 610.x). Candle often still works; **CubeCL/cudarc** may panic with
+`CUDA_ERROR_NO_DEVICE` unless the WSL driver library is preferred:
+
+```bash
+export LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDA_COMPUTE_CAP=90
+cargo test --features cuda
+# or numerical gate only:
+cargo test --features cuda --test integration   test_flash_attention_gpu_numerical_equivalence -- --nocapture
+```
+
+| Observation | Classification |
+|-------------|----------------|
+| `/dev/nvidia0` missing | **BLOCKED:env** |
+| Candle `Device::new_cuda` fails | **BLOCKED:env** |
+| CubeCL panics `CUDA_ERROR_NO_DEVICE` (wrong libcuda) | **BLOCKED:env** for CubeCL path; may still fall back to Candle CUDA |
+| Gate MAE within thresholds on effective path | **PASS** (document fallback vs CubeCL kernel) |
+| Metrics out of bounds | **FAIL (accuracy)** |
+
+**Do not** claim 2× speedups from Flash Attention while host D2H/H2D interop
+remains (`interop_requires_host_roundtrip()`).
+
+
+---
 
 ## Installing CUDA Toolkit
 
@@ -234,11 +322,13 @@ ncu --target-processes all cargo bench --features cuda
 
 ## CI/CD Considerations
 
-GitHub Actions runners do not have GPU access. Per project design:
-- GPU tests/benchmarks run **locally only**
-- CI runs CPU-only tests
-- Use `./scripts/local-build.sh cuda` for local GPU builds
-- Results documented in BENCHMARKING.md
+Default CI (`.github/workflows/ci.yml`, `fleet-ci.yml`) is **CPU-only**:
+
+- `cargo test` / `cargo check` without requiring a GPU
+- GPU tests/benchmarks run **locally** (or on self-hosted runners with real devices)
+- Use `./scripts/local-build.sh cuda` or `CUDA_COMPUTE_CAP=90 cargo test --features cuda` locally
+- Missing GPU ⇒ **FAIL_ENV / skip**, never a fabricated green GPU job
+- Results and residual blocks documented in BENCHMARKING.md and DEBT.md
 
 ## References
 
@@ -249,5 +339,5 @@ GitHub Actions runners do not have GPU access. Per project design:
 
 ---
 
-**Status**: Driver installed, toolkit installation needed  
-**Next**: Install CUDA toolkit, then run GPU profiling
+**Status**: CAP/FAIL_ENV documented; interop host-copy permanent (PR-070); GPU numerical gate structured under --features cuda (PR-071 / FINISH; not #[ignore]); host without `/dev/nvidia0` ⇒ **BLOCKED:env**
+**Next**: On hosts with `/dev/nvidia0` + healthy toolkit, run CUDA gate and record PASS / FAIL (accuracy) / BLOCKED:env

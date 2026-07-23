@@ -1,8 +1,6 @@
-#![allow(clippy::pedantic, clippy::uninlined_format_args)]
-
 //! Flash Attention GPU tests for unsloth-rs.
 //!
-//! This module provides comprehensive GPU testing for the CubeCL Flash Attention
+//! This module provides comprehensive GPU testing for the `CubeCL` Flash Attention
 //! implementation, covering numerical accuracy, performance validation, memory
 //! efficiency, and edge cases.
 //!
@@ -16,19 +14,32 @@
 //! 6. **Error Handling**: Invalid inputs and resource limits
 //! 7. **Stability Testing**: Memory management and cleanup
 //!
-//! ## Expected Performance Targets
+//! ## Expected gates (honest)
 //!
-//! - **Accuracy**: MAE < 1e-5, RMSE < 1e-4 (adjusted for fp16/bf16)
-//! - **Speed**: GPU ≥2x faster than CPU for sequences ≥512
-//! - **Memory**: Peak VRAM < 2x theoretical minimum
-//! - **Reliability**: No memory leaks or device errors
+//! - **Accuracy (GPU numerical)**: MAE < 1e-5, RMSE < 1e-4, cosine > 0.999 (f32)
+//! - **Speed**: **not claimed** for `CubeCL` path while host D2H/H2D interop remains
+//!   (`interop_requires_host_roundtrip()`); performance tests are experimental only
+//! - **Env**: missing `/dev/nvidia0` or CUDA device ⇒ **BLOCKED:env** / `FAIL_ENV`, not accuracy FAIL
+//! - **Reliability**: No memory leaks or device errors when device is healthy
+//!
+//! ## Running the GPU numerical gate
+//!
+//! ```bash
+//! # Requires: cuda feature, /dev/nvidia0 (not only nvidiactl), healthy toolkit
+//! # On many hosts also: CUDA_COMPUTE_CAP=90
+//! # Runs automatically when built with --features cuda (not #[ignore]).
+//! CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
+//!   test_flash_attention_gpu_numerical_equivalence -- --nocapture
+//! ```
+//!
+//! Default `cargo test` (no `cuda` feature) never builds this test — CPU stays green.
+//! Missing `/dev/nvidia0` with `--features cuda` fails as **BLOCKED:env** (not silent Ok).
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
-use candle_nn;
-
 #[cfg(feature = "cuda")]
 use candle_core::IndexOp;
+use candle_core::{DType, Device, Tensor};
+use candle_nn;
 
 #[cfg(feature = "cuda")]
 use std::time::Instant;
@@ -274,28 +285,55 @@ fn calculate_attention_gflops(config: &AttentionTestConfig) -> f64 {
 // GPU TEST FUNCTIONS
 // ============================================================================
 
-/// Test numerical equivalence between GPU and CPU Flash Attention.
+/// GPU numerical equivalence gate: CubeCL/GPU flash vs CPU reference (MAE).
 ///
-/// This test verifies that the GPU implementation produces results that are
-/// numerically equivalent to the CPU reference within acceptable tolerances.
+/// # Classification
+///
+/// | Outcome | Meaning |
+/// |---------|---------|
+/// | **PASS** | MAE / RMSE / cosine within thresholds on a real CUDA device |
+/// | **FAIL (accuracy)** | Device worked; numbers exceed thresholds |
+/// | **BLOCKED:env / FAIL_ENV** | No `/dev/nvidia0`, `Device::new_cuda` fails, or cuda feature off |
+///
+/// # How to run
+///
+/// ```bash
+/// # Needs full NVIDIA device nodes (e.g. /dev/nvidia0), not only /dev/nvidiactl.
+/// # Built only with --features cuda; not compiled into default cargo test.
+/// CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
+///   test_flash_attention_gpu_numerical_equivalence -- --nocapture
+/// ```
+///
+/// **Not** `#[ignore]`: when the `cuda` feature is enabled this gate runs.
+/// Default CI omits `cuda`, so CPU green is preserved. Missing device ⇒ **BLOCKED:env**.
 #[cfg(feature = "cuda")]
 #[test]
 fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
-    crate::require_gpu!();
+    // Hard env check: do not silent-Ok on missing GPU (that would fake a green gate).
+    if !std::path::Path::new("/dev/nvidia0").exists() {
+        anyhow::bail!(
+            "BLOCKED:env — /dev/nvidia0 missing (nvidia-smi alone is not enough).              Classification: FAIL_ENV, not accuracy. See DEBT.md / GPU_SETUP.md."
+        );
+    }
+
+    let cuda_device = match Device::new_cuda(0) {
+        Ok(device) => device,
+        Err(e) => {
+            anyhow::bail!(
+                "BLOCKED:env — Device::new_cuda(0) failed: {e}.                  Classification: FAIL_ENV (device/runtime), not accuracy."
+            );
+        }
+    };
+
+    // MAE / RMSE / cosine thresholds for f32 reference comparison
+    const MAE_THRESHOLD: f32 = 1e-5;
+    const RMSE_THRESHOLD: f32 = 1e-4;
+    const COSINE_THRESHOLD: f32 = 0.999;
 
     let configs = vec![AttentionTestConfig::small(), AttentionTestConfig::medium()];
 
     for config in configs {
         println!("Testing config: {:?}", config);
-
-        // Check if CUDA device is actually available before proceeding
-        let cuda_device = match Device::new_cuda(0) {
-            Ok(device) => device,
-            Err(e) => {
-                println!("SKIP: CUDA device not available: {}", e);
-                return Ok(());
-            }
-        };
 
         let cpu_device = Device::Cpu;
 
@@ -315,7 +353,9 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
             .map(|m| m.to_device(&cuda_device))
             .transpose()?;
 
-        // GPU Flash Attention computation
+        // GPU path: tries CubeCL, falls back to Candle ops on the CUDA device if
+        // CubeCL/cudarc panics or errors (see launch_cubecl_attention catch_unwind).
+        // MAE gate validates the *effective* path, not a claim that CubeCL executed.
         let gpu_output = flash_attention_cubecl(&q_gpu, &k_gpu, &v_gpu, scale, mask_gpu.as_ref())?;
 
         // Move GPU result back to CPU for comparison
@@ -324,32 +364,37 @@ fn test_flash_attention_gpu_numerical_equivalence() -> Result<()> {
         // Calculate accuracy metrics
         let metrics = calculate_accuracy_metrics(&gpu_output_cpu, &cpu_output)?;
 
-        println!("Accuracy metrics: {:?}", metrics);
-
-        // Validate accuracy thresholds
-        let mae_threshold = 1e-5;
-        let rmse_threshold = 1e-4;
-        let cosine_threshold = 0.999;
+        println!(
+            "Accuracy metrics: MAE={:.3e} RMSE={:.3e} cosine={:.6}",
+            metrics.mae, metrics.rmse, metrics.cosine_similarity
+        );
 
         assert!(
-            metrics.meets_targets(mae_threshold, rmse_threshold, cosine_threshold),
-            "GPU Flash Attention accuracy below threshold: MAE={:.2e} (< {:.2e}), RMSE={:.2e} (< {:.2e}), Cosine={:.6} (> {:.6})",
-            metrics.mae, mae_threshold,
-            metrics.rmse, rmse_threshold,
-            metrics.cosine_similarity, cosine_threshold
+            metrics.meets_targets(MAE_THRESHOLD, RMSE_THRESHOLD, COSINE_THRESHOLD),
+            "FAIL (accuracy) — GPU Flash Attention below threshold for {:?}:              MAE={:.2e} (need < {:.2e}), RMSE={:.2e} (need < {:.2e}), Cosine={:.6} (need > {:.6}).              This is NOT BLOCKED:env — device path ran.",
+            config,
+            metrics.mae,
+            MAE_THRESHOLD,
+            metrics.rmse,
+            RMSE_THRESHOLD,
+            metrics.cosine_similarity,
+            COSINE_THRESHOLD
         );
     }
 
-    println!("✅ GPU Flash Attention numerical equivalence test passed");
+    println!(
+        "✅ GPU Flash Attention numerical equivalence test PASSED (accuracy gate)\n            Note: CubeCL may have fallen back to Candle CUDA (cudarc init can panic with\n            CUDA_ERROR_NO_DEVICE even when /dev/nvidia0 + Candle CUDA work). MAE validates\n            the effective path. Do not claim CubeCL kernel-only PASS without separate evidence."
+    );
     Ok(())
 }
 
-/// Test Flash Attention performance compared to CPU baseline.
+/// Experimental GPU timing (not a product speed claim).
 ///
-/// This test validates that GPU implementation provides significant speedup
-/// over CPU implementation for sequences where GPU should excel.
+/// Host D2H/H2D interop means CubeCL FA is **not** expected to beat Candle end-to-end.
+/// Marked `#[ignore]`; run only with a real device for diagnostics.
 #[cfg(feature = "cuda")]
 #[test]
+#[ignore = "GPU diagnostic: requires /dev/nvidia0 + --features cuda; not a 2× speed claim"]
 fn test_flash_attention_gpu_performance() -> Result<()> {
     crate::require_gpu!(2.0); // Require 2GB VRAM
 
@@ -595,7 +640,7 @@ fn test_flash_attention_different_configs() -> Result<()> {
     }
 
     // Test different data types
-    let dtypes = vec![DType::F32]; // TODO: Add F16, BF16 when supported
+    let dtypes = vec![DType::F32]; // UNS-P1-04: CubeCL interop is f32-only for 1.0.x
 
     for dtype in dtypes {
         let config = AttentionTestConfig {
@@ -947,7 +992,7 @@ pub fn test_flash_attention_basic_functionality() -> Result<()> {
     // Validate output sanity
     let values: Vec<f32> = output.flatten_all()?.to_vec1()?;
     for v in values.iter().take(100) {
-        assert!(!v.is_nan() && !v.is_infinite(), "Invalid output: {}", v);
+        assert!(!v.is_nan() && !v.is_infinite(), "Invalid output: {v}");
     }
 
     println!("✅ Basic Flash Attention functionality test passed");
@@ -975,7 +1020,7 @@ pub fn test_flash_attention_cpu_fallback_accuracy() -> Result<()> {
     // Calculate accuracy metrics
     let metrics = calculate_accuracy_metrics(&fallback_output, &reference_output)?;
 
-    println!("CPU fallback accuracy metrics: {:?}", metrics);
+    println!("CPU fallback accuracy metrics: {metrics:?}");
 
     // Should be nearly identical
     assert!(
@@ -990,11 +1035,11 @@ pub fn test_flash_attention_cpu_fallback_accuracy() -> Result<()> {
     Ok(())
 }
 
-/// Test CubeCL support detection without requiring actual CUDA.
+/// Test `CubeCL` support detection without requiring actual CUDA.
 #[test]
 pub fn test_cubecl_support_detection() {
     let has_support = has_cubecl_support();
-    println!("CubeCL support detected: {}", has_support);
+    println!("CubeCL support detected: {has_support}");
 
     // This test should not fail regardless of actual support
     // It just validates that the detection function doesn't panic
@@ -1014,17 +1059,13 @@ pub fn test_flash_attention_vram_estimation() {
         let vram_bytes = estimate_flash_attention_vram(batch, heads, seq_len, head_dim, tile_size);
         let vram_mb = vram_bytes as f64 / 1e6;
 
-        println!(
-            "Config {}x{}x{}x{} (tile={}): {:.1}MB",
-            batch, heads, seq_len, head_dim, tile_size, vram_mb
-        );
+        println!("Config {batch}x{heads}x{seq_len}x{head_dim} (tile={tile_size}): {vram_mb:.1}MB");
 
         // Sanity checks
         assert!(vram_bytes > 0, "VRAM estimate should be positive");
         assert!(
             vram_mb < 100_000.0,
-            "VRAM estimate unreasonably high: {:.1}MB",
-            vram_mb
+            "VRAM estimate unreasonably high: {vram_mb:.1}MB"
         );
 
         // Memory should scale with sequence length
@@ -1063,7 +1104,7 @@ pub fn test_flash_attention_sequence_scaling() -> Result<()> {
             ..base_config.clone()
         };
 
-        println!("Testing sequence length: {}", seq_len);
+        println!("Testing sequence length: {seq_len}");
 
         let (q, k, v, mask) = create_test_tensors(&config, &device)?;
         let scale = 1.0 / (config.head_dim as f64).sqrt();
@@ -1086,9 +1127,7 @@ pub fn test_flash_attention_sequence_scaling() -> Result<()> {
         for v in values.iter().take(10) {
             assert!(
                 !v.is_nan() && !v.is_infinite(),
-                "Invalid output at seq_len={}: {}",
-                seq_len,
-                v
+                "Invalid output at seq_len={seq_len}: {v}"
             );
         }
     }

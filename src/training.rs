@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 
-//! Training utilities.
+//! Training utilities (helpers only — not a trainer).
 //!
-//! This module provides training utilities including:
-//! - Mixed precision training support (FP32, FP16, BF16)
+//! This module provides **tensor-level** training helpers:
+//! - Mixed precision **dtype helpers** (FP32, FP16, BF16 convert/scale)
+//!   Note: CubeCL interop/kernels remain **f32-only** (`interop_f32_only`).
 //! - Gradient scaling for numerical stability
-//! - Gradient checkpointing configuration
+//! - Optional [`CheckpointConfig`](crate::memory::CheckpointConfig) for **memory estimates**
+//!
+//! ## What this is not
+//!
+//! - Not an Unsloth-style gradient-checkpointed training loop.
+//! - Not a public “recompute activations” API. Activation checkpointing recompute
+//!   is intentionally **out of scope** until wired through Candle autograd; use
+//!   [`CheckpointConfig`](crate::memory::CheckpointConfig) only for planning math.
 
 use candle_core::{DType, Tensor};
 
@@ -285,40 +293,9 @@ pub fn update_loss_scale(
     config.loss_scale
 }
 
-/// Compute gradient with optional checkpointing.
-///
-/// This function performs gradient computation with activation checkpointing,
-/// which trades compute for memory by recomputing activations during the backward pass
-/// instead of storing them in memory.
-///
-/// # Arguments
-/// * `_input` - Input tensor for the forward pass
-/// * `_forward_fn` - Function that computes the forward pass
-/// * `_config` - Checkpoint configuration specifying checkpointing strategy
-///
-/// # Returns
-/// Computed gradient tensor
-///
-/// # Errors
-/// Returns an error if gradient computation fails.
-///
-/// # Note
-/// This is currently unimplemented and will return an error.
-/// Gradient checkpointing is planned for a future release.
-pub fn compute_gradient_checkpointed<F>(
-    _input: &Tensor,
-    _forward_fn: F,
-    _config: &CheckpointConfig,
-) -> Result<Tensor>
-where
-    F: Fn(&Tensor) -> Result<Tensor>,
-{
-    // TODO: Implement gradient checkpointing
-    // This would recompute forward pass during backward instead of storing activations
-    Err(UnslothError::InvalidConfig(
-        "Gradient checkpointing is not yet implemented. This feature is planned for a future release.".to_string()
-    ))
-}
+// Gradient-checkpoint *recompute* is intentionally not exposed as a public API.
+// A previous always-`Err` stub (`compute_gradient_checkpointed`) was removed (PR-083 /
+// UNS-P1-03). Keep `CheckpointConfig` + `estimate_forward_memory` for planning only.
 
 /// Scale gradients for mixed precision training.
 pub fn scale_gradients(gradients: &[Tensor], scale: f32) -> Result<Vec<Tensor>> {
@@ -371,7 +348,7 @@ mod tests {
         let config = MixedPrecisionConfig::default();
         assert_eq!(config.compute_precision, PrecisionMode::Half);
         assert_eq!(config.master_precision, PrecisionMode::Full);
-        assert!((config.loss_scale - 65536.0).abs() < 1e-5);
+        assert!((config.loss_scale - 65536.0).abs() < f32::EPSILON);
         assert!(config.dynamic_loss_scale);
     }
 
@@ -394,7 +371,7 @@ mod tests {
         assert_eq!(config.compute_precision, PrecisionMode::Full);
         assert_eq!(config.master_precision, PrecisionMode::Full);
         assert!(!config.dynamic_loss_scale);
-        assert!((config.loss_scale - 1.0).abs() < 1e-5);
+        assert!((config.loss_scale - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -422,7 +399,7 @@ mod tests {
 
         let config = MixedPrecisionConfig {
             loss_scale: 4.0,
-            ..MixedPrecisionConfig::default()
+            ..Default::default()
         };
 
         let scaled = scale_loss(&loss, &config).unwrap();
@@ -441,7 +418,7 @@ mod tests {
 
         let config = MixedPrecisionConfig {
             loss_scale: 4.0,
-            ..MixedPrecisionConfig::default()
+            ..Default::default()
         };
 
         let unscaled = unscale_gradients(&gradients, &config).unwrap();
@@ -487,8 +464,8 @@ mod tests {
 
         // Test backoff on overflow
         let new_scale = update_loss_scale(&mut config, true, 0);
-        assert!((new_scale - 500.0).abs() < 1e-5);
-        assert!((config.loss_scale - 500.0).abs() < 1e-5);
+        assert!((new_scale - 500.0).abs() < f32::EPSILON);
+        assert!((config.loss_scale - 500.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -502,20 +479,20 @@ mod tests {
 
         // Test growth after many successful steps
         let new_scale = update_loss_scale(&mut config, false, 100);
-        assert!((new_scale - 200.0).abs() < 1e-5);
-        assert!((config.loss_scale - 200.0).abs() < 1e-5);
+        assert!((new_scale - 200.0).abs() < f32::EPSILON);
+        assert!((config.loss_scale - 200.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_update_loss_scale_no_change() {
         let mut config = MixedPrecisionConfig {
             loss_scale: 100.0,
-            ..MixedPrecisionConfig::default()
+            ..Default::default()
         };
 
         // No change if not enough steps and no overflow
         let new_scale = update_loss_scale(&mut config, false, 10);
-        assert!((new_scale - 100.0).abs() < 1e-5);
+        assert!((new_scale - 100.0).abs() < f32::EPSILON);
     }
 
     #[test]

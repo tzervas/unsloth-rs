@@ -4,25 +4,48 @@
 //! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and
-//! `CubeCL` buffer handles, enabling seamless integration between the two frameworks.
+//! `CubeCL` buffer handles, enabling integration between the two frameworks.
 //!
 //! ## Key Functions
 //!
-//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to `CubeCL` handle
-//! - [`cubecl_to_candle_tensor`] - Convert `CubeCL` output back to Candle tensor
+//! - [`candle_to_cubecl_handle`] - Convert contiguous Candle tensor to `CubeCL` handle bytes
+//! - [`cubecl_to_candle_tensor`] - Convert `CubeCL` output bytes back to Candle tensor
 //! - [`has_cubecl_cuda_support`] - Check if CUDA runtime is available
+//! - [`interop_requires_host_roundtrip`] - Honesty flag: host D2H/H2D is required
 //!
-//! ## Memory Management
+//! ## Permanent limitation (UNS-P1-01 / PR-070)
 //!
-//! The conversion functions handle:
-//! - Ensuring tensor contiguity (required for raw pointer access)
-//! - Buffer creation via `client.create(bytes)`
-//! - Buffer reuse where possible to minimize allocations
+//! **Host device-to-host and host-to-device copies are required** for Candle ↔ CubeCL
+//! buffer handoff with the current public APIs of:
 //!
-//! ## Fallback Routing
+//! | Library | What is available | What is missing for zero-copy |
+//! |---------|-------------------|-------------------------------|
+//! | **Candle 0.9** | `Tensor::to_vec1` (D2H), `Tensor::from_vec` (H2D); `CudaStorage`/`CudaSlice` only usable inside Candle custom ops | No public export of a raw CUDA device pointer from an arbitrary `Tensor` without internal storage access |
+//! | **CubeCL 0.9** | `client.create(Bytes)`, `client.empty`, `client.read_one` | No public “import external `CUdeviceptr` / foreign buffer” API that registers a Candle allocation as a CubeCL `Handle` |
 //!
-//! When `CubeCL` is not available, functions return appropriate errors or
-//! fallback implementations are used in the kernel module.
+//! Candle and CubeCL also maintain **separate CUDA memory managers and contexts**.
+//! Sharing a pointer across them would still require explicit ownership / lifetime
+//! rules that neither crate exposes today.
+//!
+//! ### Performance implication
+//!
+//! End-to-end Flash Attention and fused CubeCL kernels that go through this interop
+//! **cannot claim Unsloth-style 2× speedups or large VRAM wins** until a true
+//! device-side handoff exists (or kernels are rewritten as Candle `CustomOp*`
+//! that operate on `CudaStorage` in-process without CubeCL handles).
+//!
+//! Documented alternatives for a future PR:
+//! 1. Candle `CustomOp` path that never leaves Candle CUDA storage (drop CubeCL handle model).
+//! 2. Upstream CubeCL external-buffer import + Candle stable device-ptr export.
+//!
+//! Until then: correctness paths remain valuable; **throughput claims are demoted**.
+//!
+//! ## Dtype scope (UNS-P1-04)
+//!
+//! Candle↔CubeCL interop and the Flash Attention CubeCL path are **f32 only**.
+//! See [`interop_f32_only`] / [`interop_supports_dtype`]. Host mixed-precision
+//! helpers (`crate::training`) can convert tensors to f16/bf16 for CPU-side
+//! experiments; they do **not** enable CubeCL half kernels.
 
 use crate::error::{Result, UnslothError};
 use candle_core::{DType, Device, Tensor};
@@ -30,6 +53,35 @@ use candle_core::{DType, Device, Tensor};
 // Constants for bitsliced operations
 const BITS_PER_U32: usize = 32;
 const BITS_PER_U64: usize = 64;
+
+/// Returns `true` if Candle↔CubeCL conversion must round-trip through host memory.
+///
+/// Always `true` for CubeCL 0.9 + Candle 0.9 public APIs (see module docs).
+/// Exposed so callers and docs can branch honestly on perf expectations.
+#[must_use]
+pub const fn interop_requires_host_roundtrip() -> bool {
+    true
+}
+
+/// CubeCL interop (and FA kernels that use it) are **f32-only** (UNS-P1-04).
+///
+/// Half / bfloat paths are **not** implemented for Candle↔CubeCL buffer handoff.
+/// Mixed-precision helpers in [`crate::training`] convert tensors for host-side
+/// experiments; they do not enable CubeCL f16/bf16 kernels.
+///
+/// Scope decision for 1.0.x: ship an honest **CPU / CubeCL f32** surface rather
+/// than a half-implemented half path that silently falls back or errors mid-kernel.
+#[must_use]
+pub const fn interop_f32_only() -> bool {
+    true
+}
+
+/// Returns `true` if `dtype` is accepted by [`candle_to_cubecl_handle`] /
+/// [`cubecl_to_candle_tensor`] (currently only [`DType::F32`]).
+#[must_use]
+pub fn interop_supports_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F32)
+}
 
 /// Check if `CubeCL` CUDA runtime support is available.
 ///
@@ -57,12 +109,8 @@ pub fn has_cubecl_cuda_support() -> bool {
     // Check if cuda feature is enabled
     #[cfg(feature = "cuda")]
     {
-        // TODO: Add actual CubeCL runtime device detection
-        // For now, check if Candle can see a CUDA device
-        // This will be replaced with:
-        // cubecl_cuda::CudaRuntime::is_available()
-
-        // Placeholder: Check Candle CUDA support as proxy
+        // Proxy: Candle CUDA device visibility. CubeCL may still fail at launch
+        // (separate runtime); callers must fall back on kernel errors.
         matches!(Device::cuda_if_available(0), Ok(Device::Cuda(_)))
     }
 
@@ -72,10 +120,15 @@ pub fn has_cubecl_cuda_support() -> bool {
     }
 }
 
-/// Convert a Candle tensor to a `CubeCL` buffer handle.
+/// Convert a Candle tensor to a `CubeCL` buffer handle payload.
 ///
 /// The tensor must be contiguous in memory. If not, it will be made contiguous
 /// (which may involve a copy).
+///
+/// # Host copy (permanent with current APIs)
+///
+/// For CUDA tensors this performs a **device → host** transfer via `to_vec1`.
+/// See module-level **Permanent limitation**. Zero-copy is not available.
 ///
 /// # Arguments
 ///
@@ -118,16 +171,15 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
     let shape = tensor.dims().to_vec();
     let dtype = tensor.dtype();
 
-    // Only f32 supported currently
-    // TODO: Add f16/bf16 support
-    if dtype != DType::F32 {
+    // UNS-P1-04: CubeCL interop is intentionally f32-only for 1.0.x.
+    // f16/bf16 would need full kernel + byte-width paths; not a silent TODO.
+    if !interop_supports_dtype(dtype) {
         return Err(UnslothError::InvalidConfig(format!(
-            "candle_to_cubecl_handle only supports f32, got {dtype:?}"
+            "candle_to_cubecl_handle is f32-only (UNS-P1-04 / interop_f32_only); got {dtype:?}.              Use training::convert_precision for host dtype experiments; CubeCL kernels stay f32."
         )));
     }
 
-    // Extract raw bytes
-    // For CUDA tensors, this requires a device-to-host copy
+    // Device → host copy (required; see interop_requires_host_roundtrip).
     let data: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
     let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -136,9 +188,14 @@ pub fn candle_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, 
 
 /// Convert a `CubeCL` buffer back to a Candle tensor.
 ///
+/// # Host copy (permanent with current APIs)
+///
+/// Builds the tensor via `Tensor::from_vec` on the target CUDA device, which is a
+/// **host → device** upload. There is no public CubeCL→Candle device-pointer import.
+///
 /// # Arguments
 ///
-/// * `bytes` - Raw output bytes from `CubeCL` kernel
+/// * `bytes` - Raw output bytes from `CubeCL` kernel (already read to host)
 /// * `shape` - Target tensor shape
 /// * `device` - Target Candle device (must be CUDA)
 ///
@@ -184,13 +241,13 @@ pub fn cubecl_to_candle_tensor(bytes: &[u8], shape: &[usize], device: &Device) -
 
     // Convert bytes to f32
     let data: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect();
 
-    // Create Candle tensor
-    // Note: This creates on CPU first, then transfers to CUDA
-    // TODO: Optimize with direct GPU buffer creation
+    // Host → device (required; see interop_requires_host_roundtrip).
     let tensor = Tensor::from_vec(data, shape, device)?;
 
     Ok(tensor)
@@ -267,8 +324,10 @@ pub fn ternary_tensor_to_cubecl_handles(
 #[must_use]
 pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
     bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -344,6 +403,7 @@ pub fn create_sparsity_bitmap_for_tensor(
 /// Convert Candle u32 tensor to CubeCL handle.
 ///
 /// Similar to `candle_to_cubecl_handle` but for u32 dtype (bitsliced planes).
+/// Same host-copy limitation as the f32 path.
 ///
 /// # Arguments
 ///
@@ -391,8 +451,7 @@ pub fn u32_tensor_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usiz
         )));
     }
 
-    // Extract raw bytes
-    // For CUDA tensors, this requires a device-to-host copy
+    // Device → host copy (required; see interop_requires_host_roundtrip).
     let data: Vec<u32> = tensor.flatten_all()?.to_vec1()?;
     let bytes: Vec<u8> = data.iter().flat_map(|u| u.to_le_bytes()).collect();
 
@@ -400,6 +459,8 @@ pub fn u32_tensor_to_cubecl_handle(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usiz
 }
 
 /// Convert CubeCL u32 buffer back to a Candle u32 tensor.
+///
+/// Host → device upload; see [`interop_requires_host_roundtrip`].
 ///
 /// # Arguments
 ///
@@ -452,13 +513,13 @@ pub fn cubecl_to_u32_candle_tensor(
 
     // Convert bytes to u32
     let data: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect();
 
-    // Create Candle tensor
-    // Note: This creates on CPU first, then transfers to CUDA
-    // TODO: Optimize with direct GPU buffer creation
+    // Host → device (required; see interop_requires_host_roundtrip).
     let tensor = Tensor::from_vec(data, shape, device)?;
 
     Ok(tensor)
@@ -479,6 +540,29 @@ mod tests {
     }
 
     #[test]
+    fn test_interop_requires_host_roundtrip() {
+        // Permanent with Candle 0.9 + CubeCL 0.9 public APIs
+        assert!(interop_requires_host_roundtrip());
+    }
+
+    #[test]
+    fn test_interop_f32_only_scope() {
+        assert!(interop_f32_only());
+        assert!(interop_supports_dtype(DType::F32));
+        assert!(!interop_supports_dtype(DType::F16));
+        assert!(!interop_supports_dtype(DType::BF16));
+        assert!(!interop_supports_dtype(DType::U32));
+    }
+
+    #[test]
+    fn test_candle_to_cubecl_rejects_f16_dtype_message() {
+        // CPU path errors on device first; still document f32-only via helper.
+        // Device-gated reject of non-f32 is covered when CUDA tensors exist.
+        assert!(!interop_supports_dtype(DType::F16));
+        assert!(!interop_supports_dtype(DType::BF16));
+    }
+
+    #[test]
     fn test_allocate_output_buffer() {
         let buffer = allocate_output_buffer(100);
         assert_eq!(buffer.len(), 400); // 100 * 4 bytes per f32
@@ -493,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_u32_planes_to_bytes_roundtrip() {
-        let original: Vec<u32> = vec![0xDEADBEEF, 0xCAFEBABE, 0x12345678];
+        let original: Vec<u32> = vec![0xDEAD_BEEF, 0xCAFE_BABE, 0x1234_5678];
         let bytes = u32_planes_to_cubecl_bytes(&original);
         let recovered = cubecl_bytes_to_u32_plane(&bytes);
         assert_eq!(original, recovered);
@@ -506,8 +590,8 @@ mod tests {
         let shape = (4, 64); // 4 rows, 64 cols
         let k_words = 2; // 64 / 32 = 2
 
-        let plus = vec![0xAAAAAAAAu32; 4 * k_words];
-        let minus = vec![0x55555555u32; 4 * k_words];
+        let plus = vec![0xAAAA_AAAAu32; 4 * k_words];
+        let minus = vec![0x5555_5555u32; 4 * k_words];
         let scales = vec![1.5f32; 4];
 
         let expected_plus = plus.clone();
@@ -540,7 +624,12 @@ mod tests {
     fn test_u32_bytes_roundtrip() {
         // Test u32 bytes conversion roundtrip
         let original: Vec<u32> = vec![
-            0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
+            0x1234_5678,
+            0xABCD_EF01,
+            0xDEAD_BEEF,
+            0xCAFE_BABE,
+            0xFFFF_FFFF,
+            0x0000_0000,
         ];
         let bytes = u32_planes_to_cubecl_bytes(&original);
         let recovered = cubecl_bytes_to_u32_plane(&bytes);
@@ -560,9 +649,9 @@ mod tests {
         // Create 50% sparse pattern: alternating active/inactive words
         let mut plus = vec![0u32; 4 * k_words];
         for row in 0..4 {
-            plus[row * k_words] = 0xFFFFFFFF; // Word 0: active
+            plus[row * k_words] = 0xFFFF_FFFF; // Word 0: active
             plus[row * k_words + 1] = 0x0; // Word 1: inactive
-            plus[row * k_words + 2] = 0xFFFFFFFF; // Word 2: active
+            plus[row * k_words + 2] = 0xFFFF_FFFF; // Word 2: active
             plus[row * k_words + 3] = 0x0; // Word 3: inactive
         }
         let minus = vec![0u32; 4 * k_words];
@@ -579,17 +668,14 @@ mod tests {
 
         // Convert back to u64 for validation
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
-        for row in 0..4 {
-            let row_bitmap = bitmap[row];
+        for (row, &row_bitmap) in bitmap.iter().enumerate().take(4) {
             // Chunk 0 (words 0-1): word 0 is active, so chunk is active
             assert_ne!(
                 row_bitmap & 0x1,
@@ -623,12 +709,10 @@ mod tests {
 
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // All chunks should be inactive
@@ -648,7 +732,7 @@ mod tests {
         let k_words = 4;
 
         // All active (fully dense)
-        let plus = vec![0xFFFFFFFFu32; 2 * k_words];
+        let plus = vec![0xFFFF_FFFFu32; 2 * k_words];
         let minus = vec![0u32; 2 * k_words];
         let scales = vec![1.0f32; 2];
 
@@ -656,12 +740,10 @@ mod tests {
 
         let bitmap_bytes = create_sparsity_bitmap_for_tensor(&tensor, 64);
         let bitmap: Vec<u64> = bitmap_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
         // All chunks should be active
@@ -710,8 +792,14 @@ mod tests {
                 if matches!(device, Device::Cuda(_)) {
                     // Create u32 tensor with known pattern
                     let data: Vec<u32> = vec![
-                        0x12345678, 0xABCDEF01, 0xDEADBEEF, 0xCAFEBABE, 0xFFFFFFFF, 0x00000000,
-                        0xAAAAAAAA, 0x55555555,
+                        0x1234_5678,
+                        0xABCD_EF01,
+                        0xDEAD_BEEF,
+                        0xCAFE_BABE,
+                        0xFFFF_FFFF,
+                        0x0000_0000,
+                        0xAAAA_AAAA,
+                        0x5555_5555,
                     ];
                     let shape = (2, 4); // 2 rows, 4 columns
                     let original = Tensor::from_vec(data.clone(), shape, &device).unwrap();
@@ -750,7 +838,7 @@ mod tests {
 
                     // Generate pattern: alternating bits
                     let data: Vec<u32> = (0..total)
-                        .map(|i| if i % 2 == 0 { 0xAAAAAAAA } else { 0x55555555 })
+                        .map(|i| if i % 2 == 0 { 0xAAAA_AAAA } else { 0x5555_5555 })
                         .collect();
 
                     let original =

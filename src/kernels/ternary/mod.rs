@@ -46,22 +46,29 @@
 //! let output = layer.forward(&activations)?;
 //! ```
 //!
-//! ## Performance Targets
+//! ## Scope (honest)
 //!
-//! - **Speedup**: ≥5x vs FP16 matmul on sparse pruned models
-//! - **Memory**: ≥10x weight reduction (targeting 20-30x with sparsity)
-//! - **Accuracy**: <2% perplexity degradation post-calibration
+//! - **In scope**: CPU ternary quantize / matmul / linear / attention experiments.
+//! - **Out of scope**: GPU ternary CubeCL kernels (archived; see `archive/ternary_cubecl/`).
+//! - Compression ratios are measurable on CPU; do **not** claim training speedups
+//!   or Unsloth-style GPU wins from this module.
+
+// ---------------------------------------------------------------------------
+// UNS-P2-01 — Ternary CubeCL GPU modules: **NON-GOAL / archived**
+//
+// Historical drafts lived at `src/kernels/ternary/{attention,matmul}_cubecl.rs`.
+// They were never exported on default or `cuda` builds and are not maintained
+// against CubeCL 0.9. Source moved to `archive/ternary_cubecl/` (excluded from
+// crates.io package). CPU ternary path below remains supported/experimental.
+//
+// Feature `_ternary_cubecl_todo` is an empty placeholder only — it does **not**
+// compile archived GPU modules back into the crate.
+// ---------------------------------------------------------------------------
 
 pub mod attention;
-// TODO: Re-enable once CubeCL API compatibility is fixed
-// #[cfg(feature = "cuda")]
-// pub mod attention_cubecl;
 pub mod config;
 pub mod linear;
 pub mod matmul;
-// TODO: Re-enable once CubeCL API compatibility is fixed
-// #[cfg(feature = "cuda")]
-// pub mod matmul_cubecl;
 pub mod model;
 pub mod quantize;
 pub mod types;

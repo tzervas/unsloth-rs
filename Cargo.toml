@@ -1,14 +1,20 @@
 [package]
 name = "unsloth-rs"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 rust-version = "1.92"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
-description = "Rust implementations of transformer building blocks for LLM inference"
+description = "Candle/CubeCL transformer kernel building blocks (not an Unsloth product port)"
 repository = "https://github.com/tzervas/unsloth-rs"
 keywords = ["transformers", "llm", "machine-learning", "attention", "rust"]
 categories = ["science", "mathematics"]
+exclude = [
+    "archive/**",
+    "docs/archive/**",
+    "target/**",
+    ".github/**",
+]
 
 [dependencies]
 candle-core = { workspace = true }
@@ -32,14 +38,35 @@ anyhow = { workspace = true }
 [features]
 default = []
 cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
+# Empty placeholder only — does NOT compile archive/ternary_cubecl (UNS-P2-01 non-goal)
 _ternary_cubecl_todo = []
+# Experimental tiled FA-2; gated off until CubeCL comptime issues resolved
 _phase2_tiled_kernel = []
 
 [lints.rust]
 missing_docs = "warn"
 
 [lints.clippy]
-pedantic = "warn"
+# pedantic on; priority -1 so selective allows below win
+pedantic = { level = "warn", priority = -1 }
+# ML / numeric kernels: intentional host-side casts & exact f32 config asserts
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+float_cmp = "allow"
+# Doc noise on many Result helpers (aligned with peft-rs / qlora-rs)
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+# Style nits with high churn, low product value
+similar_names = "allow"
+too_many_lines = "allow"
+module_name_repetitions = "allow"
+manual_let_else = "allow"
+unnecessary_wraps = "allow"
+needless_pass_by_value = "allow"
+needless_range_loop = "allow"
+field_reassign_with_default = "allow"
 
 [[bench]]
 name = "kernels"

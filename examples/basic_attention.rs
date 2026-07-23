@@ -10,8 +10,6 @@
 //!
 //! Run with: `cargo run --example basic_attention`
 
-#![allow(clippy::cast_precision_loss)]
-
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use unsloth_rs::kernels::{FusedAttention, FusedAttentionConfig};

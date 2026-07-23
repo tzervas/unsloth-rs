@@ -296,7 +296,6 @@ pub fn convert_linear_with_config(
 }
 
 #[cfg(test)]
-#[allow(clippy::unreadable_literal, clippy::no_effect_underscore_binding)]
 mod tests {
     use super::*;
     use candle_core::Device;
@@ -305,11 +304,11 @@ mod tests {
     fn test_ternary_linear_basic() -> Result<()> {
         // Create simple ternary weights manually
         let shape = (4, 8);
-        let _k_words = 1; // 8 / 32 rounded up = 1
+        // k_words = 1 (8 / 32 rounded up)
 
         // Simple pattern: alternating +1, -1, 0
-        let plus = vec![0b00010001u32; 4]; // Bits 0, 4 are +1
-        let minus = vec![0b00100010u32; 4]; // Bits 1, 5 are -1
+        let plus = vec![0b0001_0001_u32; 4]; // Bits 0, 4 are +1
+        let minus = vec![0b0010_0010_u32; 4]; // Bits 1, 5 are -1
         let scales = vec![1.0f32; 4];
 
         let ternary_weights = super::super::types::TernaryTensor::new(plus, minus, scales, shape);

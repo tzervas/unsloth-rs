@@ -2,16 +2,6 @@
 //!
 //! This test suite provides comprehensive validation of the ternary quantization
 //! pipeline, ensuring correctness, performance, and robustness across various scenarios.
-
-#![allow(
-    clippy::float_cmp,
-    clippy::too_many_lines,
-    clippy::field_reassign_with_default,
-    clippy::cast_precision_loss,
-    clippy::unreadable_literal,
-    clippy::similar_names,
-    clippy::unnecessary_wraps
-)]
 //!
 //! ## Test Coverage
 //!
@@ -1185,7 +1175,7 @@ fn test_loss_scaling_operations() -> Result<()> {
     config.loss_scale = 65536.0;
     let scaled_65k = scale_loss(&loss, &config)?;
     let value_65k: f32 = scaled_65k.to_scalar()?;
-    assert!((value_65k - 163840.0).abs() < 1e-2); // 2.5 * 65536
+    assert!((value_65k - 163_840.0).abs() < 1e-2); // 2.5 * 65536
 
     // Test 2: Batch loss scaling (typical training scenario)
     let batch_loss = Tensor::from_vec(
@@ -2024,8 +2014,8 @@ fn test_error_message_clarity() -> Result<()> {
 
     // Test 1: OutOfMemory error message format
     let oom_error = UnslothError::OutOfMemory {
-        required: 1048576,
-        available: 524288,
+        required: 1_048_576,
+        available: 524_288,
     };
     let error_msg = format!("{oom_error}");
 

@@ -3,16 +3,6 @@
 //! This module provides reusable test data generation, comparison utilities,
 //! and common fixtures for integration testing.
 
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::needless_pass_by_value,
-    clippy::needless_range_loop
-)]
-
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use std::collections::HashMap;
@@ -362,8 +352,8 @@ impl TestFixtures {
         let mut indices: Vec<_> = (0..count).collect();
 
         // Simple shuffle based on uniform values
-        for i in 0..count {
-            let j = ((uniform[i].abs() * (count - i) as f32) as usize + i).min(count - 1);
+        for (i, &u) in uniform.iter().enumerate().take(count) {
+            let j = ((u.abs() * (count - i) as f32) as usize + i).min(count - 1);
             indices.swap(i, j);
         }
 

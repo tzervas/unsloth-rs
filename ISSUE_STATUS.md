@@ -1,9 +1,15 @@
 # Issue Status Tracking
 
-**Last Updated**: 2026-01-06  
-**CubeCL Version**: v0.8.1 (Validated)
+**Last Updated**: 2026-07-22
+**CubeCL Version**: **0.9** (see `Cargo.toml` workspace deps; older notes referring to 0.8.1 are historical)
+**Crate version**: 1.0.3
 
-This document tracks the completion status of open issues relative to what has been merged into the `experimental` branch.
+This document is a **historical tracker** of open issues relative to early experimental-branch work.
+It is **not** a claim that GPU Flash Attention or Unsloth product parity is complete.
+For residual GPU/env debt, see [DEBT.md](DEBT.md). For packaging, see [PUBLISHING.md](PUBLISHING.md).
+
+> Status vocabulary for GPU/env: **PASS** | **FAIL** | **FAIL_ENV** (missing device / toolkit / arch pin) | **BLOCKED**.
+> Default CI is CPU-only; a missing GPU must never be reported as a green GPU suite.
 
 ## Summary
 

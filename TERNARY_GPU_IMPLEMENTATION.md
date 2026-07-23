@@ -1,6 +1,11 @@
 # Ternary GPU Kernel Implementation Guide
 
-This document provides implementation context for Phases 2-5 of the ternary bitsliced operations in unsloth-rs.
+> **HISTORICAL / NON-GOAL (UNS-P2-01, 2026-07-22)**
+> Ternary CubeCL GPU modules were **archived** to `archive/ternary_cubecl/` and are
+> **not** part of the supported 1.0.x surface. Do not treat this document as a
+> shipping plan. CPU ternary lives under `src/kernels/ternary/`.
+
+This document provides **historical** implementation context for Phases 2-5 of the ternary bitsliced operations in unsloth-rs.
 
 ## Prerequisites
 
@@ -215,4 +220,4 @@ candle-nn = "0.9.1"
 - [CubeCL Documentation](https://docs.rs/cubecl/0.8.1) - GPU kernel framework
 - [math.md](./math.md) - Mathematical proofs (entropy, SNR bounds)
 - [details.md](./details.md) - Project specification
-- [roadmap.md](./roadmap.md) - 6-phase implementation plan
+- [ROADMAP.md](./ROADMAP.md) / [TERNARY_GPU_IMPLEMENTATION.md](./TERNARY_GPU_IMPLEMENTATION.md) - plans (single roadmap filename for crates.io)

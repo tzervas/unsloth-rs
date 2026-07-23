@@ -1,16 +1,3 @@
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_lossless,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::doc_markdown,
-    clippy::needless_pass_by_value,
-    clippy::needless_range_loop
-)]
-
 //! Test utilities and fixtures for ternary quantization integration tests.
 //!
 //! This module provides reusable test data generation, comparison utilities,
@@ -155,6 +142,7 @@ impl TestFixtures {
     }
 
     /// Generate common test scenarios.
+    #[must_use]
     pub fn standard_test_scenarios() -> Vec<(&'static str, TestMatrixConfig)> {
         vec![
             (
@@ -215,6 +203,7 @@ impl TestFixtures {
     }
 
     /// Generate edge case test scenarios.
+    #[must_use]
     pub fn edge_case_scenarios() -> Vec<(&'static str, TestMatrixConfig)> {
         vec![
             (
@@ -286,7 +275,7 @@ impl TestFixtures {
 
             // Convert hash to uniform [-max, max]
             let normalized = (hash_value as f64) / (u64::MAX as f64); // [0,1)
-            let value = (normalized * 2.0 - 1.0) * (max as f64); // [-max, max]
+            let value = (normalized * 2.0 - 1.0) * f64::from(max); // [-max, max]
             values.push(value as f32);
         }
 
@@ -363,8 +352,8 @@ impl TestFixtures {
         let mut indices: Vec<_> = (0..count).collect();
 
         // Simple shuffle based on uniform values
-        for i in 0..count {
-            let j = ((uniform[i].abs() * (count - i) as f32) as usize + i).min(count - 1);
+        for (i, &u) in uniform.iter().enumerate().take(count) {
+            let j = ((u.abs() * (count - i) as f32) as usize + i).min(count - 1);
             indices.swap(i, j);
         }
 
@@ -394,7 +383,7 @@ impl ValidationUtils {
             for col in 0..cols {
                 let ternary_val = ternary.get_dim(row, col);
                 let scale = ternary.scales[row];
-                reconstructed_data[row * cols + col] = (ternary_val as f32) * scale;
+                reconstructed_data[row * cols + col] = f32::from(ternary_val) * scale;
             }
         }
 
@@ -451,6 +440,7 @@ impl ValidationUtils {
     }
 
     /// Calculate memory usage statistics.
+    #[must_use]
     pub fn calculate_memory_stats(
         original_shape: (usize, usize),
         ternary_bytes: usize,
@@ -477,6 +467,7 @@ impl ValidationUtils {
     }
 
     /// Check if accuracy metrics meet acceptable bounds.
+    #[must_use]
     pub fn validate_accuracy_bounds(metrics: &AccuracyMetrics) -> HashMap<String, bool> {
         let mut results = HashMap::new();
 
@@ -493,6 +484,7 @@ impl ValidationUtils {
     }
 
     /// Check if memory compression meets expectations.
+    #[must_use]
     pub fn validate_compression_ratio(stats: &MemoryStats, expected_min_ratio: f32) -> bool {
         stats.compression_ratio >= expected_min_ratio
     }
@@ -502,7 +494,7 @@ impl ValidationUtils {
 pub struct TimingUtils;
 
 impl TimingUtils {
-    /// Time a function execution and return (result, duration_ms).
+    /// Time a function execution and return (result, `duration_ms`).
     pub fn time_execution<F, R>(f: F) -> (R, f64)
     where
         F: FnOnce() -> R,
@@ -515,6 +507,7 @@ impl TimingUtils {
     }
 
     /// Validate that execution time is within acceptable bounds.
+    #[must_use]
     pub fn validate_performance(duration_ms: f64, max_expected_ms: f64) -> bool {
         duration_ms <= max_expected_ms
     }

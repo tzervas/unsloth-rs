@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
+- README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.
+
+## [1.0.3] - 2026-07-22
+
+### Fixed
+- **Flash Attention scale** in `FusedAttention::forward_flash_attention`: pass `1/sqrt(head_dim)` into the multiply-scale API (was incorrectly using `sqrt(head_dim)`).
+- **crates.io packaging case collision**: removed duplicate lowercase `roadmap.md`; keep only `ROADMAP.md` (1.0.2 tarball on crates.io is broken).
+
+### Changed
+- Package version **1.0.3** (patch: installable packaging + honesty; no API break intended for CPU kernel surface).
+- README / crate docs: honest **kernels-only** positioning (not an Unsloth product port; no unproven 2× / 70% VRAM claims).
+- PUBLISHING.md aligned with version 1.0.3 and packaging verification steps.
+- Documented `CUDA_COMPUTE_CAP` pin and **FAIL_ENV** classification for missing GPU / toolkit mismatch (GPU_SETUP.md, DEBT.md, CI comments).
+- **PR-070:** Documented permanent Candle↔CubeCL **host D2H/H2D** interop limitation; demoted FA speed claims; `interop_requires_host_roundtrip()`.
+- **PR-071 / FINISH:** GPU numerical equivalence gate runs under `--features cuda` (not `#[ignore]`); MAE thresholds; **BLOCKED:env** vs **FAIL (accuracy)** classification. Default (no cuda) stays green.
+- **FINISH:** CubeCL FA launch wraps `CudaRuntime::client` in `catch_unwind` (cudarc can panic `CUDA_ERROR_NO_DEVICE`); falls back to Candle CUDA. Document WSL `LD_LIBRARY_PATH=/usr/lib/wsl/lib` for healthy CubeCL on WSL hosts.
+- **PR-083:** Removed public always-`Err` `compute_gradient_checkpointed` stub; checkpoint config remains for memory estimates only.
+
+### Added
+- Unit test `test_flash_path_scale_matches_cpu_one_over_sqrt_d` to catch scale regressions.
+- `interop_requires_host_roundtrip()` honesty helper.
+- `interop_f32_only()` / `interop_supports_dtype()` (UNS-P1-04: CubeCL path f32-only).
+- GPU numerical gate env instructions in `tests/gpu/flash_attention.rs` and DEBT.md.
+
+### Removed / archived
+- Ternary CubeCL GPU drafts moved to `archive/ternary_cubecl/` (UNS-P2-01 non-goal; excluded from package).
+
+### Notes
+- crates.io **1.0.2** remains published but **unpacks broken** (case collision). Prefer **1.0.3**. Optional human yank of 1.0.2 only after 1.0.3 is live.
+
 ## [1.0.2] - 2026-01-25
 
 ### Changed

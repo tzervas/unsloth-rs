@@ -48,7 +48,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Run tests (CPU only)
-        run: cargo test --verbose
+        run: cargo test --verbose --features _ternary_cubecl_todo,_phase2_tiled_kernel
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -65,7 +65,7 @@ jobs:
           components: clippy
       
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --features _ternary_cubecl_todo,_phase2_tiled_kernel -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -99,8 +99,8 @@ jobs:
       - name: Build (no features)
         run: cargo build --verbose
       
-      - name: Check build succeeds with default features
-        run: cargo check --verbose
+      - name: Check build succeeds with non-cuda features
+        run: cargo check --features _ternary_cubecl_todo,_phase2_tiled_kernel --verbose
 
   docs:
     name: Documentation
@@ -112,11 +112,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Build documentation
-        run: cargo doc --no-deps --verbose
+        run: cargo doc --no-deps --features _ternary_cubecl_todo,_phase2_tiled_kernel --verbose
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # NOTE: GPU tests, benchmarks, and Docker builds are performed locally
-  # See scripts/gpu-test.sh for local GPU testing
-  # Container images are built locally and can be pushed to GHCR manually
-  # This keeps CI fast and doesn't require self-hosted runners
+  # GPU honesty (PR-027 / UNS-P0-05):
+  # - This workflow is CPU-only. Missing GPU is not a pass for GPU coverage.
+  # - Classify missing /dev/nvidia*, CUDA_ERROR_NO_DEVICE, or toolkit/arch
+  #   mismatch as FAIL_ENV — never a fabricated green GPU suite.
+  # - Local/self-hosted GPU: often needs CUDA_COMPUTE_CAP=90 when nvcc cannot
+  #   target CC 12.0 (see GPU_SETUP.md, DEBT.md).
+  # - scripts/gpu-test.sh is for local validation only.

@@ -3,30 +3,31 @@
 
 //! # unsloth-rs
 //!
-//! Rust implementations of transformer building blocks for LLM inference and fine-tuning.
+//! Candle/CubeCL **transformer kernel building blocks** for LLM inference experiments.
+//!
+//! **Not** a product port of Python Unsloth: no LoRA/QLoRA trainer, model zoo, or
+//! proven 2× / 70% VRAM training claims. Sister crates handle PEFT and orchestration.
 //!
 //! ## What This Crate Provides
 //!
-//! This crate provides common transformer operations built on [Candle](https://github.com/huggingface/candle):
+//! Common transformer operations built on [Candle](https://github.com/huggingface/candle):
 //!
-//! - **Multi-head attention**: Core attention mechanism with grouped-query attention (GQA) support
+//! - **Multi-head attention**: Core attention with grouped-query attention (GQA) support
 //! - **Rotary position embeddings (`RoPE`)**: Position encoding used in modern LLMs
-//! - **RMS normalization**: Efficient normalization layer used in LLaMA-style models
-//! - **`SwiGLU` activation**: Gated activation function for transformer MLPs
-//! - **Memory estimation utilities**: Tools for tracking and estimating memory usage
+//! - **RMS normalization**: Efficient normalization used in LLaMA-style models
+//! - **`SwiGLU` activation**: Gated activation for transformer MLPs
+//! - **Memory estimation utilities**: Activation / checkpoint *estimates* (not a trainer)
 //!
 //! ## Why This Crate?
 //!
-//! This crate provides a Rust-native implementation of transformer components,
-//! offering type safety and memory safety guarantees. The implementations are
-//! designed to be clear and maintainable, serving as reference implementations
-//! that can be extended with optimized GPU kernels.
+//! Rust-native reference implementations with optional CubeCL CUDA kernels.
+//! Prefer correctness and honest scope over Unsloth product parity claims.
 //!
 //! ## Current Status
 //!
-//! Current implementations are CPU reference implementations with GPU dispatch
-//! via Candle's CUDA backend. Fused GPU kernels using `CubeCL` are planned for
-//! future versions.
+//! CPU paths are the default, well-tested surface. GPU Flash Attention and fused
+//! kernels exist under the `cuda` feature but require a healthy device/toolkit
+//! (`CUDA_COMPUTE_CAP` pin may be required; see crate README / GPU_SETUP.md).
 //!
 //! ## Quick Start
 //!
@@ -56,7 +57,6 @@
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::struct_field_names)]
 #![allow(clippy::unreadable_literal)]
-#![allow(unused_imports)]
 #![allow(clippy::doc_overindented_list_items)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::manual_div_ceil)]

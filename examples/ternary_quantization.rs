@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     let device = Device::Cpu;
 
     println!("Creating random weight tensor:");
-    println!("  Shape: [{}, {}]", out_features, in_features);
+    println!("  Shape: [{out_features}, {in_features}]");
     println!("  Data type: f32");
 
     // Create random weights with normal distribution
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let original_size = out_features * in_features * 4; // f32 = 4 bytes
     let original_mb = original_size as f32 / (1024.0 * 1024.0);
     println!("Original weights:");
-    println!("  Size: {:.2} MB ({} bytes)", original_mb, original_size);
+    println!("  Size: {original_mb:.2} MB ({original_size} bytes)");
     println!();
 
     // Create ternary configuration
@@ -80,28 +80,25 @@ fn main() -> Result<()> {
         .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
 
     println!("Scale statistics:");
-    println!("  Average scale: {:.6}", avg_scale);
-    println!("  Min scale: {:.6}", min_scale);
-    println!("  Max scale: {:.6}", max_scale);
+    println!("  Average scale: {avg_scale:.6}");
+    println!("  Min scale: {min_scale:.6}");
+    println!("  Max scale: {max_scale:.6}");
     println!();
 
     // Display compression information
     println!("=== Compression Results ===");
     let compression_ratio = ternary_tensor.compression_ratio();
-    println!("  Compression ratio: {:.2}x", compression_ratio);
+    println!("  Compression ratio: {compression_ratio:.2}x");
 
     let (ternary_out, ternary_in) = ternary_tensor.dims();
-    println!(
-        "  Ternary tensor dimensions: [{}, {}]",
-        ternary_out, ternary_in
-    );
+    println!("  Ternary tensor dimensions: [{ternary_out}, {ternary_in}]");
 
     let memory_saved_bytes = original_size as f32 - (original_size as f32 / compression_ratio);
     let memory_saved_mb = memory_saved_bytes / (1024.0 * 1024.0);
-    println!("  Memory saved: {:.2} MB", memory_saved_mb);
+    println!("  Memory saved: {memory_saved_mb:.2} MB");
 
     let ternary_size_mb = original_mb / compression_ratio;
-    println!("  Ternary tensor size: {:.2} MB", ternary_size_mb);
+    println!("  Ternary tensor size: {ternary_size_mb:.2} MB");
     println!();
 
     // Verify sparsity
@@ -120,10 +117,7 @@ fn main() -> Result<()> {
 
     println!("\n=== Example completed successfully! ===");
     println!("\nKey takeaways:");
-    println!(
-        "  - Ternary quantization reduces memory by {:.1}x",
-        compression_ratio
-    );
+    println!("  - Ternary quantization reduces memory by {compression_ratio:.1}x");
     println!(
         "  - {:.1}% of weights are quantized to zero",
         stats.sparsity * 100.0

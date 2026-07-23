@@ -1,6 +1,4 @@
-#![allow(clippy::doc_markdown)]
-
-//! Simple GPU test to verify CubeCL CUDA is working
+//! Simple GPU test to verify `CubeCL` CUDA is working
 
 fn main() {
     #[cfg(feature = "cuda")]

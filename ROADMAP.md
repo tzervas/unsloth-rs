@@ -1,8 +1,14 @@
 # unsloth-rs Development Roadmap
 
+> **Packaging:** This is the **only** roadmap file (`ROADMAP.md`). Do not add
+> a lowercase `roadmap.md` — crates.io rejects case-colliding paths.
+> **Positioning:** Kernel building blocks for Candle; not Unsloth product parity.
+> CubeCL dependency is **0.9** (`Cargo.toml`); older 0.8.1 notes below are historical.
+
+
 **Status**: Phase 1 (Flash Attention) - ✅ Completed | Phase 2 - Hardware-Blocked  
 **Last Updated**: 2026-01-06  
-**CubeCL Version**: v0.8.1 (Validated)  
+**CubeCL Version**: 0.9 (Cargo.toml); historical sections may still say 0.8.1
 **Base Branch**: `experimental` (commits e619c08, 61800e6)
 
 ## Project Overview
@@ -168,7 +174,7 @@ The `experimental` branch (ff87fec) has:
 - ✅ Good code structure and documentation
 - ✅ Benchmark infrastructure for CPU
 - ⚠️ GPU paths delegate to Candle (not custom fused kernels)
-- ⚠️ No real gradient checkpointing yet
+- ⚠️ No real gradient checkpointing recompute API (public Err-stub removed; estimates only)
 - ⚠️ No mixed precision support yet
 - ⚠️ No Flash Attention yet
 
@@ -216,7 +222,7 @@ unimplemented!("Gradient checkpointing not yet implemented")
 5. Benchmark memory usage vs. compute overhead
 
 **Success Criteria**:
-- [ ] Function `compute_gradient_checkpointed` works correctly
+- [x] Removed always-Err public `compute_gradient_checkpointed` (PR-083 demotion)
 - [ ] Memory usage reduced by 50-80% for checkpointed layers
 - [ ] Tests verify gradient correctness
 - [ ] Documentation updated with usage examples

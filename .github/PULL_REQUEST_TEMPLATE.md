@@ -1,35 +1,18 @@
-## Description
+## Summary
 
-Brief description of the changes in this PR.
+<!-- What changed and why -->
 
-## Type of Change
+## Branch tier
 
-- [ ] Bug fix (non-breaking change that fixes an issue)
-- [ ] New feature (non-breaking change that adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
+- [ ] Targets **`dev`** (or feature base) — use **`Refs #n`** / **`Related to #n`** only (do **not** use `Closes`/`Fixes` — issues stay open until main)
+- [ ] Targets **`main`** — use **`Closes #n`** / **`Fixes #n`** for completed work; epics only when fully delivered
 
 ## Checklist
 
-- [ ] Code follows the project's style guidelines
-- [ ] Self-review of code completed
-- [ ] Code commented where necessary
-- [ ] Documentation updated (if applicable)
-- [ ] Tests added/updated (if applicable)
-- [ ] All tests pass locally (`cargo test`)
-- [ ] No new warnings (`cargo clippy`)
-- [ ] Benchmarks run (if performance-related)
+- [ ] Local gates green (`local-ci` / `cargo test` / `pytest` as applicable)
+- [ ] No secrets in diff
+- [ ] **Do not** request automatic Copilot code review
 
-## Testing
+## Linked work
 
-Describe the testing done for this PR.
-
-## Related Issues
-
-Closes #(issue number)
-
-## Additional Notes
-
-Any additional context or notes for reviewers.
+<!-- Refs #123  or  Closes #123 (main only) -->

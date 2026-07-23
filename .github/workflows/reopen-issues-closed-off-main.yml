@@ -36,20 +36,22 @@ jobs:
           body=$(gh api "repos/$REPO/pulls/$PR" --jq .body)
           title=$(gh api "repos/$REPO/pulls/$PR" --jq .title)
           # Extract Closes/Fixes/Resolves #N
+          # Note: heredoc body must be indented with the shell script so YAML `|`
+          # block parsing stays valid; common indent is stripped before bash runs.
           nums=$(TITLE="$title" BODY="$body" python3 <<'PY'
-import os, re
-text = (os.environ.get("TITLE") or "") + "\n" + (os.environ.get("BODY") or "")
-kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
-found = set()
-for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&/and\s]+#?\d+)*))", text):
-    prefix = text[max(0, m.start() - 24) : m.start()].lower()
-    if re.search(r"(?:no|not|without|dont)\W*$", prefix):
-        continue
-    for n in re.findall(r"\d+", m.group(1)):
-        found.add(n)
-print("\n".join(sorted(found, key=int)))
-PY
-)
+          import os, re
+          text = (os.environ.get("TITLE") or "") + "\n" + (os.environ.get("BODY") or "")
+          kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
+          found = set()
+          for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&/and\s]+#?\d+)*))", text):
+              prefix = text[max(0, m.start() - 24) : m.start()].lower()
+              if re.search(r"(?:no|not|without|dont)\W*$", prefix):
+                  continue
+              for n in re.findall(r"\d+", m.group(1)):
+                  found.add(n)
+          print("\n".join(sorted(found, key=int)))
+          PY
+          )
           if [ -z "${nums}" ]; then
             echo "No closing keywords — nothing to reopen"
             exit 0

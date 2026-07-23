@@ -4,8 +4,6 @@
 //! Candle ↔ `CubeCL` tensor conversion utilities.
 //!
 //! This module provides helpers for converting between Candle tensors and
-
-#![allow(clippy::unreadable_literal, clippy::needless_range_loop)]
 //! `CubeCL` buffer handles, enabling seamless integration between the two frameworks.
 //!
 //! ## Key Functions
@@ -466,6 +464,7 @@ pub fn cubecl_to_u32_candle_tensor(
 }
 
 #[cfg(test)]
+#[allow(clippy::unreadable_literal, clippy::needless_range_loop)]
 mod tests {
     use super::*;
 

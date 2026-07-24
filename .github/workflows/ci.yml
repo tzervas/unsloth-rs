@@ -12,7 +12,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_BUILD_JOBS: 2
+  CARGO_BUILD_JOBS: 1
 
 jobs:
   test:
@@ -37,7 +37,7 @@ jobs:
 
       - name: Detect Features
         run: |
-          if command -v nvcc >/dev/null 2>&1; then
+          if nvcc --version >/dev/null 2>&1; then
             echo "Building with --all-features"
             echo "FEATURES=--all-features" >> $GITHUB_ENV
           else
@@ -94,7 +94,7 @@ jobs:
 
       - name: Detect Features
         run: |
-          if command -v nvcc >/dev/null 2>&1; then
+          if nvcc --version >/dev/null 2>&1; then
             echo "Building with --all-features"
             echo "FEATURES=--all-features" >> $GITHUB_ENV
           else
@@ -129,7 +129,7 @@ jobs:
 
       - name: Detect Features
         run: |
-          if command -v nvcc >/dev/null 2>&1; then
+          if nvcc --version >/dev/null 2>&1; then
             echo "Building with --all-features"
             echo "FEATURES=--all-features" >> $GITHUB_ENV
           else
@@ -164,7 +164,7 @@ jobs:
 
       - name: Detect Features
         run: |
-          if command -v nvcc >/dev/null 2>&1; then
+          if nvcc --version >/dev/null 2>&1; then
             echo "Building with --all-features"
             echo "FEATURES=--all-features" >> $GITHUB_ENV
           else

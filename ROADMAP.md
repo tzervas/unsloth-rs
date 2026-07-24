@@ -7,7 +7,7 @@
 
 
 **Status**: Phase 1 (Flash Attention) - ✅ Completed | Phase 2 - Hardware-Blocked  
-**Last Updated**: 2026-01-06  
+**Last Updated**: 2026-07-22
 **CubeCL Version**: 0.9 (Cargo.toml); historical sections may still say 0.8.1  
 **Base Branch**: `experimental` (commits e619c08, 61800e6)
 

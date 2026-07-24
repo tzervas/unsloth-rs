@@ -91,6 +91,16 @@ impl RmsNorm {
         Ok(output)
     }
 
+    /// Estimate VRAM usage in bytes.
+    #[must_use]
+    pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
+        let hidden = self.weight.dim(0).unwrap_or(0);
+        let bytes_per_elem = 4;
+
+        // x_sq + normalized activations
+        2 * batch_size * seq_len * hidden * bytes_per_elem
+    }
+
     /// GPU implementation using fused CUDA kernel.
     ///
     /// Optimized for typical transformer shapes: [batch×seq_len, hidden_dim]
@@ -213,5 +223,15 @@ mod tests {
             assert!(!v.is_nan(), "Output contains NaN");
             assert!(!v.is_infinite(), "Output contains Inf");
         }
+    }
+
+    #[test]
+    fn test_rmsnorm_vram_estimate() {
+        let device = Device::Cpu;
+        let norm = RmsNorm::new(128, 1e-5, &device).unwrap();
+
+        let estimate = norm.vram_estimate(2, 10);
+        // 2 * 2 * 10 * 128 * 4 = 20480 bytes
+        assert_eq!(estimate, 20480);
     }
 }

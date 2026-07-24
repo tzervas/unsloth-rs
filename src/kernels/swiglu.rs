@@ -132,4 +132,14 @@ mod tests {
 
         assert_eq!(output.shape().dims(), &[2, 10, 768]);
     }
+
+    #[test]
+    fn test_swiglu_vram_estimate() {
+        let device = Device::Cpu;
+        let swiglu = SwiGLU::new(768, 2048, &device).unwrap();
+
+        let estimate = swiglu.vram_estimate(2, 10);
+        // 3 * 2 * 10 * 2048 * 4 = 491520 bytes
+        assert_eq!(estimate, 491_520);
+    }
 }

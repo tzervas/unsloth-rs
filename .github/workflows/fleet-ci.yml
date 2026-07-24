@@ -16,6 +16,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 1
+
 jobs:
   detect:
     name: detect stack

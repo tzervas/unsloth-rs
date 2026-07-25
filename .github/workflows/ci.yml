@@ -1,42 +1,28 @@
 # SPDX-License-Identifier: MIT
 # Copyright 2026 Tyler Zervas
 #
-# Centralized CI — calls tzervas/mycelium-workflows.
+# Centralized CI — calls tzervas/mycelium-workflows reusable-rust-ci.
 #
 # PIN: @v1 is a moving major tag. Minor/patch policy changes arrive automatically;
 # a breaking change lands on v2 and this file must opt in.
 #
-# THIS IS A PURE REFACTOR. The gate is equivalent in strength:
+# all-features: false on purpose. These self-hosted runners are CPU-only; enabling
+# --all-features pulls `cuda` -> cudarc, which hard-fails without nvcc (see #60).
+# The reusable workflow has no "feature list" input — only a boolean — so the
+# non-CUDA feature set cannot be enumerated here until mycelium-workflows grows
+# a `features:` string input. Default features still exercise the crate on CPU.
 #
-#   fmt      cargo fmt --all -- --check          -> cargo fmt --all --check
-#   clippy   --all-targets --all-features -D w   -> identical
-#   check    cargo check --all-features          -> cargo check --workspace
-#                                                   --all-targets --all-features
-#   test     cargo test --all-features           -> cargo test --workspace
-#                                                   --all-features (doctests
-#                                                   included, as before)
-#   docs     cargo doc --no-deps --all-features  -> same, RUSTDOCFLAGS=-D warnings
-#            with RUSTDOCFLAGS=-D warnings
+# depth is `full` at BOTH tiers (fmt + clippy + check + test + doc), matching the
+# previous in-repo gate strength for the stable job.
 #
-# `--all-features` IS PRESERVED, INCLUDING ITS CURRENT BREAKAGE. main is red today
-# because --all-features pulls the `cuda` feature onto CPU-only runners; PR #60
-# ("stop asking CPU-only runners for CUDA") is the fix, and that is where it
-# belongs. Quietly dropping --all-features here would mask a real failure behind a
-# CI refactor and make #60 look unnecessary.
+# Job context rename (contract §5): the reusable job is named `check`, so the
+# reported context is `Test Suite / check` (and `Test Suite (nightly) / check`).
+# This repo's protec-main ruleset currently requires NO status contexts (only
+# PR permissions + non-fast-forward + deletion), so the rename is not a hang
+# risk today — but if required checks are added later, use the prefixed names.
 #
-# depth is `full` at BOTH tiers, not just main: the previous gate ran the doc
-# check on every push, and a lighter dev tier would drop it. Tier discipline does
-# not outrank keeping a gate.
-#
-# NO BENCH JOB YET. benches/kernels.rs is a CPU suite, and the reusable bench job
-# inherits --all-features — exactly the CUDA-on-a-CPU-runner mistake #60 is
-# fixing. Wire `bench: run` at the main tier once #60 lands and the CPU-only
-# feature set is settled.
-#
-# GPU honesty (PR-027 / UNS-P0-05) — unchanged and still true:
+# GPU honesty (PR-027 / UNS-P0-05) — unchanged:
 #   * This workflow is CPU-only. Missing GPU is not a pass for GPU coverage.
-#   * Classify missing /dev/nvidia*, CUDA_ERROR_NO_DEVICE, or toolkit/arch
-#     mismatch as FAIL_ENV — never a fabricated green GPU suite.
 #   * scripts/gpu-test.sh is for local validation only.
 name: CI
 
@@ -60,12 +46,11 @@ jobs:
     uses: tzervas/mycelium-workflows/.github/workflows/reusable-rust-ci.yml@v1
     with:
       rust-version: stable
-      # `full` at both tiers — see the header.
       depth: full
-      all-features: true
+      all-features: false
       deny-warnings: true
+      cargo-jobs: 1
       runner-labels: '["self-hosted","linux","x64","podman"]'
-      bench: 'off'
 
   test-nightly:
     # Preserves the previous matrix cell `rust: nightly`, which was a hard gate.
@@ -74,7 +59,7 @@ jobs:
     with:
       rust-version: nightly
       depth: check+test
-      all-features: true
+      all-features: false
       deny-warnings: true
+      cargo-jobs: 1
       runner-labels: '["self-hosted","linux","x64","podman"]'
-      bench: 'off'

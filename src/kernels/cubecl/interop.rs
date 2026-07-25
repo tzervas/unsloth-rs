@@ -320,7 +320,7 @@ pub fn ternary_tensor_to_cubecl_handles(
 /// * `bytes` - Raw bytes from `CubeCL` buffer
 ///
 /// # Returns
-/// Vec<u32> plane data
+/// `Vec<u32>` plane data
 #[must_use]
 pub fn cubecl_bytes_to_u32_plane(bytes: &[u8]) -> Vec<u32> {
     bytes
@@ -669,8 +669,11 @@ mod tests {
             .map(|chunk| u64::from_le_bytes(*chunk))
             .collect();
 
+        // Fail early if packing length drifts; the loop below assumes one word per row.
+        assert_eq!(bitmap.len(), 4, "Bitmap should have exactly 4 rows");
+
         // Each row should have chunk 0 and chunk 1 active (alternating pattern within chunks)
-        for (row, &row_bitmap) in bitmap.iter().enumerate().take(4) {
+        for (row, &row_bitmap) in bitmap.iter().enumerate() {
             // Chunk 0 (words 0-1): word 0 is active, so chunk is active
             assert_ne!(
                 row_bitmap & 0x1,

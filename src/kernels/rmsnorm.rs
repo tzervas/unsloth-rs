@@ -91,7 +91,15 @@ impl RmsNorm {
         Ok(output)
     }
 
-    /// Estimate VRAM usage in bytes.
+    /// Estimate peak activation scratch for this layer (bytes, f32).
+    ///
+    /// Why: planning VRAM before a training step needs a cheap upper bound on
+    /// temporary tensors (`x²` and the normalized output) without running the
+    /// kernel. This is not a device allocator query — it is the arithmetic
+    /// footprint of the two full-sized intermediate buffers the CPU path holds.
+    ///
+    /// Returns 0 when the weight tensor has no dim-0 (defensive; a well-formed
+    /// `RmsNorm` always has `hidden_dim` elements).
     #[must_use]
     pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
         let hidden = self.weight.dim(0).unwrap_or(0);

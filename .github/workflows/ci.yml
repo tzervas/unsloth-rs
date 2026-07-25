@@ -12,7 +12,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_BUILD_JOBS: 1
 
 jobs:
   test:
@@ -23,27 +22,6 @@ jobs:
         rust: [stable, nightly]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
-            echo "CUDA_HOME=/usr/local/cuda" >> $GITHUB_ENV
-          fi
-          if [ -d "/usr/lib/wsl/lib" ]; then
-            echo "LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
-          fi
-          echo "CUDA_COMPUTE_CAP=90" >> $GITHUB_ENV
-
-      - name: Detect Features
-        run: |
-          if nvcc --version >/dev/null 2>&1; then
-            echo "Building with --all-features"
-            echo "FEATURES=--all-features" >> $GITHUB_ENV
-          else
-            echo "Building with default features (CPU-only)"
-            echo "FEATURES=" >> $GITHUB_ENV
-          fi
       
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
@@ -70,7 +48,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Run tests (CPU only)
-        run: cargo test --verbose ${{ env.FEATURES }}
+        run: cargo test --verbose --all-features
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -80,27 +58,6 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
-            echo "CUDA_HOME=/usr/local/cuda" >> $GITHUB_ENV
-          fi
-          if [ -d "/usr/lib/wsl/lib" ]; then
-            echo "LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
-          fi
-          echo "CUDA_COMPUTE_CAP=90" >> $GITHUB_ENV
-
-      - name: Detect Features
-        run: |
-          if nvcc --version >/dev/null 2>&1; then
-            echo "Building with --all-features"
-            echo "FEATURES=--all-features" >> $GITHUB_ENV
-          else
-            echo "Building with default features (CPU-only)"
-            echo "FEATURES=" >> $GITHUB_ENV
-          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -108,34 +65,13 @@ jobs:
           components: clippy
       
       - name: Run clippy
-        run: cargo clippy --all-targets ${{ env.FEATURES }} -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   fmt:
     name: Rustfmt
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
-            echo "CUDA_HOME=/usr/local/cuda" >> $GITHUB_ENV
-          fi
-          if [ -d "/usr/lib/wsl/lib" ]; then
-            echo "LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
-          fi
-          echo "CUDA_COMPUTE_CAP=90" >> $GITHUB_ENV
-
-      - name: Detect Features
-        run: |
-          if nvcc --version >/dev/null 2>&1; then
-            echo "Building with --all-features"
-            echo "FEATURES=--all-features" >> $GITHUB_ENV
-          else
-            echo "Building with default features (CPU-only)"
-            echo "FEATURES=" >> $GITHUB_ENV
-          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -150,27 +86,6 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
-            echo "CUDA_HOME=/usr/local/cuda" >> $GITHUB_ENV
-          fi
-          if [ -d "/usr/lib/wsl/lib" ]; then
-            echo "LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
-          fi
-          echo "CUDA_COMPUTE_CAP=90" >> $GITHUB_ENV
-
-      - name: Detect Features
-        run: |
-          if nvcc --version >/dev/null 2>&1; then
-            echo "Building with --all-features"
-            echo "FEATURES=--all-features" >> $GITHUB_ENV
-          else
-            echo "Building with default features (CPU-only)"
-            echo "FEATURES=" >> $GITHUB_ENV
-          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -185,30 +100,19 @@ jobs:
         run: cargo build --verbose
       
       - name: Check build succeeds with all features
-        run: cargo check ${{ env.FEATURES }} --verbose
+        run: cargo check --all-features --verbose
 
   docs:
     name: Documentation
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
-            echo "CUDA_HOME=/usr/local/cuda" >> $GITHUB_ENV
-          fi
-          if [ -d "/usr/lib/wsl/lib" ]; then
-            echo "LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
-          fi
-          echo "CUDA_COMPUTE_CAP=90" >> $GITHUB_ENV
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       
       - name: Build documentation
-        run: cargo doc --no-deps ${{ env.FEATURES }} --verbose
+        run: cargo doc --no-deps --all-features --verbose
         env:
           RUSTDOCFLAGS: -D warnings
 

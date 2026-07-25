@@ -99,7 +99,12 @@ impl SwiGLU {
         self.forward_cpu(x)
     }
 
-    /// Estimate VRAM usage in bytes.
+    /// Estimate peak activation scratch for this layer (bytes, f32).
+    ///
+    /// Why: SwiGLU materializes gate, up-projection, and the intermediate
+    /// product at `intermediate_size` before the down-projection. Callers that
+    /// size KV-cache + activation budgets need this bound without allocating.
+    /// Returns 0 if the gate weight has no rows (defensive empty-tensor case).
     #[must_use]
     pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
         let intermediate = self.gate_weight.dim(0).unwrap_or(0);

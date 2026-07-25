@@ -53,7 +53,7 @@ pub struct TernaryConfig {
     pub quantization_threshold: Option<f32>,
 
     /// Scale calibration method for quantization.
-    /// See [`CalibrationMethod`] for options.
+    /// See [`CalibrationMethodConfig`] for options.
     pub calibration_method: CalibrationMethodConfig,
 }
 

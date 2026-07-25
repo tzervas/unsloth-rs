@@ -1,0 +1,24 @@
+# Commitizen configuration (commitizen-tools).
+# Install (optional): pip install commitizen  OR  uv tool install commitizen
+# This file is valid without the CLI: agents and humans follow conventional-commit
+# rules for the same bumps.
+#
+# GRANDFATHERED 1.x: this crate is already published on crates.io at 1.x.
+# major_version_zero must be false (unlike 0.x fleet defaults).
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.3"
+tag_format = "v$version"
+version_scheme = "semver"
+major_version_zero = false
+
+# Only list paths that exist in this repo and actually carry the package version.
+version_files = [
+    "Cargo.toml:version",
+]
+
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true
+# cz bump: prefer `cz bump --increment PATCH|MINOR|MAJOR` after human review.

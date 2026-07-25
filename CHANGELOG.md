@@ -7,9 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Release-PR note:** entries below describe work that lives on open PRs into `dev`.
+> They are **not** on `dev`/`main` until an operator merges the listed prerequisites.
+> This section is the planned 1.0.3 publication narrative (version already in
+> `Cargo.toml`; crates.io still at 1.0.2 — do not double-bump).
+
+### Prerequisites (operator merge into `dev`, then re-cut this release PR if needed)
+- #59 — quality: `RmsNorm::vram_estimate`, SwiGLU estimate test, rustdoc ports, fleet-ci OOM pin
+- #60 — CI: stop `--all-features`/CUDA on CPU runners; gitleaks allowlist; reopen-issues YAML; rustdoc
+- #61 — CI: fleet-ci / fleet-security callers fixed to real mycelium-workflows reusables
+- #62 — CI: product `CI` workflow calls `reusable-rust-ci` with `all-features: false`
+- #57 — optional / **not recommended until protec-main requires real checks** (Jules automerge)
+
+### Added
+- `RmsNorm::vram_estimate(batch, seq)` for activation-scratch planning (parity with Attention/SwiGLU) — #59
+- Unit tests for RmsNorm and SwiGLU VRAM estimates — #59
+
+### Fixed
+- CI on CPU-only self-hosted runners no longer passes `--all-features` (which pulled `cuda` → cudarc → `nvcc` hard-fail) — #60
+- Gitleaks config: rule allowlists are TOML tables (`[rules.allowlist]`), not arrays of tables — #60
+- `reopen-issues-closed-off-main` Python heredoc indent so YAML `|` blocks parse (startup_failure) — #60
+- Rustdoc / intra-doc links: shape brackets, `CalibrationMethodConfig`, `mod@fused_rmsnorm_rope`, `` `Vec<u32>` ``, `CheckpointConfig` — #59 / #60
+- Centralized CI callers reference workflows that actually exist in `mycelium-workflows` — #61
+- Centralized product CI does not reintroduce CUDA-on-CPU via `all-features: true` — #62
+- Jules automerge refuses merge when zero successful checks exist (empty list was a silent pass) — #57
+
+### Changed
+- Fleet CI / security workflows become thin callers of `tzervas/mycelium-workflows` reusables — #61 / #62
+- Documented check-context renames under reusable callers (`Test Suite / check`, `fleet-ci / check`, …) — #61 / #62
+- `CARGO_BUILD_JOBS=1` on constrained self-hosted jobs to reduce OOM pressure — #59 / #60
+
 ### Documentation
 - Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
 - README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.
+- Added `.cz.toml` for commitizen (grandfathered 1.x, `major_version_zero = false`).
+
+### Version reconciliation
+- **crates.io published:** 1.0.2 (broken tarball: case collision).
+- **Repo `Cargo.toml`:** already **1.0.3** (prior honesty/packaging bump, not yet published).
+- **Decision:** keep **1.0.3**. No further bump. Consolidated work is patch-level (CI correctness, docs, small estimate API + tests). Not a minor feature cut; not a major.
 
 ## [1.0.3] - 2026-07-22
 

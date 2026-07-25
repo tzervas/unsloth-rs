@@ -1,59 +1,34 @@
-# Fleet security lint/scan — self-hosted. Badge reflects honest job status on trunk.
+# Fleet security scan — thin caller. Policy lives in
+# https://github.com/tzervas/mycelium-workflows/blob/main/.github/workflows/reusable-fleet-security.yml
+#
+# dev tier scans the working tree; main tier and the weekly schedule scan the
+# full git history for secrets.
+#
+# The `cancel-in-progress` expression is load-bearing: a scheduled self-hosted
+# scan under an unconditional `true` silently NEVER RUNS when the fleet is not
+# polling this repo — it queues, the next tick cancels it, and it reports
+# `cancelled` rather than `failed`, so nothing alerts.
 name: fleet-security
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [dev, main]
   pull_request:
-    branches: [main, master, dev]
+    branches: [dev, main]
   schedule:
     - cron: "17 7 * * 1"
   workflow_dispatch:
 
 concurrency:
-  group: fleet-security-${{ github.ref }}
-  cancel-in-progress: true
+  group: fleet-security-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 permissions:
   contents: read
 
 jobs:
-  gitleaks:
-    name: gitleaks
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Run gitleaks
-        run: |
-          set -euo pipefail
-          if command -v gitleaks >/dev/null 2>&1; then
-            gitleaks detect --source . --verbose --redact
-          elif command -v docker >/dev/null 2>&1; then
-            docker run --rm -v "$PWD:/path" zricethezav/gitleaks:latest detect --source=/path --verbose --redact
-          elif command -v podman >/dev/null 2>&1; then
-            podman run --rm -v "$PWD:/path:ro" docker.io/zricethezav/gitleaks:latest detect --source=/path --verbose --redact
-          else
-            echo "gitleaks not available on runner — FAIL (honest security gate)" >&2
-            exit 1
-          fi
-
-  trivy-fs:
-    name: trivy filesystem (vuln+secret+license)
-    runs-on: [self-hosted, linux, x64, podman]
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Trivy fs
-        run: |
-          set -euo pipefail
-          if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing — advisory skip (continue-on-error)"
-            exit 0
-          fi
-          trivy fs --scanners vuln,secret,license \
-            --severity HIGH,CRITICAL \
-            --skip-dirs .git --skip-dirs target --skip-dirs node_modules --skip-dirs .venv \
-            --exit-code 1 \
-            .
+  fleet-security:
+    uses: tzervas/mycelium-workflows/.github/workflows/reusable-fleet-security.yml@v1
+    with:
+      tier: auto
+      main-branches: 'main'

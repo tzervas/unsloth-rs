@@ -30,7 +30,7 @@
 //!
 //! ## Implementation Status
 //!
-//! See [`FLASH_ATTENTION_IMPLEMENTATION_STATUS.md`] for current progress.
+//! See `FLASH_ATTENTION_IMPLEMENTATION_STATUS.md` for current progress.
 
 pub mod config;
 pub mod interop;

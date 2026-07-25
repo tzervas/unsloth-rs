@@ -12,6 +12,23 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # These are CPU-only self-hosted runners with no CUDA toolkit installed.
+  # `--all-features` therefore CANNOT be used here: it enables `cuda`, which
+  # pulls candle-core/cuda -> cudarc, whose build script hard-fails with
+  #   thread 'main' panicked at cudarc-0.19.8/build.rs:168:13:
+  #   `nvcc --version` failed. Err(Os { code: 2, kind: NotFound, ... })
+  # That single error failed Build, Clippy, Documentation and both Test Suite
+  # matrix legs. Enumerate every NON-CUDA feature instead, so feature coverage
+  # stays real and `cuda` is only ever compiled where nvcc actually exists.
+  # Keep this in sync with [features] in Cargo.toml when adding a CPU feature.
+  CPU_FEATURES: "_ternary_cubecl_todo,_phase2_tiled_kernel"
+  # podman `--cpus` is a quota, not a cpuset, so `nproc` inside a work container
+  # still reports the HOST core count (28) and cargo spawns -j28 regardless of
+  # how small the container is. Pinning to 1 job is the fleet-standard mitigation
+  # (matches fleet-ci.yml and axolotl-rs). NOTE: this REDUCES memory pressure but
+  # does NOT fix the OOM kills on these runners — see the note on the build job.
+  CARGO_BUILD_JOBS: "1"
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   test:
@@ -48,7 +65,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Run tests (CPU only)
-        run: cargo test --verbose --all-features
+        run: cargo test --verbose --features "$CPU_FEATURES"
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -65,7 +82,7 @@ jobs:
           components: clippy
       
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --features "$CPU_FEATURES" -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -96,11 +113,16 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
       
+      # INFRASTRUCTURE, NOT CODE: this job and Clippy are additionally being
+      # SIGKILLed by the container memory limit (exit 137 on Build, `signal: 9`
+      # while compiling `syn` on Clippy — see PR #59, which already set
+      # CARGO_BUILD_JOBS=1 and is still killed). Nothing in this workflow can fix
+      # that; the runner tier has to grow. Do not "fix" it by deleting coverage.
       - name: Build (no features)
         run: cargo build --verbose
       
-      - name: Check build succeeds with all features
-        run: cargo check --all-features --verbose
+      - name: Check build succeeds with all CPU features
+        run: cargo check --features "$CPU_FEATURES" --verbose
 
   docs:
     name: Documentation
@@ -112,7 +134,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Build documentation
-        run: cargo doc --no-deps --all-features --verbose
+        run: cargo doc --no-deps --features "$CPU_FEATURES" --verbose
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -123,3 +145,8 @@ jobs:
   # - Local/self-hosted GPU: often needs CUDA_COMPUTE_CAP=90 when nvcc cannot
   #   target CC 12.0 (see GPU_SETUP.md, DEBT.md).
   # - scripts/gpu-test.sh is for local validation only.
+  # - Consequently the `cuda` feature is NOT compiled by this workflow at all
+  #   (see CPU_FEATURES above). Compiling it here would need nvcc on the CPU
+  #   runners; a green `--all-features` job on a CPU box would be exactly the
+  #   fabricated GPU coverage this section forbids. CUDA build coverage belongs
+  #   on a GPU-labelled runner.

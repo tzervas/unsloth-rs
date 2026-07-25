@@ -1,5 +1,11 @@
 # Gitleaks configuration
 # https://github.com/gitleaks/gitleaks
+#
+# Note: rule-scoped allowlists must be a TOML *table* (`[rules.allowlist]`),
+# not an array of tables (`[[rules.allowlist]]`). The latter decodes as a slice
+# and fails the entire run at config load with:
+#   FTL Failed to load config error="... 'Rules[N].Allowlist' expected a map, got 'slice'"
+# Matches the working config in axolotl-rs.
 
 title = "Gitleaks Config"
 
@@ -29,6 +35,14 @@ description = "Potential API key in Rust code"
 regex = '''(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token)\s*[:=]\s*["'][a-zA-Z0-9]{20,}["']'''
 tags = ["key", "API"]
 
+# Allowlist for test fixtures
+[rules.allowlist]
+paths = [
+    '''tests/''',
+    '''benches/''',
+    '''examples/''',
+]
+
 [[rules]]
 id = "env-credential"
 description = "Hardcoded credential in env or config"
@@ -41,8 +55,8 @@ paths = [
     '''\.yml$''',
 ]
 
-# Allowlist for test files
-[[rules.allowlist]]
+# Allowlist for test fixtures
+[rules.allowlist]
 paths = [
     '''tests/''',
     '''benches/''',

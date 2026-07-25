@@ -1,14 +1,15 @@
-# Fleet standard CI — thin caller. Policy lives in
-# https://github.com/tzervas/mycelium-workflows/blob/main/.github/workflows/reusable-fleet-ci.yml
+# Fleet standard CI — thin caller into mycelium-workflows reusable-rust-ci.
 #
-# Strictness is chosen by the branch you are TARGETING:
-#   dev tier  (->  dev) check + test, one Python version, GPU/bench skipped
-#   main tier (-> main) --all-features, clippy -D warnings, doc warnings-as-errors,
-#             full Python matrix, and GPU jobs and benchmarks that RUN rather than skip.
-# The reusable workflow resolves the tier itself, so this file cannot get it wrong.
+# NOTE: mycelium-workflows currently ships `reusable-rust-ci.yml` (not a
+# separate `reusable-fleet-ci.yml`). This caller keeps the workflow *name*
+# `fleet-ci` for badge continuity while pointing at the real reusable file.
 #
-# `@v1` is a MOVING major tag: central minor and patch fixes land here
-# automatically; a major is a deliberate, reviewed move to @v2.
+# all-features: false — this repo's `cuda` feature needs nvcc; the fleet
+# self-hosted CPU runners do not have it (see #60).
+#
+# Contract §5: the reusable job is named `check`, so the reported context is
+# `fleet-ci / check`. protec-main in this repo currently requires no status
+# contexts, so the rename is not a hang risk today.
 name: fleet-ci
 
 on:
@@ -17,12 +18,6 @@ on:
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
-    inputs:
-      tier:
-        description: 'Force a tier (otherwise derived from the target branch)'
-        type: choice
-        options: [auto, dev, main]
-        default: auto
 
 concurrency:
   group: fleet-ci-${{ github.workflow }}-${{ github.ref }}
@@ -33,10 +28,13 @@ permissions:
 
 jobs:
   fleet-ci:
-    uses: tzervas/mycelium-workflows/.github/workflows/reusable-fleet-ci.yml@v1
+    name: fleet-ci
+    uses: tzervas/mycelium-workflows/.github/workflows/reusable-rust-ci.yml@v1
     with:
-      tier: ${{ inputs.tier || 'auto' }}
-      main-branches: 'main'
-      gpu: true
-      bench: true
-
+      rust-version: stable
+      # full on every run: previous in-repo fleet-ci did not drop doc/clippy.
+      depth: full
+      all-features: false
+      deny-warnings: true
+      cargo-jobs: 1
+      runner-labels: '["self-hosted","linux","x64","podman"]'

@@ -1,12 +1,13 @@
-# Fleet security scan — thin caller. Policy lives in
-# https://github.com/tzervas/mycelium-workflows/blob/main/.github/workflows/reusable-fleet-security.yml
+# Fleet security scan — thin caller into mycelium-workflows reusable-rust-security.
 #
-# dev tier scans the working tree; main tier and the weekly schedule scan the
-# full git history for secrets.
+# NOTE: mycelium-workflows ships `reusable-rust-security.yml` (not
+# `reusable-fleet-security.yml`). Job names inside the reusable are `gitleaks`
+# and `trivy filesystem (vuln+secret+license)` so contexts report as
+# `fleet-security / gitleaks` and `fleet-security / trivy filesystem ...`.
 #
-# The `cancel-in-progress` expression is load-bearing: a scheduled self-hosted
-# scan under an unconditional `true` silently NEVER RUNS when the fleet is not
-# polling this repo — it queues, the next tick cancels it, and it reports
+# full-history: true on main and on the weekly schedule; tree-only on dev PRs.
+# The cancel-in-progress expression is load-bearing: a scheduled self-hosted
+# scan under unconditional `true` can be cancelled by the next tick and report
 # `cancelled` rather than `failed`, so nothing alerts.
 name: fleet-security
 
@@ -28,7 +29,10 @@ permissions:
 
 jobs:
   fleet-security:
-    uses: tzervas/mycelium-workflows/.github/workflows/reusable-fleet-security.yml@v1
+    name: fleet-security
+    uses: tzervas/mycelium-workflows/.github/workflows/reusable-rust-security.yml@v1
     with:
-      tier: auto
-      main-branches: 'main'
+      runner-labels: '["self-hosted","linux","x64","podman"]'
+      # Full history on main pushes and the weekly schedule; tree scan elsewhere.
+      full-history: ${{ github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      trivy-required: false

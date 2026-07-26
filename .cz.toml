@@ -1,0 +1,48 @@
+# Commitizen configuration (commitizen-tools).
+# Install (optional): pip install commitizen  OR  uv tool install commitizen
+# This file is valid without the CLI: agents and humans follow docs/VERSIONING.md for the
+# same rules. Canonical peer reference: tzervas/gha-runner-ctl/.cz.toml
+#
+# ============================================================================
+# WHY `major_version_zero` IS DELIBERATELY ABSENT HERE
+# ============================================================================
+# The fleet standard sets `major_version_zero = true` everywhere, because nearly every
+# repo in the fleet is 0.x and that key is what keeps it there.
+#
+# THIS REPO IS AN EXCEPTION, AND THE KEY MUST NOT BE ADDED.
+#
+# `unsloth-rs` is PUBLISHED ON crates.io AT 1.0.2. Real dependents resolve it.
+# `major_version_zero` does not stop applying once you pass 1.0 -- it pins the major
+# FOREVER, and it does so by silently demoting breaking changes to MINOR bumps.
+# Measured on a fixture at version 1.2.10:
+#
+#     BREAKING, major_version_zero = true   ->  bump: 1.2.10 -> 1.3.0   (MINOR)
+#     BREAKING, major_version_zero absent   ->  bump: 1.2.10 -> 2.0.0   (MAJOR)
+#
+# A dependent on `unsloth-rs = "1.0"` accepts anything `>=1.0.0, <2.0.0`.
+# Shipping a breaking change as a minor bump therefore lands it silently in every
+# consumer's next build -- a semver violation against a published artifact that cannot be
+# unpublished, only yanked.
+#
+# At 1.x, MAJOR is the breaking position again -- and a major bump still requires explicit
+# human authorization. No agent may cut 2.0.0 any more than it may cut 1.0.0.
+# ============================================================================
+#
+# `version` below is the version cz bumps *from*. It must track the newest released tag:
+# if it lags, `cz bump` re-mints a version that already has a tag.
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.3"
+tag_format = "v$version"
+version_scheme = "semver"
+
+# Keep these files lockstep on every release bump (see docs/VERSIONING.md § Version files).
+version_files = [
+    "Cargo.toml:version",
+    "README.md:Version:",
+]
+
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true

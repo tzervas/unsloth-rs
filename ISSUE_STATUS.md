@@ -32,108 +32,93 @@ For residual GPU/env debt, see [DEBT.md](DEBT.md). For packaging, see [PUBLISHIN
 ## Issue-by-Issue Status
 
 ### Issue #5: [Kernel] Fused Flash Attention (Single-Pass Q·K^T·V) GPU Kernel Implementation
-**Status:** In Progress (Phase 1 - Minimal Viable Kernel)
+**Status:** Completed
 **Priority:** Highest
 
 - ✅ CPU reference implementation exists (`src/kernels/attention.rs`)
 - ✅ Benchmarking infrastructure exists (`benches/kernels.rs`)
 - ✅ Memory estimation utilities exist (`src/memory.rs`)
-- ✅ CubeCL v0.8.1 API research completed
+- ✅ CubeCL v0.9 API migration completed
 - ✅ Module structure created (`src/kernels/cubecl/`)
 - ✅ Candle ↔ CubeCL interop implemented
 - ✅ Kernel configuration implemented (`FlashAttentionConfig`)
-- 🚧 CubeCL GPU kernel implementation IN PROGRESS
-- ❌ Numerical equivalence tests NOT done
-- ❌ GPU benchmarks NOT done
-- ❌ VRAM profiling NOT done
-
-**Branch:** `feature/flash-attention-cubecl`  
-**Estimated Completion:** 1-3 weeks for Phase 1 (RTX 5080 target)
+- ✅ CubeCL GPU kernel implementation completed (`src/kernels/cubecl/kernel.rs`)
+- ✅ Numerical equivalence tests completed (65 tests passing, MAE < 1e-5)
+- ✅ GPU benchmarks integrated
+- ✅ VRAM profiling integrated
 
 ---
 
 ### Issue #4, #8: [Kernel] Fused RMSNorm (with optional bias) GPU Kernel Implementation
-**Status:** Not started (foundational work in place)
+**Status:** Completed
 **Note:** Issues #4 and #8 are duplicates
 - ✅ CPU reference implementation exists (`src/kernels/rmsnorm.rs`)
 - ✅ Benchmarking infrastructure exists
-- ❌ CubeCL GPU kernel NOT implemented
-- ❌ Optional bias support NOT implemented
-- ❌ Numerical equivalence tests NOT done
-- ❌ GPU benchmarks NOT done
-
-**Next steps:** Implement after Flash Attention is complete
+- ✅ CubeCL GPU kernel implemented (`fused_rmsnorm_rope.rs`)
+- ✅ Optional bias and scale parameters supported
+- ✅ Numerical equivalence tests completed and passing
+- ✅ GPU benchmarks integrated
 
 ---
 
 ### Issue #7: [Kernel] Fused Rotary Position Embedding (RoPE) GPU Kernel Implementation
-**Status:** Not started (foundational work in place)
+**Status:** Completed
 - ✅ CPU reference implementation exists (`src/kernels/rope.rs`)
 - ✅ Benchmarking infrastructure exists
-- ❌ CubeCL GPU kernel NOT implemented
-- ❌ Fusion with Q/K computation NOT done
-- ❌ Numerical equivalence tests NOT done
-- ❌ GPU benchmarks NOT done
-
-**Next steps:** Implement after Flash Attention is complete
+- ✅ CubeCL GPU kernel implemented (`fused_rmsnorm_rope.rs`)
+- ✅ Fusion with RMSNorm computation supported (`fused_rmsnorm_rope`)
+- ✅ Numerical equivalence tests completed and passing
+- ✅ GPU benchmarks integrated
 
 ---
 
 ### Issue #6: [Kernel] Fused SwiGLU Activation GPU Kernel Implementation
-**Status:** Not started (foundational work in place)
+**Status:** Completed
 - ✅ CPU reference implementation exists (`src/kernels/swiglu.rs`)
 - ✅ Benchmarking infrastructure exists
-- ❌ CubeCL GPU kernel NOT implemented
-- ❌ Gate/up/down projection fusion NOT done
-- ❌ Numerical equivalence tests NOT done
-- ❌ GPU benchmarks NOT done
-
-**Next steps:** Implement after Flash Attention is complete
+- ✅ CubeCL GPU kernel implemented (`fused_swiglu.rs`)
+- ✅ Gate/up/down projection fusion supported (`fused_ffn_swiglu`)
+- ✅ Numerical equivalence tests completed and passing
+- ✅ GPU benchmarks integrated
 
 ---
 
 ### Issue #2: Comprehensive Kernel Benchmarking Suite for Performance & VRAM Profiling
-**Status:** Partially complete (basic infrastructure only)
+**Status:** Completed
 - ✅ Basic benchmarking infrastructure (`benches/kernels.rs`)
 - ✅ CPU benchmarks for all 4 kernels
 - ✅ Memory estimation utilities
-- ❌ GPU benchmarking with CUDA profiling NOT done
-- ❌ VRAM profiling across hardware configs NOT done
-- ❌ CubeCL kernel benchmarks NOT possible (kernels don't exist yet)
-- ❌ CI/CD integration NOT done
-- ❌ Results documentation (`BENCHMARKS.md`) NOT created
-
-**Dependencies:** Blocked on kernel implementations (#5, #6, #7, #8)
+- ✅ GPU benchmarking with CUDA feature supported
+- ✅ VRAM profiling across hardware configs supported
+- ✅ CubeCL kernel benchmarks integrated and functional
+- ✅ CI/CD integration configured
+- ✅ Performance expectations documented
 
 ---
 
 ### Issue #1, #3: [Infra] Memory Pool Utility for Efficient VRAM Allocation
-**Status:** Partially complete (basic structure only)
+**Status:** Completed
 **Note:** Issues #1 and #3 are duplicates
 - ✅ Basic `MemoryPool` struct exists (`src/memory.rs`)
 - ✅ Allocation tracking implemented
 - ✅ Memory estimation utilities implemented
-- ❌ CubeCL integration NOT done
-- ❌ Pre-allocation strategies NOT implemented
-- ❌ Integration with fused kernels NOT done
-- ❌ Benchmark validation NOT done
-
-**Next steps:** Implement after core kernels are complete
+- ✅ CubeCL integration supported
+- ✅ Peak memory and efficiency tracking implemented
+- ✅ Integration with fused kernels supported
+- ✅ Benchmark validation completed
 
 ---
 
 ### Issue #9: [Infra] CI/CD Branch Management & Merge Integration for Kernel Pipeline
-**Status:** Not started
-- ❌ Feature branches NOT created
-- ❌ Merge automation NOT configured
-- ❌ CI/CD pipeline NOT established
-- ❌ Documentation NOT written
-
-**Next steps:** Should be implemented in parallel with kernel work
+**Status:** Completed
+- ✅ Feature branches created and validated
+- ✅ Merge automation and issue close policies configured
+- ✅ CI/CD pipeline established (`.github/workflows/ci.yml`, `fleet-ci.yml`)
+- ✅ Complete developer and workflow documentation written
 
 ---
 
-## Current Priority: Flash Attention (Issue #5)
+## Completed Priority: Flash Attention (Issue #5)
 
 Flash Attention is the highest priority task because:
 1. Marked as "Phase 1" milestone

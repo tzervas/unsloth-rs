@@ -74,6 +74,14 @@ impl RmsNorm {
         }
     }
 
+    /// Estimate VRAM usage in bytes.
+    #[must_use]
+    pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
+        let hidden_size = self.weight.dim(0).unwrap_or(0);
+        let bytes_per_elem = 4; // f32
+        batch_size * seq_len * hidden_size * bytes_per_elem
+    }
+
     /// CPU implementation using Candle tensor operations.
     ///
     /// This is the fallback path and also used for validation.
@@ -213,5 +221,13 @@ mod tests {
             assert!(!v.is_nan(), "Output contains NaN");
             assert!(!v.is_infinite(), "Output contains Inf");
         }
+    }
+
+    #[test]
+    fn test_rmsnorm_vram_estimate() {
+        let device = Device::Cpu;
+        let norm = RmsNorm::new(768, 1e-5, &device).unwrap();
+        let vram = norm.vram_estimate(4, 2048);
+        assert_eq!(vram, 4 * 2048 * 768 * 4);
     }
 }

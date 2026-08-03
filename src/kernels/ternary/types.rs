@@ -619,28 +619,50 @@ impl TernaryTensor {
 
     /// Prune weights below a threshold by setting them to zero.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
+    /// For ternary weights, all non-zero values have equal magnitude (±scale) within a row.
+    /// This method implements a row-aggregate pruning strategy where entire rows are pruned
+    /// (zeroed out) if their absolute scale factor is below the given threshold.
     ///
     /// # Arguments
     ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// * `threshold` - Minimum absolute scale factor to keep
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Number of individual weights pruned
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_elements = 0;
+
+        for r in 0..self.shape.0 {
+            if self.scales[r].abs() < threshold {
+                let start_idx = r * self.k_words;
+                let end_idx = (r + 1) * self.k_words;
+
+                let plus_bits: u32 = self.plus_plane[start_idx..end_idx]
+                    .iter()
+                    .map(|w| w.count_ones())
+                    .sum();
+                let minus_bits: u32 = self.minus_plane[start_idx..end_idx]
+                    .iter()
+                    .map(|w| w.count_ones())
+                    .sum();
+
+                pruned_elements += (plus_bits + minus_bits) as usize;
+
+                for k in 0..self.k_words {
+                    self.plus_plane[start_idx + k] = 0;
+                    self.minus_plane[start_idx + k] = 0;
+                }
+
+                self.scales[r] = 0.0;
+            }
+        }
+
+        if pruned_elements > 0 {
+            self.recalculate_sparsity();
+        }
+
+        pruned_elements
     }
 }
 
@@ -879,5 +901,70 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold() {
+        let shape = (4, 64); // 4 rows, 64 cols
+        let k_words = 2;
+
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        // Set scales: row 0 is small (0.05), row 1 is large (1.5), row 2 is small (-0.02), row 3 is large (10.0)
+        let scales = vec![0.05f32, 1.5, -0.02, 10.0];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        // Put some elements in the tensor (total 10 non-zeros)
+        // Row 0 has 3 non-zeros
+        tensor.modify_dim(0, 5, 1);
+        tensor.modify_dim(0, 10, -1);
+        tensor.modify_dim(0, 45, 1);
+
+        // Row 1 has 2 non-zeros
+        tensor.modify_dim(1, 15, 1);
+        tensor.modify_dim(1, 55, -1);
+
+        // Row 2 has 4 non-zeros
+        tensor.modify_dim(2, 2, 1);
+        tensor.modify_dim(2, 22, -1);
+        tensor.modify_dim(2, 42, 1);
+        tensor.modify_dim(2, 62, -1);
+
+        // Row 3 has 1 non-zero
+        tensor.modify_dim(3, 30, 1);
+
+        // Re-compute initial sparsity to match input modifications
+        tensor.recalculate_sparsity();
+        let initial_nonzero = 10;
+        let total_elements = 4 * 64;
+        let expected_initial_sparsity = 1.0 - (initial_nonzero as f32 / total_elements as f32);
+        assert!((tensor.sparsity() - expected_initial_sparsity).abs() < 1e-5);
+
+        // Prune with threshold 0.1.
+        // This should prune row 0 (scale 0.05) and row 2 (scale -0.02).
+        // Total elements pruned should be 3 (from row 0) + 4 (from row 2) = 7.
+        let pruned = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned, 7);
+
+        // Row 0 and Row 2 should be pruned: scales set to 0.0, elements zeroed
+        assert!((tensor.scales[0] - 0.0).abs() < 1e-5);
+        assert!((tensor.scales[2] - 0.0).abs() < 1e-5);
+        for col in 0..64 {
+            assert_eq!(tensor.get_dim(0, col), 0);
+            assert_eq!(tensor.get_dim(2, col), 0);
+        }
+
+        // Row 1 and Row 3 should be intact
+        assert!((tensor.scales[1] - 1.5).abs() < 1e-5);
+        assert!((tensor.scales[3] - 10.0).abs() < 1e-5);
+        assert_eq!(tensor.get_dim(1, 15), 1);
+        assert_eq!(tensor.get_dim(1, 55), -1);
+        assert_eq!(tensor.get_dim(3, 30), 1);
+
+        // Check the new sparsity
+        // Remaining non-zero elements: 2 (from row 1) + 1 (from row 3) = 3
+        let expected_pruned_sparsity = 1.0 - (3.0 / total_elements as f32);
+        assert!((tensor.sparsity() - expected_pruned_sparsity).abs() < 1e-5);
     }
 }

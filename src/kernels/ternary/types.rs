@@ -619,28 +619,57 @@ impl TernaryTensor {
 
     /// Prune weights below a threshold by setting them to zero.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
+    /// Output channels (rows) with absolute scales below the given threshold
+    /// are zeroed out and the tensor sparsity is updated accordingly.
     ///
     /// # Arguments
     ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// * `threshold` - Minimum absolute scale factor to keep
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Number of logical weights pruned (zeroed out)
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_rows_count = 0;
+        let k_words = self.k_words;
+
+        for row in 0..self.shape.0 {
+            if self.scales[row].abs() < threshold {
+                // Zero out this row's scale
+                self.scales[row] = 0.0;
+
+                // Zero out the u32 words in both planes for this row
+                let row_offset = row * k_words;
+                for k in 0..k_words {
+                    self.plus_plane[row_offset + k] = 0;
+                    self.minus_plane[row_offset + k] = 0;
+                }
+                pruned_rows_count += 1;
+            }
+        }
+
+        if pruned_rows_count > 0 {
+            self.recalculate_sparsity();
+            // If sparsity metadata is present, rebuild it to match the new planes
+            if let Some(ref mut meta) = self.sparsity_meta {
+                // If the user previously built metadata, we must update it
+                for row in 0..self.shape.0 {
+                    if self.scales[row] == 0.0 {
+                        let row_offset = row * k_words;
+                        let plus_row = self.plus_plane[row_offset..row_offset + k_words].to_vec();
+                        let minus_row = self.minus_plane[row_offset..row_offset + k_words].to_vec();
+                        let planes = TernaryPlanes {
+                            plus: plus_row,
+                            minus: minus_row,
+                            num_dims: self.shape.1,
+                        };
+                        meta[row] = SparsityMetadata::from_planes(&planes, meta[row].chunk_size);
+                    }
+                }
+            }
+        }
+
+        pruned_rows_count * self.shape.1
     }
 }
 
@@ -879,5 +908,84 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold_basic() {
+        let shape = (4, 64); // 4 rows, 64 columns
+        let k_words = 2;
+        let mut plus = vec![0u32; 4 * k_words];
+        let mut minus = vec![0u32; 4 * k_words];
+
+        // Fill some non-zero elements
+        // Row 0 has non-zeros
+        plus[0] = 0xF0F0_F0F0;
+        minus[0] = 0x0F0F_0F0F;
+
+        // Row 1 has non-zeros
+        plus[2] = 0xAAAA_AAAA;
+
+        // Row 2 has non-zeros
+        minus[4] = 0x5555_5555;
+
+        // Row 3 is completely zero
+
+        // Set scales: Row 0 has 1.5, Row 1 has 0.1, Row 2 has 2.0, Row 3 has 0.05
+        let scales = vec![1.5f32, 0.1f32, 2.0f32, 0.05f32];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        // Let's also build sparsity metadata to verify it gets updated
+        tensor.build_sparsity_metadata(32);
+
+        // Verify initial sparsity
+        let initial_sparsity = tensor.sparsity();
+
+        // Prune elements with absolute scales strictly below 0.2
+        // Row 1 (scale 0.1) and Row 3 (scale 0.05) should be pruned.
+        // Row 0 (scale 1.5) and Row 2 (scale 2.0) should remain.
+        let pruned_count = tensor.prune_below_threshold(0.2);
+
+        // We expect Row 1 and Row 3 to be pruned (2 rows, 64 columns each => 128 elements)
+        assert_eq!(pruned_count, 128);
+
+        // Scales should be zeroed (use tolerance check to avoid strict float comparisons in clippy)
+        assert!((tensor.scales[0] - 1.5).abs() < f32::EPSILON);
+        assert!((tensor.scales[1] - 0.0).abs() < f32::EPSILON);
+        assert!((tensor.scales[2] - 2.0).abs() < f32::EPSILON);
+        assert!((tensor.scales[3] - 0.0).abs() < f32::EPSILON);
+
+        // Planes should be zeroed for Row 1 and Row 3
+        assert_eq!(tensor.plus_plane[2], 0);
+        assert_eq!(tensor.minus_plane[2], 0);
+        assert_eq!(tensor.plus_plane[3], 0);
+        assert_eq!(tensor.minus_plane[3], 0);
+        assert_eq!(tensor.plus_plane[6], 0);
+        assert_eq!(tensor.minus_plane[6], 0);
+        assert_eq!(tensor.plus_plane[7], 0);
+        assert_eq!(tensor.minus_plane[7], 0);
+
+        // Row 0 and Row 2 should be preserved
+        assert_eq!(tensor.plus_plane[0], 0xF0F0_F0F0);
+        assert_eq!(tensor.minus_plane[0], 0x0F0F_0F0F);
+        assert_eq!(tensor.minus_plane[4], 0x5555_5555);
+
+        // Sparsity should increase (be closer to 1.0)
+        assert!(tensor.sparsity() > initial_sparsity);
+
+        // Sparsity metadata should have updated for pruned rows
+        if let Some(ref meta) = tensor.sparsity_meta {
+            // Row 1 should be completely inactive
+            assert!(!meta[1].is_chunk_active(0));
+            assert!(!meta[1].is_chunk_active(1));
+            // Row 3 should be completely inactive
+            assert!(!meta[3].is_chunk_active(0));
+            assert!(!meta[3].is_chunk_active(1));
+            // Row 0 and Row 2 should still have active chunks
+            assert!(meta[0].is_chunk_active(0) || meta[0].is_chunk_active(1));
+            assert!(meta[2].is_chunk_active(0) || meta[2].is_chunk_active(1));
+        } else {
+            panic!("Sparsity metadata should be present");
+        }
     }
 }

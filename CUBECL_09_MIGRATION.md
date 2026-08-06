@@ -10,10 +10,10 @@ This document outlines the breaking API changes between CubeCL 0.8.1 and 0.9.0 t
 - [x] Replaced bare `sqrt()` calls with `F::sqrt()`
 - [x] Replaced bare `exp()` calls with `F::exp()`
 - [x] Renamed `Result` imports to `UnslothResult` to avoid shadowing std::result::Result
-- [ ] Fix array indexing to use `usize` instead of `u32`
-- [ ] Fix `CubeDim::new()` API change (now takes 2 args instead of 3)
-- [ ] Fix `client.create()` to use `Bytes` instead of `&Vec<u8>`
-- [ ] Update SharedMemory indexing
+- [x] Fix array indexing to use `usize` instead of `u32`
+- [x] Fix `CubeDim::new()` API change (now takes 2 args instead of 3)
+- [x] Fix `client.create()` to use `Bytes` instead of `&Vec<u8>`
+- [x] Update SharedMemory indexing
 
 ## Breaking API Changes in CubeCL 0.9
 
@@ -151,21 +151,21 @@ Add `as usize` casts to all SharedMemory indexing operations.
 - [x] Fix `sqrt()` and `exp()` calls to use `F::` prefix
 - [x] Rename `Result` to `UnslothResult` to avoid shadowing
 
-### Phase 2: Fix Indexing Operations (IN PROGRESS)
-- [ ] Add `as usize` casts to all array indexing
-- [ ] Add `as usize` casts to all SharedMemory indexing
-- [ ] Verify no index out of bounds issues
+### Phase 2: Fix Indexing Operations (DONE ✓)
+- [x] Add `as usize` casts to all array indexing
+- [x] Add `as usize` casts to all SharedMemory indexing
+- [x] Verify no index out of bounds issues
 
-### Phase 3: Update CubeCL API Calls
-- [ ] Update `CubeDim::new()` calls to new API
-- [ ] Update `candle_to_cubecl_handle()` to return `Bytes`
-- [ ] Update all `client.create()` calls
+### Phase 3: Update CubeCL API Calls (DONE ✓)
+- [x] Update `CubeDim::new()` calls to new API
+- [x] Update `candle_to_cubecl_handle()` to return `Bytes` (Note: we use `Bytes::from_bytes_vec` to map the returned bytes on launch)
+- [x] Update all `client.create()` calls
 
-### Phase 4: Testing
-- [ ] Run `cargo check -p unsloth-rs --features cuda`
-- [ ] Fix any remaining compilation errors
-- [ ] Run integration tests
-- [ ] Test on actual CUDA hardware
+### Phase 4: Testing (DONE ✓)
+- [x] Run `cargo check -p unsloth-rs --features cuda` (verified on CUDA-capable runner)
+- [x] Fix any remaining compilation errors
+- [x] Run integration tests
+- [x] Test on actual CUDA hardware (verified RTX 5080 gate pass)
 
 ## References
 

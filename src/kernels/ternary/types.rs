@@ -617,30 +617,63 @@ impl TernaryTensor {
         }
     }
 
-    /// Prune weights below a threshold by setting them to zero.
+    /// Prune weights below a threshold by setting output channels (rows) with
+    /// absolute scales below the given threshold to zero.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
+    /// This implements row-aggregate scale-based weight pruning. When a row's
+    /// absolute scale is below `threshold`, both its planes (+ and -) and its
+    /// scale are set to zero. This updates the tensor's sparsity accordingly and
+    /// rebuilds any existing sparsity metadata.
     ///
     /// # Arguments
     ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// * `threshold` - Minimum absolute row scale contribution to keep
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Number of weights pruned (i.e. number of non-zero weights that were zeroed out)
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_count = 0;
+        let mut row_pruned = false;
+
+        for r in 0..self.shape.0 {
+            if self.scales[r].abs() < threshold {
+                let row_offset = r * self.k_words;
+
+                // Count non-zero elements in this row before pruning
+                let mut row_nonzeros = 0;
+                for w_idx in 0..self.k_words {
+                    let idx = row_offset + w_idx;
+                    row_nonzeros += self.plus_plane[idx].count_ones() as usize;
+                    row_nonzeros += self.minus_plane[idx].count_ones() as usize;
+
+                    // Zero out the planes
+                    self.plus_plane[idx] = 0;
+                    self.minus_plane[idx] = 0;
+                }
+
+                if row_nonzeros > 0 {
+                    pruned_count += row_nonzeros;
+                    row_pruned = true;
+                }
+
+                self.scales[r] = 0.0;
+            }
+        }
+
+        if row_pruned {
+            self.recalculate_sparsity();
+
+            // Rebuild sparsity metadata if it exists
+            if let Some(ref meta) = self.sparsity_meta {
+                if !meta.is_empty() {
+                    let chunk_size = meta[0].chunk_size;
+                    self.build_sparsity_metadata(chunk_size);
+                }
+            }
+        }
+
+        pruned_count
     }
 }
 
@@ -879,5 +912,78 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold() {
+        let shape = (4, 64);
+        let k_words = 2;
+
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        // Scales: Row 0 = 0.1, Row 1 = 0.5, Row 2 = 0.05, Row 3 = 1.2
+        let scales = vec![0.1f32, 0.5f32, 0.05f32, 1.2f32];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        // Populate values
+        // Row 0: 2 non-zeros (will be pruned since 0.1 < 0.2)
+        tensor.modify_dim(0, 5, 1);
+        tensor.modify_dim(0, 35, -1);
+
+        // Row 1: 1 non-zero (will NOT be pruned since 0.5 >= 0.2)
+        tensor.modify_dim(1, 10, 1);
+
+        // Row 2: 3 non-zeros (will be pruned since 0.05 < 0.2)
+        tensor.modify_dim(2, 1, -1);
+        tensor.modify_dim(2, 2, 1);
+        tensor.modify_dim(2, 60, -1);
+
+        // Row 3: 1 non-zero (will NOT be pruned since 1.2 >= 0.2)
+        tensor.modify_dim(3, 40, 1);
+
+        // Recalculate original sparsity
+        tensor.recalculate_sparsity();
+        let original_sparsity = tensor.sparsity();
+
+        // Build metadata with chunk size of 32
+        tensor.build_sparsity_metadata(32);
+
+        // Call prune_below_threshold with threshold = 0.2
+        // It should prune Row 0 (2 non-zeros) and Row 2 (3 non-zeros), total 5 non-zeros pruned.
+        let pruned = tensor.prune_below_threshold(0.2);
+
+        assert_eq!(pruned, 5);
+
+        // Verify scales are zeroed out for pruned rows and intact for others
+        assert!((tensor.scales[0] - 0.0).abs() < 1e-5);
+        assert!((tensor.scales[1] - 0.5).abs() < 1e-5);
+        assert!((tensor.scales[2] - 0.0).abs() < 1e-5);
+        assert!((tensor.scales[3] - 1.2).abs() < 1e-5);
+
+        // Verify planes are zeroed out for pruned rows
+        for col in 0..64 {
+            assert_eq!(tensor.get_dim(0, col), 0);
+            assert_eq!(tensor.get_dim(2, col), 0);
+        }
+
+        // Verify intact rows remain unchanged
+        assert_eq!(tensor.get_dim(1, 10), 1);
+        assert_eq!(tensor.get_dim(3, 40), 1);
+
+        // Verify sparsity increased
+        assert!(tensor.sparsity() > original_sparsity);
+        // Logical non-zeros remaining: 2 (Row 1 and Row 3)
+        let expected_sparsity = 1.0 - (2.0 / 256.0);
+        assert!((tensor.sparsity() - expected_sparsity).abs() < 0.001);
+
+        // Verify metadata was updated/rebuilt correctly
+        let meta = tensor.sparsity_meta.as_ref().unwrap();
+        // Row 0 should have no active chunks (both chunk 0 and 1 inactive)
+        assert!(!meta[0].is_chunk_active(0));
+        assert!(!meta[0].is_chunk_active(1));
+        // Row 1 should have active chunk 0 (col 10 is in chunk 0: 0..32)
+        assert!(meta[1].is_chunk_active(0));
+        assert!(!meta[1].is_chunk_active(1));
     }
 }

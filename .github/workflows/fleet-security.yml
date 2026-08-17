@@ -1,4 +1,5 @@
 # Fleet security lint/scan — self-hosted. Badge reflects honest job status on trunk.
+# See: gha-runner-ctl docs/HONEST_CI.md + FLEET_STANDARDS.md
 name: fleet-security
 
 on:
@@ -21,6 +22,7 @@ jobs:
   gitleaks:
     name: gitleaks
     runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,21 +37,25 @@ jobs:
           elif command -v podman >/dev/null 2>&1; then
             podman run --rm -v "$PWD:/path:ro" docker.io/zricethezav/gitleaks:latest detect --source=/path --verbose --redact
           else
-            echo "gitleaks not available on runner — FAIL (honest security gate)" >&2
+            echo "::error title=FAIL_ENV::gitleaks not available on runner"
+            echo "HONEST_CI class=FAIL_ENV detail=gitleaks_missing"
             exit 1
           fi
 
-  trivy-fs:
-    name: trivy filesystem (vuln+secret+license)
+  trivy-fs-advisory:
+    name: trivy filesystem (advisory)
     runs-on: [self-hosted, linux, x64, podman]
+    # continue-on-error only permitted when job name contains advisory/experimental
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Trivy fs
         run: |
           set -euo pipefail
           if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing — advisory skip (continue-on-error)"
+            echo "trivy missing — advisory skip"
+            echo "HONEST_CI class=SKIP_STUB detail=trivy_missing"
             exit 0
           fi
           trivy fs --scanners vuln,secret,license \

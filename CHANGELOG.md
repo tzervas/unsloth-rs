@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-08-17
+
+### Added
+- **G0 CustomOp RMSNorm** (`kernels::custom_op`): Candle `CustomOp2` on
+  `CpuStorage` / `CudaStorage`. No CubeCL handle, no `to_vec1` host copy.
+  CUDA launches a one-block-per-row NVRTC kernel (`--features cuda`).
+- Honesty flags: `custom_op_device_resident()`, `custom_op_f32_only()`.
+- `RmsNorm::forward` now uses the CustomOp path (f32).
+
+### Notes
+- CubeCL Flash Attention interop is **unchanged** (`interop_requires_host_roundtrip() == true`).
+- CustomOp is f32-only in 1.0.4. Fused CE / RoPE / SwiGLU CustomOps are next (P1).
+- Backward is unfused Candle ops on the same device (still no D2H).
+
 ### Documentation
-- Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
-- README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.
+- DEBT.md: P0d RMSNorm CustomOp landed; CubeCL host copy remains BLOCKED:api.
 
 ## [1.0.3] - 2026-07-22
 

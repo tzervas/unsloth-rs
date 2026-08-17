@@ -2,7 +2,20 @@
 
 ## Flash attention residual (P8 / W1 train track)
 
-**Last updated:** 2026-07-22  
+**Last updated:** 2026-08-17
+
+### Landed — CustomOp RMSNorm (P0d / G0 first kernel)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Candle `CustomOp2` RMSNorm | **Landed (1.0.4)** | `kernels::custom_op`; CPU + CUDA `CudaStorage` |
+| Host `to_vec1` on this path | **No** | `custom_op_device_resident() == true` |
+| CubeCL FA interop | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
+| f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
+| Fused CE / RoPE / SwiGLU CustomOp | **Next (P1)** | Same pattern as RMSNorm |
+
+**Last updated (Flash residual):** 2026-07-22
+ 
 **Evidence:** `/root/work/plans/evidence/48h/L1-F-unsloth/`, `/root/work/plans/evidence/P8-residuals/`
 
 ### Resolved (test reference)

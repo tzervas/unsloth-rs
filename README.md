@@ -27,7 +27,7 @@ kernels:
 |----------------|--------------|--------------|
 | Multi-head attention + GQA | ✅ | Candle CUDA + optional Flash path |
 | RoPE | ✅ | Elementwise CubeCL (partial) |
-| RMSNorm | ✅ | Elementwise CubeCL (partial) |
+| RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | SwiGLU | ✅ | Elementwise CubeCL + CPU fallback |
 | Memory / checkpoint **estimates** | ✅ (math only) | n/a |
 | Ternary quant / linear (CPU) | ✅ experimental | GPU CubeCL **archived non-goal** |
@@ -36,14 +36,16 @@ kernels:
 
 ## Status (honest)
 
-**Version:** `1.0.3` (see `Cargo.toml`). Semver 1.x means the **public CPU
+**Version:** `1.0.4` (see `Cargo.toml`). Semver 1.x means the **public CPU
 kernel APIs** are intended to be usable; GPU paths and training utilities are
 still incomplete.
 
 ### Solid today
 
 - Multi-head attention (CPU reference; correct `1/√head_dim` scaling)
-- RoPE, RMSNorm, SwiGLU on CPU
+- RoPE, SwiGLU on CPU
+- **RMSNorm CustomOp** (CPU + CUDA `CudaStorage`, f32) — no CubeCL host copy
+  (`custom_op_device_resident()`)
 - Memory estimation helpers
 - Default-feature CPU test suite (unit + integration)
 
@@ -58,6 +60,7 @@ still incomplete.
 - CubeCL / Flash path **f32-only** (`interop_f32_only()`); host mixed-precision helpers only
 - Mixed-precision **utilities** (no end-to-end trainer); checkpoint **estimates**
   only (no recompute training API)
+
 
 ### Explicit non-goals (for this crate)
 
@@ -77,14 +80,14 @@ Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.3"
+unsloth-rs = "1.0.4"
 ```
 
 CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.3", features = ["cuda"] }
+unsloth-rs = { version = "1.0.4", features = ["cuda"] }
 ```
 
 On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0

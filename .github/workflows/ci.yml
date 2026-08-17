@@ -1,125 +1,27 @@
 # SPDX-License-Identifier: MIT
 # Copyright 2026 Tyler Zervas
+#
+# RETIRED — do not expand.
+# All required gates are now in fleet-ci.yml + fleet-security.yml
+# (self-hosted, HONEST_CI, DYNAMIC_POOL tiers).
+# This file remains only for manual re-runs / historical context.
+# See: gha-runner-ctl docs/FLEET_STANDARDS.md + HONEST_CI.md
 
-name: CI
+name: CI (legacy — retired)
 
 on:
-  push:
-    branches: [ main, dev, experimental ]
-  pull_request:
-    branches: [ main, dev, experimental ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: [self-hosted, linux, x64, podman]
-    strategy:
-      matrix:
-        rust: [stable, nightly]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo index
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo build
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Run tests (CPU only)
-        run: cargo test --verbose --all-features
-      
-      - name: Run doc tests
-        run: cargo test --doc --verbose
-
-  clippy:
-    name: Clippy
+  notice:
+    name: legacy CI retired
     runs-on: [self-hosted, linux, x64, podman]
     steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-  fmt:
-    name: Rustfmt
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-  build:
-    name: Build
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo build
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Build (no features)
-        run: cargo build --verbose
-      
-      - name: Check build succeeds with all features
-        run: cargo check --all-features --verbose
-
-  docs:
-    name: Documentation
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Build documentation
-        run: cargo doc --no-deps --all-features --verbose
-        env:
-          RUSTDOCFLAGS: -D warnings
-
-  # GPU honesty (PR-027 / UNS-P0-05):
-  # - This workflow is CPU-only. Missing GPU is not a pass for GPU coverage.
-  # - Classify missing /dev/nvidia*, CUDA_ERROR_NO_DEVICE, or toolkit/arch
-  #   mismatch as FAIL_ENV — never a fabricated green GPU suite.
-  # - Local/self-hosted GPU: often needs CUDA_COMPUTE_CAP=90 when nvcc cannot
-  #   target CC 12.0 (see GPU_SETUP.md, DEBT.md).
-  # - scripts/gpu-test.sh is for local validation only.
+      - run: |
+          echo "Legacy multi-job CI is retired."
+          echo "Use fleet-ci.yml (cargo check/test on large) and fleet-security.yml."
+          echo "HONEST_CI class=SKIP_STUB detail=legacy_ci_retired"

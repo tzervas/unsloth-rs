@@ -70,6 +70,7 @@ still incomplete.
 **Docs:** [CHANGELOG.md](CHANGELOG.md) · [ROADMAP.md](ROADMAP.md) · [DEBT.md](DEBT.md) ·
 [GPU_SETUP.md](GPU_SETUP.md) · [PUBLISHING.md](PUBLISHING.md) ·
 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles).
+[docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) — sister-crate DAG, gaps, Triton→CubeCL, close-order.
 
 Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are in
 [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md).

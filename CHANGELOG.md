@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
+  CubeCL `to_vec1`). CubeCL FA only if `UNSLOTH_CUBECL_FA` is set.
+- Added `attention_custom_op` / `attention_device` (online softmax on CPU).
+
+### Documentation
+- `docs/TRITON.md`: Triton compiler/FFI is
+  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs), not this crate.
+
 ## [1.0.4] - 2026-08-17
+
 
 ### Added
 - **G0 CustomOp family** (`kernels::custom_op`):

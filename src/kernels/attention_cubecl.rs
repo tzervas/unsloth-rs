@@ -111,11 +111,15 @@ pub fn flash_attention_cubecl(
         head_dim
     );
 
-    // Use CubeCL kernel when available and on CUDA device
+    // G0: default path is device-resident (CustomOp / Candle CUDA).
+    // CubeCL FA still host-roundtrips (`interop_requires_host_roundtrip`).
+    // Opt in only with UNSLOTH_CUBECL_FA=1 for kernel-launch experiments.
     #[cfg(feature = "cuda")]
     {
-        if q.device().is_cuda() && has_cubecl_support() {
-            // Use the kernel from cubecl module
+        if q.device().is_cuda()
+            && has_cubecl_support()
+            && std::env::var_os("UNSLOTH_CUBECL_FA").is_some()
+        {
             use super::cubecl::{flash_attention_kernel, FlashAttentionConfig};
 
             let config = FlashAttentionConfig::default().with_head_dim(head_dim as u32);
@@ -123,11 +127,11 @@ pub fn flash_attention_cubecl(
         }
     }
 
-    // Fallback for CPU or when CubeCL is not available
     flash_attention_fallback(q, k, v, scale, mask)
 }
 
-/// Fallback implementation using Candle operations.
+/// Fallback: CustomOp online-softmax on CPU, Candle GEMM+softmax on CUDA.
+/// Neither path `to_vec1`s into CubeCL.
 fn flash_attention_fallback(
     q: &Tensor,
     k: &Tensor,
@@ -135,18 +139,9 @@ fn flash_attention_fallback(
     scale: f64,
     mask: Option<&Tensor>,
 ) -> Result<Tensor> {
-    let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
-    let scores = (scores * scale)?;
-
-    let scores = match mask {
-        Some(m) => scores.broadcast_add(m)?,
-        None => scores,
-    };
-
-    let attn_weights = candle_nn::ops::softmax(&scores, 3)?;
-    let output = attn_weights.matmul(v)?;
-
-    Ok(output)
+    Ok(crate::kernels::custom_op::attention_device(
+        q, k, v, scale, mask, false,
+    )?)
 }
 
 /// Estimate VRAM usage for Flash Attention.

@@ -7,8 +7,9 @@
 //! CubeCL Flash Attention still host-roundtrips
 //! ([`crate::kernels::cubecl::interop_requires_host_roundtrip`]).
 //!
-//! Scope: f32. RMSNorm, SwiGLU `silu⊙up`, RoPE apply, chunked CE.
+//! Scope: f32. RMSNorm, SwiGLU `silu⊙up`, RoPE apply, chunked CE, online attention.
 
+pub mod attention;
 pub mod ce;
 #[cfg(feature = "cuda")]
 pub mod nvrtc;
@@ -16,6 +17,7 @@ pub mod rmsnorm;
 pub mod rope;
 pub mod swiglu;
 
+pub use attention::{attention_custom_op, attention_device, AttentionOp};
 pub use ce::{chunked_cross_entropy, ChunkedCrossEntropyOp, DEFAULT_CE_CHUNK};
 pub use rmsnorm::{rmsnorm_custom_op, RmsNormOp};
 pub use rope::{rope_custom_op, RopeOp};

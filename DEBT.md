@@ -13,7 +13,9 @@
 | Candle `CustomOp3` RoPE apply | **Landed (1.0.4)** | P1b; `position_ids` still unused |
 | Candle `CustomOp2` chunked CE | **Landed (1.0.4)** | P1a; bwd still allocates `dlogits` |
 | Host `to_vec1` on CustomOp paths | **No** | `custom_op_device_resident() == true` |
-| CubeCL FA interop | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
+| CubeCL FA as default dispatch | **Removed** | Opt-in `UNSLOTH_CUBECL_FA`; default is CustomOp/Candle (no D2H) |
+| Tiled FA SRAM (true Flash) | **Open** | [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1 |
+| CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
 | f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
 | Fused linear+CE / packing RoPE gather | **Next (P2 / axolotl)** | Not a kernel-crate default |
 

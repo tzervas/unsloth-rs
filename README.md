@@ -25,7 +25,7 @@ kernels:
 
 | Building block | CPU (Candle) | CUDA feature |
 |----------------|--------------|--------------|
-| Multi-head attention + GQA | ✅ | Candle CUDA + optional Flash path |
+| Multi-head attention + GQA | ✅ CustomOp online-softmax | Candle CUDA GEMM (no CubeCL copy). CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
 | RoPE | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | SwiGLU `silu⊙up` | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
@@ -51,9 +51,10 @@ still incomplete.
 
 ### Partial / experimental
 
-- Flash Attention via CubeCL (`cuda` feature): real kernels exist; **host D2H/H2D
-  interop is a permanent limitation** with Candle 0.9 + CubeCL 0.9 public APIs
-  (`interop_requires_host_roundtrip()` → true). **No end-to-end speedup claims.**
+- Flash Attention via CubeCL (`cuda` feature): **opt-in** (`UNSLOTH_CUBECL_FA=1`).
+  Default FA path is CustomOp / Candle CUDA (**no** `to_vec1`). CubeCL still
+  host-roundtrips (`interop_requires_host_roundtrip()`). Tiled FA SRAM is
+  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1, not this crate.
 - GPU numerical equivalence gate: runs under `--features cuda` (not default CI);
   needs `/dev/nvidia0` (see [DEBT.md](DEBT.md)); **BLOCKED:env** without full device nodes
 - Ternary quantization experiments (CPU compression ratios only; GPU ternary archived)
@@ -72,7 +73,8 @@ still incomplete.
 
 **Docs:** [CHANGELOG.md](CHANGELOG.md) · [ROADMAP.md](ROADMAP.md) · [DEBT.md](DEBT.md) ·
 [GPU_SETUP.md](GPU_SETUP.md) · [PUBLISHING.md](PUBLISHING.md) ·
-[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles).
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles) ·
+[docs/TRITON.md](docs/TRITON.md) (Triton lives in triton-bridge-rs, not here).
 
 Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are in
 [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md).

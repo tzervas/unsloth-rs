@@ -200,9 +200,9 @@ Fill in numbers as they open. Do not let January `ISSUE_STATUS.md` override this
 
 | Tracker | Repo | Issue |
 |---------|------|-------|
-| This file | unsloth-rs | -- |
-| Master ecosystem tracker | unsloth-rs | TBD |
-| Invert DAG + version lockstep | rust-ai-core | TBD |
-| Wire `unsloth` feature | axolotl-rs | TBD |
-| Consume kernels, don't fork them | peft-rs | TBD |
-| NF4-GEMM via unsloth | qlora-rs | TBD |
+| This file | unsloth-rs | PR #86 |
+| Master ecosystem tracker | unsloth-rs | #87 |
+| Invert DAG + version lockstep | rust-ai-core | [tzervas/rust-ai-core#9](https://github.com/tzervas/rust-ai-core/issues/9) |
+| Wire `unsloth` feature | axolotl-rs | [tzervas/axolotl-rs#69](https://github.com/tzervas/axolotl-rs/issues/69) |
+| Consume kernels, don't fork them | peft-rs | [tzervas/peft-rs#69](https://github.com/tzervas/peft-rs/issues/69) |
+| NF4-GEMM via unsloth | qlora-rs | [tzervas/qlora-rs#48](https://github.com/tzervas/qlora-rs/issues/48) |

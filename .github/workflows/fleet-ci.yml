@@ -1,5 +1,8 @@
-# Fleet standard CI — self-hosted. Honest status on trunk via Actions badge.
-# See docs/FLEET_STANDARDS.md (or plans/fractal/P26_FLEET_STANDARDS.md).
+# Fleet standard CI — self-hosted via gha-runner-ctl (Podman work containers).
+# Labels MUST match the fleet agent registration + size tier.
+# See: https://github.com/tzervas/gha-runner-ctl/blob/main/docs/FLEET_STANDARDS.md
+#      https://github.com/tzervas/gha-runner-ctl/blob/main/docs/HONEST_CI.md
+#      https://github.com/tzervas/gha-runner-ctl/blob/main/docs/DYNAMIC_POOL.md
 name: fleet-ci
 
 on:
@@ -10,22 +13,27 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: fleet-ci-${{ github.workflow }}-${{ github.ref }}
+  group: fleet-ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   detect:
     name: detect stack
     runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 10
     outputs:
       rust: ${{ steps.d.outputs.rust }}
       python: ${{ steps.d.outputs.python }}
     steps:
       - uses: actions/checkout@v4
       - id: d
+        name: Detect stacks
         run: |
           set -euo pipefail
           rust=false; python=false
@@ -39,21 +47,50 @@ jobs:
     name: cargo check/test
     needs: detect
     if: needs.detect.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
+    # large: 12c/16g — required for workspace + kernel crates (DYNAMIC_POOL)
+    runs-on: [self-hosted, linux, x64, podman, large]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: Runner preflight
+        run: |
+          set -euo pipefail
+          echo "HONEST_CI step=runner_preflight"
+          uname -a || true
+          id
+          df -h . || true
+
+      - name: Toolchain preflight
+        run: |
+          set -euo pipefail
+          echo "HONEST_CI step=toolchain_preflight"
+          if ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+            echo "::error title=FAIL_ENV::rustc/cargo not on PATH in work image"
+            echo "HONEST_CI class=FAIL_ENV detail=toolchain_missing"
+            exit 1
+          fi
+          rustc --version
+          cargo --version
+
       - name: cargo check
-        run: cargo check --workspace --all-targets
+        run: |
+          set -euo pipefail
+          cargo check --workspace --all-targets
+
       # CPU default. Do not add a silent GPU job that passes without a device.
       # GPU builds: CUDA_COMPUTE_CAP pin + FAIL_ENV when no /dev/nvidia* (GPU_SETUP.md).
       - name: cargo test
-        run: cargo test --workspace
+        run: |
+          set -euo pipefail
+          cargo test --workspace
 
   python:
     name: python lint/test
     needs: detect
     if: needs.detect.outputs.python == 'true'
     runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -61,11 +98,11 @@ jobs:
         with:
           version: "latest"
           enable-cache: true
-      - name: Sync (best-effort)
+      - name: Sync deps
         run: |
           set -euo pipefail
           if [ -f uv.lock ] || [ -f pyproject.toml ]; then
-            uv sync --all-groups 2>/dev/null || uv sync 2>/dev/null || true
+            uv sync --all-groups || uv sync
           fi
       - name: Ruff (if configured)
         run: |
@@ -73,15 +110,21 @@ jobs:
           if [ -f pyproject.toml ] && grep -q '\[tool.ruff' pyproject.toml 2>/dev/null; then
             uv run ruff check . || python -m ruff check .
           else
-            echo "ruff not configured — skip"
+            echo "ruff not configured — skip (not a claimed gate)"
+            echo "HONEST_CI class=SKIP_STUB detail=ruff_not_configured"
           fi
       - name: Pytest (if tests exist)
         run: |
           set -euo pipefail
           if [ -d tests ] || [ -d test ]; then
-            uv run pytest -q 2>/dev/null || pytest -q 2>/dev/null || echo "pytest failed or missing — mark job fail" >&2
+            if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
+              uv run pytest -q
+            else
+              pytest -q
+            fi
           else
             echo "no tests/ directory — skip"
+            echo "HONEST_CI class=SKIP_STUB detail=no_tests_dir"
           fi
 
   noop:
@@ -89,7 +132,9 @@ jobs:
     needs: detect
     if: needs.detect.outputs.rust != 'true' && needs.detect.outputs.python != 'true'
     runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 5
     steps:
       - run: |
           echo "No Cargo.toml / pyproject detected. fleet-ci reports success with no gates."
           echo "Add stack files or a product-specific CI job for real coverage."
+          echo "HONEST_CI class=SKIP_STUB detail=no_stack"

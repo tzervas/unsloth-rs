@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - `docs/TRITON.md`: Triton compiler/FFI is
-  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs), not this crate.
+  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) `v0.1.0`
+  (contract only). Hook: `kernels::triton_bridge` (no Cargo dep, never dispatches).
 
 ## [1.0.4] - 2026-08-17
 

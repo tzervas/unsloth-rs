@@ -29,6 +29,7 @@ pub mod rmsnorm;
 pub mod rope;
 pub mod swiglu;
 pub mod ternary;
+pub mod triton_bridge;
 
 // Core attention exports
 pub use attention::{FusedAttention, FusedAttentionConfig};
@@ -46,6 +47,10 @@ pub use custom_op::{
 pub use rmsnorm::RmsNorm;
 pub use rope::RotaryEmbedding;
 pub use swiglu::SwiGLU;
+pub use triton_bridge::{
+    should_dispatch_triton_bridge, triton_bridge_feature_enabled, triton_bridge_not_ready_reason,
+    triton_bridge_ready,
+};
 
 // Fused CubeCL kernel exports
 #[cfg(feature = "cuda")]

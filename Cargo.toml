@@ -42,6 +42,9 @@ cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
 _ternary_cubecl_todo = []
 # Experimental tiled FA-2; gated off until CubeCL comptime issues resolved
 _phase2_tiled_kernel = []
+# Reserved: compile-time cfg only. Does NOT depend on triton-bridge 0.1.0
+# (contract stub, bridge_ready() == false). Link after Phase 1 + crates.io.
+triton-bridge = []
 
 [lints.rust]
 missing_docs = "warn"

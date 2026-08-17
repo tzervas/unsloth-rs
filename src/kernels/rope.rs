@@ -31,7 +31,8 @@ pub struct RotaryEmbedding {
     cos_cache: Tensor,
     /// Sine cache [`max_seq_len`, `head_dim/2`]  
     sin_cache: Tensor,
-    /// Head dimension
+    /// Head dimension (even). Used when building the cache.
+    #[allow(dead_code)]
     head_dim: usize,
 }
 
@@ -102,34 +103,17 @@ impl RotaryEmbedding {
         let cos = self.cos_cache.narrow(0, 0, seq_len)?;
         let sin = self.sin_cache.narrow(0, 0, seq_len)?;
 
-        let q_rotated = self.apply_rotary(q, &cos, &sin)?;
-        let k_rotated = self.apply_rotary(k, &cos, &sin)?;
+        let q_rotated = crate::kernels::custom_op::rope_custom_op(q, &cos, &sin)?;
+        let k_rotated = crate::kernels::custom_op::rope_custom_op(k, &cos, &sin)?;
 
         Ok((q_rotated, k_rotated))
     }
 
     /// CUDA implementation.
     ///
-    /// Uses Candle's CUDA backend for GPU acceleration.
-    /// The algorithm is the same as the CPU implementation.
+    /// Same algorithm as CPU — CustomOp is device-dispatched by Candle.
     fn forward_cuda(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
-        tracing::debug!("Using CUDA RoPE path for Q shape {:?}", q.shape());
         self.forward_cpu(q, k)
-    }
-
-    fn apply_rotary(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        let half_dim = self.head_dim / 2;
-
-        // Split into two halves
-        let x1 = x.narrow(3, 0, half_dim)?;
-        let x2 = x.narrow(3, half_dim, half_dim)?;
-
-        // Apply rotation: [x1, x2] -> [x1*cos - x2*sin, x2*cos + x1*sin]
-        let rotated_x1 = (x1.broadcast_mul(cos)? - x2.broadcast_mul(sin)?)?;
-        let rotated_x2 = (x2.broadcast_mul(cos)? + x1.broadcast_mul(sin)?)?;
-
-        // Concatenate
-        Tensor::cat(&[&rotated_x1, &rotated_x2], 3).map_err(Into::into)
     }
 }
 

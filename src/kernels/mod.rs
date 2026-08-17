@@ -36,7 +36,11 @@ pub use attention_cubecl::{flash_attention_cubecl, has_cubecl_support};
 pub use cubecl::{flash_attention_kernel, FlashAttentionConfig};
 
 // G0 CustomOp
-pub use custom_op::{custom_op_device_resident, custom_op_f32_only, rmsnorm_custom_op, RmsNormOp};
+pub use custom_op::{
+    chunked_cross_entropy, custom_op_device_resident, custom_op_f32_only, rmsnorm_custom_op,
+    rope_custom_op, swiglu_custom_op, ChunkedCrossEntropyOp, RmsNormOp, RopeOp, SwiGluOp,
+    DEFAULT_CE_CHUNK,
+};
 
 // Legacy layer exports
 pub use rmsnorm::RmsNorm;

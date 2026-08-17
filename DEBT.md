@@ -9,10 +9,13 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | Candle `CustomOp2` RMSNorm | **Landed (1.0.4)** | `kernels::custom_op`; CPU + CUDA `CudaStorage` |
-| Host `to_vec1` on this path | **No** | `custom_op_device_resident() == true` |
+| Candle `CustomOp2` SwiGLU `silu⊙up` | **Landed (1.0.4)** | P1c |
+| Candle `CustomOp3` RoPE apply | **Landed (1.0.4)** | P1b; `position_ids` still unused |
+| Candle `CustomOp2` chunked CE | **Landed (1.0.4)** | P1a; bwd still allocates `dlogits` |
+| Host `to_vec1` on CustomOp paths | **No** | `custom_op_device_resident() == true` |
 | CubeCL FA interop | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
 | f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
-| Fused CE / RoPE / SwiGLU CustomOp | **Next (P1)** | Same pattern as RMSNorm |
+| Fused linear+CE / packing RoPE gather | **Next (P2 / axolotl)** | Not a kernel-crate default |
 
 **Last updated (Flash residual):** 2026-07-22
  

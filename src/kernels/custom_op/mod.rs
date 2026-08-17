@@ -3,32 +3,31 @@
 
 //! Candle `CustomOp` kernels that stay on Candle storage.
 //!
-//! This is the **G0** path from `docs/ECOSYSTEM_GAPS.md`: operate on
-//! `CpuStorage` / `CudaStorage` inside Candle so we never `to_vec1` through
-//! host to reach CubeCL.
+//! G0 path: `CpuStorage` / `CudaStorage` only — never `to_vec1` into CubeCL.
+//! CubeCL Flash Attention still host-roundtrips
+//! ([`crate::kernels::cubecl::interop_requires_host_roundtrip`]).
 //!
-//! CubeCL Flash Attention still requires a host round-trip
-//! ([`crate::kernels::cubecl::interop_requires_host_roundtrip`]). These
-//! CustomOps do **not**.
-//!
-//! Scope for 1.0.4: f32 RMSNorm only. Fused CE / RoPE / SwiGLU follow the same
-//! pattern after this lands.
+//! Scope: f32. RMSNorm, SwiGLU `silu⊙up`, RoPE apply, chunked CE.
 
+pub mod ce;
+#[cfg(feature = "cuda")]
+pub mod nvrtc;
 pub mod rmsnorm;
+pub mod rope;
+pub mod swiglu;
 
+pub use ce::{chunked_cross_entropy, ChunkedCrossEntropyOp, DEFAULT_CE_CHUNK};
 pub use rmsnorm::{rmsnorm_custom_op, RmsNormOp};
+pub use rope::{rope_custom_op, RopeOp};
+pub use swiglu::{swiglu_custom_op, SwiGluOp};
 
-/// Returns `true` if the CustomOp RMSNorm forward path stays on Candle storage
-/// (no CubeCL handle, no `Tensor::to_vec1` D2H).
-///
-/// Always `true` once this module is compiled. CUDA still needs `--features
-/// cuda` and a device; without that the CPU CustomOp is used.
+/// CustomOp forward paths stay on Candle storage (no CubeCL handle, no D2H).
 #[must_use]
 pub const fn custom_op_device_resident() -> bool {
     true
 }
 
-/// Dtype scope for CustomOp kernels in 1.0.4.
+/// Dtype scope for CustomOp kernels.
 #[must_use]
 pub const fn custom_op_f32_only() -> bool {
     true
@@ -40,7 +39,6 @@ mod tests {
     fn honesty_flags() {
         assert!(super::custom_op_device_resident());
         assert!(super::custom_op_f32_only());
-        // CubeCL path is a different plane — still host-roundtrip.
         assert!(crate::kernels::cubecl::interop_requires_host_roundtrip());
     }
 }

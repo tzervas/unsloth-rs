@@ -179,8 +179,8 @@ fn cuda_rmsnorm(
     let w = w.slice(w1..w2);
 
     let mut y = unsafe { dev.alloc::<f32>(rows * hidden) }?;
-    let func = load_rmsnorm_func(&dev)?;
-    let block = next_pow2(hidden.min(1024)).max(1);
+    let func = super::nvrtc::load_func(&dev, "rmsnorm_f32", "unsloth_rmsnorm_f32", RMSNORM_SRC)?;
+    let block = super::nvrtc::next_pow2(hidden.min(1024)).max(1);
     let cfg = LaunchConfig {
         grid_dim: (rows as u32, 1, 1),
         block_dim: (block as u32, 1, 1),
@@ -201,25 +201,7 @@ fn cuda_rmsnorm(
 }
 
 #[cfg(feature = "cuda")]
-fn next_pow2(n: usize) -> usize {
-    if n <= 1 {
-        return 1;
-    }
-    n.next_power_of_two()
-}
-
-#[cfg(feature = "cuda")]
-fn load_rmsnorm_func(
-    dev: &candle_core::CudaDevice,
-) -> CandleResult<impl core::ops::Deref<Target = candle_core::cuda::cudarc::driver::CudaFunction>> {
-    let ptx = rmsnorm_ptx()?;
-    dev.get_or_load_custom_func("rmsnorm_f32", "unsloth_rmsnorm_f32", &ptx)
-}
-
-#[cfg(feature = "cuda")]
-fn rmsnorm_ptx() -> CandleResult<String> {
-    use candle_core::cuda::{cudarc, WrapErr};
-    let src = r#"
+const RMSNORM_SRC: &str = r#"
 extern "C" __global__ void rmsnorm_f32(
     const float* __restrict__ x,
     const float* __restrict__ w,
@@ -253,13 +235,6 @@ extern "C" __global__ void rmsnorm_f32(
     }
 }
 "#;
-    let opts = cudarc::nvrtc::CompileOptions {
-        use_fast_math: Some(true),
-        ..Default::default()
-    };
-    let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(src, opts).w()?;
-    Ok(ptx.to_src().to_string())
-}
 
 #[cfg(test)]
 mod tests {

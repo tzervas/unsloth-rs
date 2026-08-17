@@ -26,9 +26,10 @@ kernels:
 | Building block | CPU (Candle) | CUDA feature |
 |----------------|--------------|--------------|
 | Multi-head attention + GQA | ✅ | Candle CUDA + optional Flash path |
-| RoPE | ✅ | Elementwise CubeCL (partial) |
+| RoPE | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
-| SwiGLU | ✅ | Elementwise CubeCL + CPU fallback |
+| SwiGLU `silu⊙up` | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
+| Chunked cross-entropy | ✅ CustomOp | CustomOp (no `[N,V]` softmax) |
 | Memory / checkpoint **estimates** | ✅ (math only) | n/a |
 | Ternary quant / linear (CPU) | ✅ experimental | GPU CubeCL **archived non-goal** |
 | Mixed-precision helpers | ✅ config + scale utils | not a trainer |
@@ -43,9 +44,8 @@ still incomplete.
 ### Solid today
 
 - Multi-head attention (CPU reference; correct `1/√head_dim` scaling)
-- RoPE, SwiGLU on CPU
-- **RMSNorm CustomOp** (CPU + CUDA `CudaStorage`, f32) — no CubeCL host copy
-  (`custom_op_device_resident()`)
+- **RMSNorm / RoPE / SwiGLU / chunked CE CustomOps** (CPU + CUDA `CudaStorage`,
+  f32) — no CubeCL host copy (`custom_op_device_resident()`)
 - Memory estimation helpers
 - Default-feature CPU test suite (unit + integration)
 

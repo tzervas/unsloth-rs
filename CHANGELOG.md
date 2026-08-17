@@ -10,19 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.4] - 2026-08-17
 
 ### Added
-- **G0 CustomOp RMSNorm** (`kernels::custom_op`): Candle `CustomOp2` on
-  `CpuStorage` / `CudaStorage`. No CubeCL handle, no `to_vec1` host copy.
-  CUDA launches a one-block-per-row NVRTC kernel (`--features cuda`).
+- **G0 CustomOp family** (`kernels::custom_op`):
+  - RMSNorm (`CustomOp2`)
+  - SwiGLU `silu⊙up` (`CustomOp2`)
+  - RoPE apply (`CustomOp3`)
+  - Chunked cross-entropy (`CustomOp2`, mean over non-ignored tokens)
+- Shared NVRTC helper (`custom_op::nvrtc`, `--features cuda`).
 - Honesty flags: `custom_op_device_resident()`, `custom_op_f32_only()`.
-- `RmsNorm::forward` now uses the CustomOp path (f32).
+- `RmsNorm` / `RotaryEmbedding` / `SwiGLU` / `fused_swiglu::swiglu` /
+  `fused_rmsnorm_rope::{rmsnorm,rope}` now take the CustomOp path (f32).
+- `chunked_cross_entropy(logits, targets, ignore_index, chunk_size)`.
+- `docs/P1_CUSTOMOP_PLAN.md` (planning pass that this release implements).
 
 ### Notes
 - CubeCL Flash Attention interop is **unchanged** (`interop_requires_host_roundtrip() == true`).
-- CustomOp is f32-only in 1.0.4. Fused CE / RoPE / SwiGLU CustomOps are next (P1).
-- Backward is unfused Candle ops on the same device (still no D2H).
+- CustomOp is f32-only. CE backward still allocates `dlogits [N,V]` (needed
+  for `lm_head` autograd). Fused linear+CE is **not** in this crate.
+- `position_ids` on `RotaryEmbedding::forward` remain unused (sequential
+  `0..S` cache), same as 1.0.3.
 
 ### Documentation
-- DEBT.md: P0d RMSNorm CustomOp landed; CubeCL host copy remains BLOCKED:api.
+- DEBT.md: P0d + P1 CustomOps landed; CubeCL host copy remains BLOCKED:api.
 
 ## [1.0.3] - 2026-07-22
 

@@ -1,6 +1,7 @@
 # P1 CustomOp plan (unsloth-rs)
 
-**Status:** planning frozen 2026-08-17 → implement on `feat/p1-customop-kernels`  
+**Status:** implemented 2026-08-17 on `feat/p1-customop-kernels`  
+
 **Depends on:** P0d CustomOp RMSNorm (`feat/p0d-customop-rmsnorm`, [PR #88](https://github.com/tzervas/unsloth-rs/pull/88))  
 **Parent tracker:** [#87](https://github.com/tzervas/unsloth-rs/issues/87)
 

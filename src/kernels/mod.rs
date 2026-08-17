@@ -39,8 +39,10 @@ pub use cubecl::{flash_attention_kernel, FlashAttentionConfig};
 // G0 CustomOp
 pub use custom_op::{
     attention_custom_op, attention_device, chunked_cross_entropy, custom_op_device_resident,
-    custom_op_f32_only, rmsnorm_custom_op, rope_custom_op, swiglu_custom_op, AttentionOp,
-    ChunkedCrossEntropyOp, RmsNormOp, RopeOp, SwiGluOp, DEFAULT_CE_CHUNK,
+    custom_op_f32_only, fused_linear_ce_avoids_full_logits, fused_linear_cross_entropy,
+    rmsnorm_custom_op, rope_custom_op, rope_with_position_ids, swiglu_custom_op, AttentionOp,
+    ChunkedCrossEntropyOp, FusedLinearCrossEntropyOp, RmsNormOp, RopeOp, SwiGluOp,
+    DEFAULT_CE_CHUNK,
 };
 
 // Legacy layer exports

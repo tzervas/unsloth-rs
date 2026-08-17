@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rope_with_position_ids` + `RotaryEmbedding::forward` honors packed `[B,S]` ids.
+- CPU `fused_linear_cross_entropy` (no `[N,V]`). CUDA still materializes logits.
+
 ### Changed
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
   CubeCL `to_vec1`). CubeCL FA only if `UNSLOTH_CUBECL_FA` is set.

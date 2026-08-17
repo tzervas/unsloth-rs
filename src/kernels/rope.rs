@@ -18,6 +18,7 @@
 //! - Pre-computes cos/sin caches up to `max_seq_len` for efficiency
 //! - Applies rotation in pairs: splits `head_dim` in half and rotates each pair
 //! - Uses standard rotation formula: [x1*cos - x2*sin, x2*cos + x1*sin]
+//! - `forward` honors `position_ids` (packed / non-contiguous positions)
 
 use candle_core::{Device, Tensor};
 
@@ -29,7 +30,7 @@ use crate::error::Result;
 pub struct RotaryEmbedding {
     /// Cosine cache [`max_seq_len`, `head_dim/2`]
     cos_cache: Tensor,
-    /// Sine cache [`max_seq_len`, `head_dim/2`]  
+    /// Sine cache [`max_seq_len`, `head_dim/2`]
     sin_cache: Tensor,
     /// Head dimension (even). Used when building the cache.
     #[allow(dead_code)]
@@ -45,7 +46,6 @@ impl RotaryEmbedding {
     /// * `base` - Base for frequency computation (typically 10000)
     /// * `device` - Device for tensors
     pub fn new(head_dim: usize, max_seq_len: usize, base: f32, device: &Device) -> Result<Self> {
-        // Compute inverse frequencies
         let inv_freq: Vec<f32> = (0..head_dim)
             .step_by(2)
             .map(|i| 1.0 / base.powf(i as f32 / head_dim as f32))
@@ -53,14 +53,11 @@ impl RotaryEmbedding {
 
         let inv_freq = Tensor::from_vec(inv_freq, (head_dim / 2,), device)?;
 
-        // Compute position indices
         let positions: Vec<f32> = (0..max_seq_len).map(|i| i as f32).collect();
         let positions = Tensor::from_vec(positions, (max_seq_len, 1), device)?;
 
-        // Compute frequencies: [max_seq_len, head_dim/2]
         let freqs = positions.matmul(&inv_freq.unsqueeze(0)?)?;
 
-        // Compute cos and sin caches
         let cos_cache = freqs.cos()?;
         let sin_cache = freqs.sin()?;
 
@@ -76,7 +73,7 @@ impl RotaryEmbedding {
     /// # Arguments
     /// * `q` - Query tensor [batch, `num_heads`, `seq_len`, `head_dim`]
     /// * `k` - Key tensor [batch, `num_kv_heads`, `seq_len`, `head_dim`]
-    /// * `position_ids` - Position indices [batch, `seq_len`]
+    /// * `position_ids` - i64 indices `[seq_len]` or `[batch, seq_len]`
     ///
     /// # Returns
     /// Tuple of (`rotated_q`, `rotated_k`)
@@ -84,36 +81,31 @@ impl RotaryEmbedding {
         &self,
         q: &Tensor,
         k: &Tensor,
-        _position_ids: &Tensor,
+        position_ids: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        let device = q.device();
-
-        if device.is_cuda() {
-            self.forward_cuda(q, k)
-        } else {
-            self.forward_cpu(q, k)
-        }
-    }
-
-    /// CPU reference implementation for `RoPE`.
-    fn forward_cpu(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
-        let seq_len = q.dim(2)?;
-
-        // Get cos/sin for positions
-        let cos = self.cos_cache.narrow(0, 0, seq_len)?;
-        let sin = self.sin_cache.narrow(0, 0, seq_len)?;
-
-        let q_rotated = crate::kernels::custom_op::rope_custom_op(q, &cos, &sin)?;
-        let k_rotated = crate::kernels::custom_op::rope_custom_op(k, &cos, &sin)?;
-
+        let q_rotated = crate::kernels::custom_op::rope_with_position_ids(
+            q,
+            &self.cos_cache,
+            &self.sin_cache,
+            position_ids,
+        )?;
+        let k_rotated = crate::kernels::custom_op::rope_with_position_ids(
+            k,
+            &self.cos_cache,
+            &self.sin_cache,
+            position_ids,
+        )?;
         Ok((q_rotated, k_rotated))
     }
 
-    /// CUDA implementation.
-    ///
-    /// Same algorithm as CPU — CustomOp is device-dispatched by Candle.
-    fn forward_cuda(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
-        self.forward_cpu(q, k)
+    /// Sequential `0..seq` apply (no `position_ids`). Prefer [`Self::forward`].
+    pub fn forward_sequential(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+        let seq_len = q.dim(2)?;
+        let cos = self.cos_cache.narrow(0, 0, seq_len)?;
+        let sin = self.sin_cache.narrow(0, 0, seq_len)?;
+        let q_rotated = crate::kernels::custom_op::rope_custom_op(q, &cos, &sin)?;
+        let k_rotated = crate::kernels::custom_op::rope_custom_op(k, &cos, &sin)?;
+        Ok((q_rotated, k_rotated))
     }
 }
 
@@ -142,5 +134,29 @@ mod tests {
 
         assert_eq!(q_rot.shape().dims(), &[1, 12, 10, 64]);
         assert_eq!(k_rot.shape().dims(), &[1, 12, 10, 64]);
+    }
+
+    #[test]
+    fn forward_honors_nontrivial_ids() {
+        let device = Device::Cpu;
+        let rope = RotaryEmbedding::new(8, 32, 10000.0, &device).unwrap();
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 4, 8), &device).unwrap();
+        let k = q.clone();
+        let a = Tensor::from_vec(vec![0i64, 1, 2, 3], (4,), &device).unwrap();
+        let b = Tensor::from_vec(vec![8i64, 9, 10, 11], (4,), &device).unwrap();
+        let (qa, _) = rope.forward(&q, &k, &a).unwrap();
+        let (qb, _) = rope.forward(&q, &k, &b).unwrap();
+        let mae = (qa - qb)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(
+            mae > 1e-4,
+            "different ids should rotate differently, mae={mae}"
+        );
     }
 }

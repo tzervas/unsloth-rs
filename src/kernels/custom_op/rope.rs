@@ -3,16 +3,22 @@
 
 //! Device-resident RoPE apply via Candle [`CustomOp3`].
 //!
-//! `x`: `[B, H, S, D]`, `cos`/`sin`: `[S, D/2]`. Half-rotate along last dim.
+//! `x`: `[B, H, S, D]`. `cos`/`sin` are either `[S, D/2]` (same positions for
+//! every batch row) or `[B, S, D/2]` (per-row gather — packed / `position_ids`).
 
 use candle_core::{CpuStorage, CustomOp3, DType, Layout, Result as CandleResult, Shape, Tensor};
 
-/// Apply rotary embedding (sequential positions `0..S`).
+/// Apply rotary embedding.
 #[derive(Clone, Debug, Default)]
-pub struct RopeOp;
+pub struct RopeOp {
+    /// `true` when cos/sin are `[B, S, D/2]` instead of `[S, D/2]`.
+    pub batched_cache: bool,
+}
 
-/// Apply RoPE. f32 only. `position_ids` are **not** consumed — caller must
-/// narrow or gather `cos`/`sin` first (keeps current `RotaryEmbedding` semantics).
+/// Apply RoPE. f32 only.
+///
+/// `cos` / `sin`: `[S, D/2]` or `[B, S, D/2]`. For `position_ids`, prefer
+/// [`rope_with_position_ids`].
 ///
 /// # Errors
 ///
@@ -30,41 +36,140 @@ pub fn rope_custom_op(x: &Tensor, cos: &Tensor, sin: &Tensor) -> CandleResult<Te
         candle_core::bail!("RoPE x must be [B,H,S,D], got {:?}", x.shape());
     }
     let dims = x.dims();
+    let batch = dims[0];
     let seq = dims[2];
     let head = dims[3];
     if !head.is_multiple_of(2) {
         candle_core::bail!("RoPE head_dim must be even, got {head}");
     }
     let half = head / 2;
-    if cos.dims() != [seq, half] || sin.dims() != [seq, half] {
-        candle_core::bail!(
-            "RoPE cos/sin must be [{seq}, {half}], got {:?} / {:?}",
-            cos.shape(),
-            sin.shape()
-        );
-    }
+    let batched_cache = match cos.rank() {
+        2 => {
+            if cos.dims() != [seq, half] || sin.dims() != [seq, half] {
+                candle_core::bail!(
+                    "RoPE cos/sin must be [{seq}, {half}], got {:?} / {:?}",
+                    cos.shape(),
+                    sin.shape()
+                );
+            }
+            false
+        }
+        3 => {
+            if cos.dims() != [batch, seq, half] || sin.dims() != [batch, seq, half] {
+                candle_core::bail!(
+                    "RoPE batched cos/sin must be [{batch}, {seq}, {half}], got {:?} / {:?}",
+                    cos.shape(),
+                    sin.shape()
+                );
+            }
+            true
+        }
+        _ => candle_core::bail!("RoPE cos rank {} (want 2 or 3)", cos.rank()),
+    };
     let x = x.contiguous()?;
     let cos = cos.contiguous()?;
     let sin = sin.contiguous()?;
-    x.apply_op3(&cos, &sin, RopeOp)
+    x.apply_op3(&cos, &sin, RopeOp { batched_cache })
 }
 
-fn cpu_rope(
-    x: &[f32],
-    cos: &[f32],
-    sin: &[f32],
+/// Apply RoPE using a full cache and `position_ids`.
+///
+/// `cos_cache` / `sin_cache`: `[max_seq, D/2]`.
+/// `position_ids`: i64 `[S]` or `[B, S]`. Device-resident gather (`index_select`).
+///
+/// # Errors
+///
+/// Shape/dtype mismatch or out-of-range ids (Candle `index_select`).
+pub fn rope_with_position_ids(
+    x: &Tensor,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    position_ids: &Tensor,
+) -> CandleResult<Tensor> {
+    if x.rank() != 4 {
+        candle_core::bail!("RoPE x must be [B,H,S,D], got {:?}", x.shape());
+    }
+    if cos_cache.rank() != 2 || sin_cache.rank() != 2 {
+        candle_core::bail!(
+            "RoPE cache must be [max, D/2], got {:?} / {:?}",
+            cos_cache.shape(),
+            sin_cache.shape()
+        );
+    }
+    let batch = x.dim(0)?;
+    let seq = x.dim(2)?;
+    let half = x.dim(3)? / 2;
+    if cos_cache.dim(1)? != half || sin_cache.dim(1)? != half {
+        candle_core::bail!("RoPE cache last dim {} vs head/2 {half}", cos_cache.dim(1)?);
+    }
+    let ids = position_ids.to_dtype(DType::I64)?.contiguous()?;
+    let (cos, sin) = gather_rope_cache(cos_cache, sin_cache, &ids, batch, seq)?;
+    rope_custom_op(x, &cos, &sin)
+}
+
+fn gather_rope_cache(
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    ids: &Tensor,
+    batch: usize,
+    seq: usize,
+) -> CandleResult<(Tensor, Tensor)> {
+    match ids.rank() {
+        1 => {
+            if ids.dim(0)? != seq {
+                candle_core::bail!("position_ids [S] len {} != seq {seq}", ids.dim(0)?);
+            }
+            let cos = cos_cache.index_select(ids, 0)?;
+            let sin = sin_cache.index_select(ids, 0)?;
+            Ok((cos, sin))
+        }
+        2 => {
+            if ids.dims() != [batch, seq] {
+                candle_core::bail!(
+                    "position_ids must be [{batch}, {seq}], got {:?}",
+                    ids.shape()
+                );
+            }
+            let flat = ids.flatten_all()?;
+            let cos = cos_cache
+                .index_select(&flat, 0)?
+                .reshape((batch, seq, cos_cache.dim(1)?))?;
+            let sin = sin_cache
+                .index_select(&flat, 0)?
+                .reshape((batch, seq, sin_cache.dim(1)?))?;
+            Ok((cos, sin))
+        }
+        rank => candle_core::bail!("position_ids rank {rank} (want 1 or 2)"),
+    }
+}
+
+struct RopeGeom {
     batch: usize,
     heads: usize,
     seq: usize,
     dim: usize,
-) -> Vec<f32> {
+    batched_cache: bool,
+}
+
+fn cpu_rope(x: &[f32], cos: &[f32], sin: &[f32], geom: RopeGeom) -> Vec<f32> {
+    let RopeGeom {
+        batch,
+        heads,
+        seq,
+        dim,
+        batched_cache,
+    } = geom;
     let half = dim / 2;
     let mut out = vec![0.0f32; batch * heads * seq * dim];
     for batch_i in 0..batch {
         for head_i in 0..heads {
             for seq_i in 0..seq {
                 let base = ((batch_i * heads + head_i) * seq + seq_i) * dim;
-                let cbase = seq_i * half;
+                let cbase = if batched_cache {
+                    (batch_i * seq + seq_i) * half
+                } else {
+                    seq_i * half
+                };
                 for pair in 0..half {
                     let x1 = x[base + pair];
                     let x2 = x[base + half + pair];
@@ -109,7 +214,18 @@ impl CustomOp3 for RopeOp {
         let x = &s1.as_slice::<f32>()?[x_span.0..x_span.1];
         let cos = &s2.as_slice::<f32>()?[cos_span.0..cos_span.1];
         let sin = &s3.as_slice::<f32>()?[sin_span.0..sin_span.1];
-        let out = cpu_rope(x, cos, sin, dims[0], dims[1], dims[2], dims[3]);
+        let out = cpu_rope(
+            x,
+            cos,
+            sin,
+            RopeGeom {
+                batch: dims[0],
+                heads: dims[1],
+                seq: dims[2],
+                dim: dims[3],
+                batched_cache: self.batched_cache,
+            },
+        );
         Ok((CpuStorage::F32(out), l1.shape().clone()))
     }
 
@@ -123,7 +239,7 @@ impl CustomOp3 for RopeOp {
         s3: &candle_core::CudaStorage,
         l3: &Layout,
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-        cuda_rope(s1, l1, s2, l2, s3, l3)
+        cuda_rope(s1, l1, s2, l2, s3, l3, self.batched_cache)
     }
 
     fn bwd(
@@ -134,7 +250,6 @@ impl CustomOp3 for RopeOp {
         _y: &Tensor,
         gy: &Tensor,
     ) -> CandleResult<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
-        // RoPE is orthogonal: dx = rope(gy, cos, -sin). Caches do not take grad.
         let neg_sin = sin.neg()?;
         let dx = rope_custom_op(gy, cos, &neg_sin)?;
         Ok((Some(dx), None, None))
@@ -149,6 +264,7 @@ fn cuda_rope(
     lc: &Layout,
     ss: &candle_core::CudaStorage,
     ls: &Layout,
+    batched_cache: bool,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::load_func;
     use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
@@ -181,6 +297,8 @@ fn cuda_rope(
     };
     let half_i = half as i32;
     let seq_i = seq as i32;
+    let heads_i = heads as i32;
+    let batched_i = i32::from(batched_cache);
     let stream = dev.cuda_stream();
     let mut builder = stream.launch_builder(&func);
     builder.arg(&x);
@@ -189,6 +307,8 @@ fn cuda_rope(
     builder.arg(&y);
     builder.arg(&half_i);
     builder.arg(&seq_i);
+    builder.arg(&heads_i);
+    builder.arg(&batched_i);
     unsafe { builder.launch(cfg) }.w()?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()))
 }
@@ -201,15 +321,23 @@ extern "C" __global__ void rope_f32(
     const float* __restrict__ sin,
     float* __restrict__ y,
     int half,
-    int seq
+    int seq,
+    int heads,
+    int batched
 ) {
     int row = (int)blockIdx.x;
     int tid = (int)threadIdx.x;
     int s = row % seq;
+    int b = 0;
+    if (batched) {
+        int rows_per_batch = heads * seq;
+        b = row / rows_per_batch;
+    }
+    int cache_row = batched ? (b * seq + s) : s;
     const float* xr = x + (size_t)row * (size_t)(2 * half);
     float* yr = y + (size_t)row * (size_t)(2 * half);
-    const float* cr = cos + (size_t)s * (size_t)half;
-    const float* sr = sin + (size_t)s * (size_t)half;
+    const float* cr = cos + (size_t)cache_row * (size_t)half;
+    const float* sr = sin + (size_t)cache_row * (size_t)half;
     for (int i = tid; i < half; i += (int)blockDim.x) {
         float x1 = xr[i];
         float x2 = xr[half + i];
@@ -261,5 +389,90 @@ mod tests {
         let cos = Tensor::zeros((2, 2), DType::F32, &d).unwrap();
         let sin = Tensor::zeros((2, 2), DType::F32, &d).unwrap();
         assert!(rope_custom_op(&x, &cos, &sin).is_err());
+    }
+
+    #[test]
+    fn position_ids_offset_differs_from_sequential() {
+        let d = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 1.0, (1, 2, 4, 8), &d).unwrap();
+        let cache_len = 16;
+        let half = 4;
+        let cos = Tensor::randn(0.0f32, 0.3, (cache_len, half), &d).unwrap();
+        let sin = Tensor::randn(0.0f32, 0.3, (cache_len, half), &d).unwrap();
+        let seq_ids =
+            Tensor::from_vec((0..4).map(i64::from).collect::<Vec<_>>(), (4,), &d).unwrap();
+        let off_ids =
+            Tensor::from_vec((3..7).map(i64::from).collect::<Vec<_>>(), (4,), &d).unwrap();
+        let y0 = rope_with_position_ids(&x, &cos, &sin, &seq_ids).unwrap();
+        let y1 = rope_with_position_ids(&x, &cos, &sin, &off_ids).unwrap();
+        let seq_narrow = rope_custom_op(
+            &x,
+            &cos.narrow(0, 0, 4).unwrap(),
+            &sin.narrow(0, 0, 4).unwrap(),
+        )
+        .unwrap();
+        let mae_seq = (y0.clone() - seq_narrow)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae_seq < 1e-6, "seq gather mae={mae_seq}");
+        let mae_off = (y0 - y1)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(
+            mae_off > 1e-4,
+            "offset ids should change RoPE, mae={mae_off}"
+        );
+    }
+
+    #[test]
+    fn packed_batch_rows_use_own_ids() {
+        let d = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 1.0, (2, 1, 3, 4), &d).unwrap();
+        let cos = Tensor::randn(0.0f32, 0.4, (12, 2), &d).unwrap();
+        let sin = Tensor::randn(0.0f32, 0.4, (12, 2), &d).unwrap();
+        // row0: 0,1,2  row1: 5,6,7 (reset / pack)
+        let ids = Tensor::from_vec(vec![0i64, 1, 2, 5, 6, 7], (2, 3), &d).unwrap();
+        let y = rope_with_position_ids(&x, &cos, &sin, &ids).unwrap();
+        let y0 = rope_custom_op(
+            &x.narrow(0, 0, 1).unwrap(),
+            &cos.narrow(0, 0, 3).unwrap(),
+            &sin.narrow(0, 0, 3).unwrap(),
+        )
+        .unwrap();
+        let y1 = rope_custom_op(
+            &x.narrow(0, 1, 1).unwrap(),
+            &cos.narrow(0, 5, 3).unwrap(),
+            &sin.narrow(0, 5, 3).unwrap(),
+        )
+        .unwrap();
+        let got0 = y.narrow(0, 0, 1).unwrap();
+        let got1 = y.narrow(0, 1, 1).unwrap();
+        let m0 = (got0 - y0)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        let m1 = (got1 - y1)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(m0 < 1e-6 && m1 < 1e-6, "packed mae {m0} {m1}");
     }
 }

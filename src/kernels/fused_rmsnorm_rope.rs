@@ -447,8 +447,25 @@ pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothRe
         )));
     }
 
+    let seq = input_shape[2];
+    let max = cos_cache.dim(0)?;
+    if max < seq {
+        return Err(UnslothError::InvalidConfig(format!(
+            "RoPE cache {max} < seq {seq}"
+        )));
+    }
+    let cos = if max == seq {
+        cos_cache.clone()
+    } else {
+        cos_cache.narrow(0, 0, seq)?
+    };
+    let sin = if max == seq {
+        sin_cache.clone()
+    } else {
+        sin_cache.narrow(0, 0, seq)?
+    };
     Ok(crate::kernels::custom_op::rope_custom_op(
-        input, cos_cache, sin_cache,
+        input, &cos, &sin,
     )?)
 }
 

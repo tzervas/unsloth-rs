@@ -296,14 +296,20 @@ enum WorkKind {
         scale: f32,
         causal: bool,
     },
+    FusedCe {
+        hidden: candle_core::Tensor,
+        weight: candle_core::Tensor,
+        targets: candle_core::Tensor,
+        chunk: usize,
+    },
 }
 
 #[cfg(feature = "cuda")]
 impl Work {
     fn run(&self) -> candle_core::Result<candle_core::Tensor> {
         use unsloth_rs::kernels::custom_op::{
-            attention_custom_op, chunked_cross_entropy, rmsnorm_custom_op, rope_custom_op,
-            swiglu_custom_op,
+            attention_custom_op, chunked_cross_entropy, fused_linear_cross_entropy,
+            rmsnorm_custom_op, rope_custom_op, swiglu_custom_op,
         };
         match &self.kind {
             WorkKind::Rms { x, w, eps } => rmsnorm_custom_op(x, w, *eps),
@@ -317,6 +323,12 @@ impl Work {
                 scale,
                 causal,
             } => attention_custom_op(q, k, v, *scale, *causal),
+            WorkKind::FusedCe {
+                hidden,
+                weight,
+                targets,
+                chunk,
+            } => fused_linear_cross_entropy(hidden, weight, targets, -100, *chunk),
         }
     }
 }
@@ -377,6 +389,11 @@ fn build_cases(device: &candle_core::Device) -> candle_core::Result<Vec<Case>> {
         rms_case(device, "compute", 1, 4096, 4096, false)?,
         swi_case(device, "compute", 1, 4096, 4096, false)?,
         ce_case(device, "compute", 512, 32768, false)?,
+        // Fused linear+CE (no [N,V] logits). Launch-bound matches compare V=128;
+        // compute uses the G-UNS-06 smoke-scale vocab tile.
+        fused_ce_case(device, "s128", 2 * 128, 64, 128, true)?,
+        fused_ce_case(device, "s512", 2 * 512, 64, 128, true)?,
+        fused_ce_case(device, "compute", 512, 4096, 32768, false)?,
     ])
 }
 
@@ -487,6 +504,38 @@ fn ce_case(
 }
 
 #[cfg(feature = "cuda")]
+fn fused_ce_case(
+    device: &candle_core::Device,
+    tag: &'static str,
+    n_tokens: usize,
+    dim: usize,
+    vocab: usize,
+    launch_bound: bool,
+) -> candle_core::Result<Case> {
+    use candle_core::{DType, Tensor};
+    let hidden = Tensor::randn(0.0f32, 1.0, (n_tokens, dim), device)?;
+    let weight = Tensor::randn(0.0f32, 1.0, (vocab, dim), device)?;
+    let targets = Tensor::zeros((n_tokens,), DType::I64, device)?;
+    Ok(Case {
+        id: format!("fused_linear_ce/{tag}"),
+        op: "fused_linear_ce",
+        tag,
+        elems: n_tokens * dim,
+        vocab: Some(vocab),
+        n: Some(n_tokens),
+        launch_bound,
+        work: Work {
+            kind: WorkKind::FusedCe {
+                hidden,
+                weight,
+                targets,
+                chunk: 4096,
+            },
+        },
+    })
+}
+
+#[cfg(feature = "cuda")]
 fn attn_case(
     device: &candle_core::Device,
     tag: &'static str,
@@ -548,7 +597,7 @@ fn write_json(
     writeln!(s, "  \"compute_apps\": {},", json_str(compute_apps.trim())).unwrap();
     writeln!(
         s,
-        "  \"note\": \"Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth remain one-shot in artifacts/py-rs-compare.json. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.\","
+        "  \"note\": \"Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth host+sync p50/p99 live in artifacts/py-rs-compare.json. fused_linear_ce is vocab-tile GEMM (no [N,V]). Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.\","
     )
     .unwrap();
     writeln!(s, "  \"samples\": 100,").unwrap();

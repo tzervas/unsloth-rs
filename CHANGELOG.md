@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compare harness records torch / Unsloth / rust **host+sync p50/p99**
   (warmup 5, n=100) in `artifacts/py-rs-compare.json`. Not one-shot.
   Device-event rust numbers remain `artifacts/custom_op_cuda.json`.
+- `custom_op_cuda` bench harvests `fused_linear_ce` host+event p50/p99
+  (s128/s512 launch-bound + compute N=512 D=4096 V=32768). Not a 2× claim.
 - `examples/compare_ops.rs` calls `unsloth_rs::ops` (`rmsnorm`, `rope`,
   `swiglu`, `attention`, `cross_entropy`), not `*_custom_op` names.
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no

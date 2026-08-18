@@ -13,6 +13,25 @@ WORK = Path(os.environ.get("COMPARE_WORK", "/work/out"))
 OPS = ("rmsnorm", "rope", "swiglu", "ce", "attn")
 
 
+def _stat_map(raw: dict, key: str) -> dict:
+    out = {}
+    for op, val in raw.items():
+        if isinstance(val, dict) and key in val:
+            out[op] = val[key]
+        elif isinstance(val, (int, float)) and key == "p50":
+            # Legacy one-shot float: do not relabel it as p50.
+            continue
+    return out
+
+
+def _p50_map(raw: dict) -> dict:
+    return _stat_map(raw, "p50")
+
+
+def _p99_map(raw: dict) -> dict:
+    return _stat_map(raw, "p99")
+
+
 def mae(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.mean(np.abs(a.astype(np.float64) - b.astype(np.float64))))
 
@@ -35,12 +54,12 @@ def main() -> None:
     rust_meta = json.loads(rust_meta_p.read_text()) if rust_meta_p.is_file() else {}
     report = {
         "sacred_bar": False,
-        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims. rust.ms is pre-cache NVRTC-per-launch (one shot after 3 warmups), superseded by artifacts/custom_op_cuda.json host/event p50/p99. torch/Unsloth still one-shot.",
+        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims. torch/Unsloth/rust compare latency is host+sync p50/p99 (warmup 5, n=100). Rust host+event p50/p99 after PTX cache still lives in artifacts/custom_op_cuda.json. Shapes are launch-bound; not a sacred-bar number.",
         "caveats": [
-            "Latency is one wall-clock shot after 3 warmups, not p50/p99.",
-            "rust.ms is pre-cache NVRTC-per-launch, superseded by artifacts/custom_op_cuda.json.",
+            "torch/unsloth/rust compare ms are host+cuda-sync p50/p99 (n=100 after 5 warmups), not one-shot.",
+            "Rust event (device-only) p50/p99 is artifacts/custom_op_cuda.json, not this file.",
             "Shapes are tiny (B=2 H=8 D=64); elementwise is launch-bound.",
-            "Rust attention is attention_device (GEMM+softmax, materializes [B,H,S,S]), not tiled FA.",
+            "Rust attention is unsloth_rs::ops::attention (online-softmax on CudaStorage, no [B,H,S,S]), not tiled FA.",
             "Rust kernels compiled with CUDA_COMPUTE_CAP=90 on SM 12.0 hardware (compile pin).",
             "Unsloth attn is not a standalone kernel; not compared.",
         ],
@@ -72,6 +91,12 @@ def main() -> None:
         if rust_ms:
             lat["rust"] = rust_ms
         report["latency_ms"][tag] = lat
+        report.setdefault("torch_p50_ms", {})[tag] = _p50_map(case.get("torch_ms") or {})
+        report.setdefault("torch_p99_ms", {})[tag] = _p99_map(case.get("torch_ms") or {})
+        report.setdefault("unsloth_p50_ms", {})[tag] = _p50_map(case.get("unsloth_ms") or {})
+        report.setdefault("unsloth_p99_ms", {})[tag] = _p99_map(case.get("unsloth_ms") or {})
+        report.setdefault("rust_p50_ms", {})[tag] = _p50_map(rust_ms or {})
+        report.setdefault("rust_p99_ms", {})[tag] = _p99_map(rust_ms or {})
     out = WORK / "py-rs-compare.json"
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report["mae"], indent=2))

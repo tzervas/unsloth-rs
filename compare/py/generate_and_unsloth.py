@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import time
 import types
@@ -17,7 +18,8 @@ import torch.nn.functional as F
 WORK = Path(os.environ.get("COMPARE_WORK", "/work/out"))
 SEED = 0
 EPS = 1e-5
-WARMUP = 3
+WARMUP = 5
+N_SAMPLES = 100
 SHAPES = ((2, 8, 128, 64), (2, 8, 512, 64))  # B,H,S,D
 
 
@@ -129,16 +131,40 @@ def try_unsloth_ce(logits_b_s_v: torch.Tensor, labels_b_s: torch.Tensor):
     return _call("ce", go)
 
 
-def timed(fn, device: torch.device):
+def sorted_percentile(samples: list[float], p: float) -> float:
+    """Match unsloth_rs::kernels::custom_op::sorted_percentile."""
+    n = len(samples)
+    if n == 0:
+        return float("nan")
+    ordered = sorted(samples)
+    if abs(p - 0.50) < 1e-12:
+        if n % 2 == 1:
+            return ordered[n // 2]
+        return 0.5 * (ordered[n // 2 - 1] + ordered[n // 2])
+    idx = min(int(math.ceil(p * (n - 1))), n - 1)
+    return ordered[idx]
+
+
+def timed(fn, device: torch.device) -> tuple[object, dict]:
+    """Warmup then n host+sync samples. Returns last output + p50/p99 (ms)."""
     if device.type == "cuda":
         for _ in range(WARMUP):
-            fn()
+            out = fn()
         torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    out = fn()
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-    return out, (time.perf_counter() - t0) * 1000.0
+    else:
+        out = None
+    samples: list[float] = []
+    for _ in range(N_SAMPLES):
+        t0 = time.perf_counter()
+        out = fn()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        samples.append((time.perf_counter() - t0) * 1000.0)
+    return out, {
+        "p50": sorted_percentile(samples, 0.50),
+        "p99": sorted_percentile(samples, 0.99),
+        "n": len(samples),
+    }
 
 
 def main() -> None:
@@ -200,7 +226,7 @@ def main() -> None:
         save(root / "torch_attn.npy", attn.detach().cpu().numpy())
 
         uns_err: dict[str, str] = {}
-        uns_ms: dict[str, float] = {}
+        uns_ms: dict[str, dict] = {}
         uns_ok: dict[str, bool] = {}
 
         def record(name: str, tensor_or_none, err, ms=None):
@@ -275,6 +301,7 @@ def main() -> None:
                 else None,
                 "torch": torch.__version__,
                 "unsloth": uns,
+                "timing": {"warmup": WARMUP, "n_samples": N_SAMPLES, "unit": "ms"},
                 "cases": cases,
             },
             indent=2,

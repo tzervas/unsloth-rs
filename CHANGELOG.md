@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FAIL_IO`. `compile_cached` is first-vs-second NVRTC, not a launch-tax close.
 
 ### Changed
+- Compare harness records torch / Unsloth / rust **host+sync p50/p99**
+  (warmup 5, n=100) in `artifacts/py-rs-compare.json`. Not one-shot.
+  Device-event rust numbers remain `artifacts/custom_op_cuda.json`.
 - `examples/compare_ops.rs` calls `unsloth_rs::ops` (`rmsnorm`, `rope`,
   `swiglu`, `attention`, `cross_entropy`), not `*_custom_op` names.
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
@@ -42,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/TRITON.md`: Triton compiler/FFI is
   [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) `v0.1.0`
   (contract only). Hook: `kernels::triton_bridge` (no Cargo dep, never dispatches).
-- `compare/README.md`: `py-rs-compare.json` rust.ms is pre-cache
-  NVRTC-per-launch, superseded by `artifacts/custom_op_cuda.json`.
-  torch/Unsloth remain one-shot.
+- `compare/README.md`: compare artifact now has torch/Unsloth/rust
+  host+sync p50/p99. Event rust p50/p99 stays in
+  `artifacts/custom_op_cuda.json`.
 
 ## [1.0.4] - 2026-08-17
 

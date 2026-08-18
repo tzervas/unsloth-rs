@@ -42,22 +42,35 @@ Unsloth attention is **not** a standalone kernel here (patched SDPA/flex) — re
 
 Podman `--device nvidia.com/gpu=all`, venv inside the container, `unsloth==2026.8.18`, torch `2.11.0+cu128`, rust CustomOp with `CUDA_COMPUTE_CAP=90`. Full dump: `artifacts/py-rs-compare.json`.
 
-MAE (f32, seed 0) — all under 3e-6; elementwise ~1e-8:
+MAE (f32, seed 0, 2026-08-17 persist+p50 rerun). Elementwise ~1e-8.
+CE is a scalar; torch-vs-rust CE MAE this run is 3.8e-6 / 1.9e-6 (s128 / s512).
 
 | op | torch vs rust (s128 / s512) | torch vs unsloth | rust vs unsloth |
 |----|----------------------------|------------------|-----------------|
 | RMSNorm | 2.2e-8 / 2.5e-8 | 2.6e-8 / 2.9e-8 | 1.0e-8 / 1.1e-8 |
 | RoPE | 1.5e-8 / 1.4e-8 | 1.2e-8 / 1.2e-8 | 8.9e-9 / 8.9e-9 |
 | SwiGLU | 6.5e-9 / 6.3e-9 | 1.0e-8 / 9.5e-9 | 6.7e-9 / 6.3e-9 |
-| CE | 1.9e-6 / 2.4e-6 | 0 / 4.8e-7 | 1.9e-6 / 2.9e-6 |
-| attn | 8.3e-8 / 5.9e-8 | n/a | n/a |
+| CE | 3.8e-6 / 1.9e-6 | 0 / 4.8e-7 | 3.8e-6 / 2.4e-6 |
+| attn | 7.8e-8 / 5.7e-8 | n/a | n/a |
 
-Latency in **this** artifact is **one shot after 3 warmups**, not p50/p99.
-`rust.ms` is **pre-cache NVRTC-per-launch** (compile on every CustomOp call)
-and is **superseded** by `artifacts/custom_op_cuda.json` (host vs CUDA-event
-p50/p99 after the PTX cache). torch/Unsloth remain one-shot. Do not market
-the pre-cache rust.ms against torch ~0.03 ms. Rust attention is CustomOp online-softmax on `CudaStorage` (no `[B,H,S,S]`),
-not tiled SRAM FA.
+Latency in **this** artifact is host+`cuda.synchronize` **p50/p99**
+(warmup 5, n=100) for torch, Unsloth, and rust compare dumps
+(`torch_p50_ms` / `unsloth_p50_ms` / `rust_p50_ms`). Device-only
+(CUDA-event) rust p50/p99 stays in `artifacts/custom_op_cuda.json`.
+Shapes are launch-bound. Do not market compare rust p50 against torch p50
+as a 2× claim. Rust attention is CustomOp online-softmax on `CudaStorage`
+(no `[B,H,S,S]`), not tiled SRAM FA; on s512 it is **slower** than
+torch SDPA (1.25 ms vs 0.097 ms p50).
+
+Host+sync p50 ms (5080, CAP pin 90, n=100):
+
+| op | torch s128 / s512 | unsloth s128 / s512 | rust s128 / s512 |
+|----|-------------------|---------------------|------------------|
+| RMSNorm | 0.023 / 0.023 | 0.027 / 0.027 | 0.008 / 0.008 |
+| RoPE | 0.027 / 0.070 | 0.060 / 0.061 | 0.009 / 0.012 |
+| SwiGLU | 0.010 / 0.010 | 0.014 / 0.016 | 0.007 / 0.007 |
+| CE | 0.011 / 0.016 | 0.051 / 0.052 | 0.011 / 0.012 |
+| attn | 0.023 / 0.097 | n/a | 0.112 / 1.251 |
 
 Host+event p50/p99 (after cache; not a sacred-bar number):
 

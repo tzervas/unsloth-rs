@@ -218,9 +218,9 @@ fn cuda_online_attn(
     sv: &candle_core::CudaStorage,
     lv: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-    use super::nvrtc::{load_func, next_pow2};
-    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-    use cudarc::driver::{LaunchConfig, PushKernelArg};
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::CudaStorage;
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
 
     let q_span = lq
         .contiguous_offsets()
@@ -247,28 +247,19 @@ fn cuda_online_attn(
     let rows = batch * heads * seq;
     let dev = sq.device.clone();
     if rows == 0 || dim == 0 {
-        // SAFETY: zero-length device buffer; wrap_cuda_slice takes ownership.
-        let y = unsafe { dev.alloc::<f32>(0) }?;
+        let y = alloc_f32(&dev, 0)?;
         return Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()));
     }
 
     let q = sq.as_cuda_slice::<f32>()?.slice(q_span.0..q_span.1);
     let k = sk.as_cuda_slice::<f32>()?.slice(k_span.0..k_span.1);
     let v = sv.as_cuda_slice::<f32>()?.slice(v_span.0..v_span.1);
-    // SAFETY: output is written by the kernel before wrap_cuda_slice returns it.
-    let y = unsafe { dev.alloc::<f32>(rows * dim) }?;
+    let y = alloc_f32(&dev, rows * dim)?;
 
     let func = load_func(&dev, "attn_online_f32", "unsloth_attn_online_f32", ATTN_SRC)?;
     let block = next_pow2(dim.min(1024)).max(1);
     let smem = (block + dim) * std::mem::size_of::<f32>();
-    if smem > 48 * 1024 {
-        candle_core::bail!("attn CUDA shared mem {smem} exceeds 48KiB (dim={dim})");
-    }
-    let cfg = LaunchConfig {
-        grid_dim: (rows as u32, 1, 1),
-        block_dim: (block as u32, 1, 1),
-        shared_mem_bytes: smem as u32,
-    };
+    let cfg = launch_config(rows, block, smem)?;
     let seq_i = i32::try_from(seq)
         .map_err(|_| candle_core::Error::Msg(format!("attn CUDA seq {seq} exceeds i32")).bt())?;
     let dim_i = i32::try_from(dim)
@@ -284,9 +275,7 @@ fn cuda_online_attn(
     builder.arg(&dim_i);
     builder.arg(&scale);
     builder.arg(&causal_i);
-    // SAFETY: pointers are live CudaSlices of matching f32 length; grid is one
-    // block per query row; shared mem is [block] reduce + [dim] acc.
-    unsafe { builder.launch(cfg) }.w()?;
+    launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
 }
 

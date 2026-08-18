@@ -266,9 +266,9 @@ fn cuda_rope(
     ls: &Layout,
     batched_cache: bool,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-    use super::nvrtc::load_func;
-    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-    use cudarc::driver::{LaunchConfig, PushKernelArg};
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func};
+    use candle_core::cuda::CudaStorage;
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
 
     let (a, b) = lx
         .contiguous_offsets()
@@ -287,17 +287,18 @@ fn cuda_rope(
     let x = sx.as_cuda_slice::<f32>()?.slice(a..b);
     let cos = sc.as_cuda_slice::<f32>()?.slice(c..d);
     let sin = ss.as_cuda_slice::<f32>()?.slice(e..f);
-    let mut y = unsafe { dev.alloc::<f32>(b - a) }?;
+    let y = alloc_f32(&dev, b - a)?;
+    if rows == 0 {
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()));
+    }
     let func = load_func(&dev, "rope_f32", "unsloth_rope_f32", ROPE_SRC)?;
-    let block = 128u32;
-    let cfg = LaunchConfig {
-        grid_dim: (rows as u32, 1, 1),
-        block_dim: (block, 1, 1),
-        shared_mem_bytes: 0,
-    };
-    let half_i = half as i32;
-    let seq_i = seq as i32;
-    let heads_i = heads as i32;
+    let cfg = launch_config(rows, 128, 0)?;
+    let half_i = i32::try_from(half)
+        .map_err(|_| candle_core::Error::Msg(format!("RoPE half {half} exceeds i32")).bt())?;
+    let seq_i = i32::try_from(seq)
+        .map_err(|_| candle_core::Error::Msg(format!("RoPE seq {seq} exceeds i32")).bt())?;
+    let heads_i = i32::try_from(heads)
+        .map_err(|_| candle_core::Error::Msg(format!("RoPE heads {heads} exceeds i32")).bt())?;
     let batched_i = i32::from(batched_cache);
     let stream = dev.cuda_stream();
     let mut builder = stream.launch_builder(&func);
@@ -309,7 +310,7 @@ fn cuda_rope(
     builder.arg(&seq_i);
     builder.arg(&heads_i);
     builder.arg(&batched_i);
-    unsafe { builder.launch(cfg) }.w()?;
+    launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()))
 }
 

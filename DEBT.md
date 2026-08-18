@@ -15,6 +15,7 @@
 | Host `to_vec1` on CustomOp paths | **No** | `custom_op_device_resident() == true` |
 | CubeCL FA as default dispatch | **Removed** | Opt-in `UNSLOTH_CUBECL_FA`; default is CustomOp/Candle (no D2H) |
 | CustomOp online-attn CUDA | **Landed** | NVRTC `cuda_fwd`; extra `O(S·D)`, streams K/V from HBM |
+| CustomOp CUDA `unsafe` | **Narrowed** | `alloc` → `alloc_zeros`; one `nvrtc::launch` FFI |
 | Tiled FA SRAM (true Flash) | **Open** | [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1 |
 | CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
 | f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |

@@ -158,8 +158,9 @@ fn cuda_rmsnorm(
     sw: &candle_core::CudaStorage,
     lw: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-    use cudarc::driver::{LaunchConfig, PushKernelArg};
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::CudaStorage;
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
 
     let (o1, o2) = lx.contiguous_offsets().ok_or_else(|| {
         candle_core::Error::Msg("RMSNorm CustomOp CUDA: x must be contiguous".into()).bt()
@@ -178,15 +179,16 @@ fn cuda_rmsnorm(
     let x = x.slice(o1..o2);
     let w = w.slice(w1..w2);
 
-    let mut y = unsafe { dev.alloc::<f32>(rows * hidden) }?;
-    let func = super::nvrtc::load_func(&dev, "rmsnorm_f32", "unsloth_rmsnorm_f32", RMSNORM_SRC)?;
-    let block = super::nvrtc::next_pow2(hidden.min(1024)).max(1);
-    let cfg = LaunchConfig {
-        grid_dim: (rows as u32, 1, 1),
-        block_dim: (block as u32, 1, 1),
-        shared_mem_bytes: (block * std::mem::size_of::<f32>()) as u32,
-    };
-    let hidden_i = hidden as i32;
+    let y = alloc_f32(&dev, rows * hidden)?;
+    if rows == 0 || hidden == 0 {
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()));
+    }
+    let func = load_func(&dev, "rmsnorm_f32", "unsloth_rmsnorm_f32", RMSNORM_SRC)?;
+    let block = next_pow2(hidden.min(1024)).max(1);
+    let cfg = launch_config(rows, block, block * std::mem::size_of::<f32>())?;
+    let hidden_i = i32::try_from(hidden).map_err(|_| {
+        candle_core::Error::Msg(format!("RMSNorm hidden {hidden} exceeds i32")).bt()
+    })?;
     let stream = dev.cuda_stream();
     let mut builder = stream.launch_builder(&func);
     builder.arg(&x);
@@ -194,7 +196,7 @@ fn cuda_rmsnorm(
     builder.arg(&y);
     builder.arg(&hidden_i);
     builder.arg(&eps);
-    unsafe { builder.launch(cfg) }.w()?;
+    launch(&mut builder, cfg)?;
 
     let storage = CudaStorage::wrap_cuda_slice(y, dev);
     Ok((storage, lx.shape().clone()))

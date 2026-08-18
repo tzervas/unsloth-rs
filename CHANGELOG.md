@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CPU `fused_linear_cross_entropy` (no `[N,V]`). CUDA still materializes logits.
 - CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
   materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
+- CustomOp CUDA call sites no longer write `unsafe`. Outputs use
+  `alloc_zeros`. The only remaining `unsafe` is `nvrtc::launch` (cudarc
+  cannot check PTX ABI).
 - NVRTC C→PTX cache in `nvrtc::load_func` (`Arc<str>` by `module_name`).
 - `cargo bench --features cuda --bench custom_op_cuda` writes
   `artifacts/custom_op_cuda.json` (host vs CUDA-event p50/p99).

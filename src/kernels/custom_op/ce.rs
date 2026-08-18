@@ -271,9 +271,9 @@ fn cuda_ce_fwd(
     st: &candle_core::CudaStorage,
     lt: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-    use super::nvrtc::{load_func, next_pow2};
-    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-    use cudarc::driver::{LaunchConfig, PushKernelArg};
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::CudaStorage;
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
 
     let (a, b) = ll
         .contiguous_offsets()
@@ -288,18 +288,15 @@ fn cuda_ce_fwd(
     let targets = st.as_cuda_slice::<i64>()?.slice(c..d);
     let mut sum = dev.alloc_zeros::<f32>(1)?;
     let mut cnt = dev.alloc_zeros::<i32>(1)?;
-    let mut out = unsafe { dev.alloc::<f32>(1) }?;
+    let out = alloc_f32(&dev, 1)?;
 
-    let func = load_func(&dev, "ce_fwd_f32", "unsloth_ce_fwd_f32", CE_FWD_SRC)?;
-    let block = next_pow2(vocab.min(256)).max(32);
-    let cfg = LaunchConfig {
-        grid_dim: (rows as u32, 1, 1),
-        block_dim: (block as u32, 1, 1),
-        shared_mem_bytes: (block * std::mem::size_of::<f32>() * 2) as u32,
-    };
-    let vocab_i = vocab as i32;
+    let vocab_i = i32::try_from(vocab)
+        .map_err(|_| candle_core::Error::Msg(format!("CE vocab {vocab} exceeds i32")).bt())?;
     let stream = dev.cuda_stream();
-    {
+    if rows > 0 {
+        let func = load_func(&dev, "ce_fwd_f32", "unsloth_ce_fwd_f32", CE_FWD_SRC)?;
+        let block = next_pow2(vocab.min(256)).max(32);
+        let cfg = launch_config(rows, block, block * std::mem::size_of::<f32>() * 2)?;
         let mut builder = stream.launch_builder(&func);
         builder.arg(&logits);
         builder.arg(&targets);
@@ -307,20 +304,16 @@ fn cuda_ce_fwd(
         builder.arg(&cnt);
         builder.arg(&vocab_i);
         builder.arg(&ignore);
-        unsafe { builder.launch(cfg) }.w()?;
+        launch(&mut builder, cfg)?;
     }
     let fin = load_func(&dev, "ce_finalize_f32", "unsloth_ce_fin_f32", CE_FIN_SRC)?;
     {
-        let cfg = LaunchConfig {
-            grid_dim: (1, 1, 1),
-            block_dim: (1, 1, 1),
-            shared_mem_bytes: 0,
-        };
+        let cfg = launch_config(1, 1, 0)?;
         let mut builder = stream.launch_builder(&fin);
         builder.arg(&sum);
         builder.arg(&cnt);
         builder.arg(&out);
-        unsafe { builder.launch(cfg) }.w()?;
+        launch(&mut builder, cfg)?;
     }
     let _ = d;
     Ok((CudaStorage::wrap_cuda_slice(out, dev), Shape::from(())))
@@ -362,9 +355,9 @@ impl CustomOp2 for CeBwdOp {
         st: &candle_core::CudaStorage,
         lt: &Layout,
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-        use super::nvrtc::{load_func, next_pow2};
-        use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-        use cudarc::driver::{LaunchConfig, PushKernelArg};
+        use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
+        use candle_core::cuda::CudaStorage;
+        use candle_core::cuda::cudarc::driver::PushKernelArg;
 
         let (a, b) = ll.contiguous_offsets().ok_or_else(|| {
             candle_core::Error::Msg("CE bwd CUDA: logits must be contiguous".into()).bt()
@@ -377,15 +370,16 @@ impl CustomOp2 for CeBwdOp {
         let dev = sl.device.clone();
         let logits = sl.as_cuda_slice::<f32>()?.slice(a..b);
         let targets = st.as_cuda_slice::<i64>()?.slice(c..d);
-        let mut dx = unsafe { dev.alloc::<f32>(b - a) }?;
+        let dx = alloc_f32(&dev, b - a)?;
+        if rows == 0 {
+            return Ok((CudaStorage::wrap_cuda_slice(dx, dev), ll.shape().clone()));
+        }
         let func = load_func(&dev, "ce_bwd_f32", "unsloth_ce_bwd_f32", CE_BWD_SRC)?;
         let block = next_pow2(vocab.min(256)).max(32);
-        let cfg = LaunchConfig {
-            grid_dim: (rows as u32, 1, 1),
-            block_dim: (block as u32, 1, 1),
-            shared_mem_bytes: (block * std::mem::size_of::<f32>() * 2) as u32,
-        };
-        let vocab_i = vocab as i32;
+        let cfg = launch_config(rows, block, block * std::mem::size_of::<f32>() * 2)?;
+        let vocab_i = i32::try_from(vocab).map_err(|_| {
+            candle_core::Error::Msg(format!("CE bwd vocab {vocab} exceeds i32")).bt()
+        })?;
         let stream = dev.cuda_stream();
         let mut builder = stream.launch_builder(&func);
         builder.arg(&logits);
@@ -394,7 +388,7 @@ impl CustomOp2 for CeBwdOp {
         builder.arg(&vocab_i);
         builder.arg(&self.ignore);
         builder.arg(&self.scale);
-        unsafe { builder.launch(cfg) }.w()?;
+        launch(&mut builder, cfg)?;
         let _ = (c, d);
         Ok((CudaStorage::wrap_cuda_slice(dx, dev), ll.shape().clone()))
     }

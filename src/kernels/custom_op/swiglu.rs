@@ -115,9 +115,9 @@ fn cuda_swiglu(
     su: &candle_core::CudaStorage,
     lu: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-    use super::nvrtc::{load_func, next_pow2};
-    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
-    use cudarc::driver::{LaunchConfig, PushKernelArg};
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::CudaStorage;
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
 
     let (a, b) = lg.contiguous_offsets().ok_or_else(|| {
         candle_core::Error::Msg("SwiGLU CUDA: gate must be contiguous".into()).bt()
@@ -132,23 +132,23 @@ fn cuda_swiglu(
     let dev = sg.device.clone();
     let g = sg.as_cuda_slice::<f32>()?.slice(a..b);
     let u = su.as_cuda_slice::<f32>()?.slice(c..d);
-    let mut y = unsafe { dev.alloc::<f32>(n) }?;
+    let y = alloc_f32(&dev, n)?;
+    if n == 0 {
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lg.shape().clone()));
+    }
     let func = load_func(&dev, "swiglu_f32", "unsloth_swiglu_f32", SWIGLU_SRC)?;
     let block = next_pow2(n.min(256)).max(32);
     let grid = n.div_ceil(block);
-    let cfg = LaunchConfig {
-        grid_dim: (grid as u32, 1, 1),
-        block_dim: (block as u32, 1, 1),
-        shared_mem_bytes: 0,
-    };
-    let n_i = n as i32;
+    let cfg = launch_config(grid, block, 0)?;
+    let n_i = i32::try_from(n)
+        .map_err(|_| candle_core::Error::Msg(format!("SwiGLU n {n} exceeds i32")).bt())?;
     let stream = dev.cuda_stream();
     let mut builder = stream.launch_builder(&func);
     builder.arg(&g);
     builder.arg(&u);
     builder.arg(&y);
     builder.arg(&n_i);
-    unsafe { builder.launch(cfg) }.w()?;
+    launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lg.shape().clone()))
 }
 

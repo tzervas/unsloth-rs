@@ -9,9 +9,9 @@ on:
     branches: [main, master, dev]
   workflow_dispatch:
 
-concurrency:
-  group: fleet-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# No concurrency cancel. Self-hosted jobs sat queued for hours; every PR
+# synchronize then cancelled them before a runner started (`cancel-in-progress:
+# true`). Let each run wait its turn on the homelab CPU runners.
 
 permissions:
   contents: read

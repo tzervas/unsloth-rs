@@ -10,9 +10,9 @@ on:
     - cron: "17 7 * * 1"
   workflow_dispatch:
 
-concurrency:
-  group: fleet-security-${{ github.ref }}
-  cancel-in-progress: true
+# No concurrency cancel. Self-hosted jobs sat queued for hours; every PR
+# synchronize then cancelled them before a runner started (`cancel-in-progress:
+# true`). Let each run wait its turn on the homelab CPU runners.
 
 permissions:
   contents: read

@@ -7,13 +7,15 @@
 //! CubeCL Flash Attention still host-roundtrips
 //! ([`crate::kernels::cubecl::interop_requires_host_roundtrip`]).
 //!
-//! Scope: f32. RMSNorm, SwiGLU `silu⊙up`, RoPE (+ position_ids), chunked CE,
-//! fused linear+CE (CPU), online attention.
+//! Scope: f32. RMSNorm, LayerNorm, SwiGLU, GeGLU, RoPE (+ position_ids),
+//! chunked CE, fused linear+CE, tiled/online attention.
 
 pub mod attention;
 pub mod ce;
 mod cpu_isa;
 pub mod fused_ce;
+pub mod geglu;
+pub mod layernorm;
 #[cfg(feature = "cuda")]
 pub mod nvrtc;
 mod ptx_cache;
@@ -21,11 +23,16 @@ pub mod rmsnorm;
 pub mod rope;
 pub mod swiglu;
 
-pub use attention::{attention_custom_op, attention_device, AttentionOp};
+pub use attention::{
+    attention_custom_op, attention_custom_op_softcap, attention_device, attention_device_softcap,
+    AttentionOp,
+};
 pub use ce::{chunked_cross_entropy, ChunkedCrossEntropyOp, DEFAULT_CE_CHUNK};
 pub use fused_ce::{
     fused_linear_ce_avoids_full_logits, fused_linear_cross_entropy, FusedLinearCrossEntropyOp,
 };
+pub use geglu::{geglu_custom_op, GeGluOp};
+pub use layernorm::{layernorm_custom_op, LayerNormOp};
 pub use ptx_cache::{next_pow2, ptx_compile_count, sorted_percentile};
 pub use rmsnorm::{rmsnorm_custom_op, RmsNormOp};
 pub use rope::{rope_custom_op, rope_with_position_ids, RopeOp};

@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CustomOp CUDA attention is SRAM-tiled Flash-style softmax for head dim
   ≤ 128 (owned NVRTC, not Unsloth PTX). Wider heads keep the HBM-streaming
   online kernel. Extra masks still Candle GEMM.
+- `ops::{geglu, layernorm, rope_with_ids, attention_softcap}` close Unsloth
+  Apache-2.0 kernel-name gaps (exact GeGLU, affine LayerNorm, packed RoPE
+  ids, Gemma tanh softcap). Not peft/QLoRA/MoE/FP8.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use
   `alloc_zeros`. The only remaining `unsafe` is `nvrtc::launch` (cudarc
   cannot check PTX ABI).

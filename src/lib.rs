@@ -33,7 +33,7 @@
 //!
 //! ```rust,ignore
 //! use candle_core::Device;
-//! use unsloth_rs::ops::{attention, rmsnorm, rope, swiglu};
+//! use unsloth_rs::ops::{attention, geglu, layernorm, rmsnorm, rope, swiglu};
 //!
 //! let y = rmsnorm(&x, &weight, 1e-5)?;
 //! let a = attention(&q, &k, &v, scale, None, true)?;

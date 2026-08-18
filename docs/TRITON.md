@@ -7,8 +7,9 @@
 Call sites must stay as easy as a Triton JIT launch / Unsloth kernel import,
 **regardless of backend** (CustomOp, Candle GEMM, later device-pointer FA).
 
-- Public names live in [`unsloth_rs::ops`](../src/ops.rs): `rmsnorm`, `rope`,
-  `swiglu`, `attention`, `cross_entropy`, `fused_linear_ce`.
+- Public names live in [`unsloth_rs::ops`](../src/ops.rs): `rmsnorm`,
+  `layernorm`, `rope`, `rope_with_ids`, `swiglu`, `geglu`, `attention`,
+  `attention_softcap`, `cross_entropy`, `fused_linear_ce`.
 - One function, tensors in, tensor out. No NVRTC, CubeCL handles, or
   `LaunchConfig` at the call site.
 - Device dispatch is inside the function. CPU and CUDA share the name.

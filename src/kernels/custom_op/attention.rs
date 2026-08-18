@@ -27,6 +27,8 @@ pub struct AttentionOp {
     pub scale: f32,
     /// If true, mask `key_pos > query_pos`.
     pub causal: bool,
+    /// Gemma-style tanh softcap. `<= 0` disables.
+    pub softcap: f32,
 }
 
 /// Attention on `[B, H, S, D]` Q/K/V. f32. Device-resident.
@@ -40,6 +42,33 @@ pub fn attention_custom_op(
     v: &Tensor,
     scale: f32,
     causal: bool,
+) -> CandleResult<Tensor> {
+    attention_custom_op_cfg(q, k, v, scale, causal, 0.0)
+}
+
+/// Attention with optional tanh score softcap.
+///
+/// # Errors
+///
+/// Same as [`attention_custom_op`].
+pub fn attention_custom_op_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f32,
+    causal: bool,
+    softcap: f32,
+) -> CandleResult<Tensor> {
+    attention_custom_op_cfg(q, k, v, scale, causal, softcap)
+}
+
+fn attention_custom_op_cfg(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f32,
+    causal: bool,
+    softcap: f32,
 ) -> CandleResult<Tensor> {
     if q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32 {
         candle_core::bail!(
@@ -70,7 +99,15 @@ pub fn attention_custom_op(
     let q = q.contiguous()?;
     let k = k.contiguous()?;
     let v = v.contiguous()?;
-    q.apply_op3(&k, &v, AttentionOp { scale, causal })
+    q.apply_op3(
+        &k,
+        &v,
+        AttentionOp {
+            scale,
+            causal,
+            softcap,
+        },
+    )
 }
 
 fn repeat_kv(x: &Tensor, n_heads: usize) -> CandleResult<Tensor> {
@@ -95,6 +132,14 @@ struct AttnGeom {
     dim: usize,
 }
 
+fn apply_softcap(score: f32, softcap: f32) -> f32 {
+    if softcap > 0.0 {
+        (score / softcap).tanh() * softcap
+    } else {
+        score
+    }
+}
+
 fn cpu_online_attn(
     q: &[f32],
     k: &[f32],
@@ -102,6 +147,7 @@ fn cpu_online_attn(
     geom: AttnGeom,
     scale: f32,
     causal: bool,
+    softcap: f32,
 ) -> Vec<f32> {
     let AttnGeom {
         batch,
@@ -121,7 +167,7 @@ fn cpu_online_attn(
             let k_end = if causal { query_i + 1 } else { seq };
             for key_j in 0..k_end {
                 let krow = &k[q_base + key_j * dim..q_base + key_j * dim + dim];
-                let score = super::cpu_isa::dot_f32(qrow, krow) * scale;
+                let score = apply_softcap(super::cpu_isa::dot_f32(qrow, krow) * scale, softcap);
                 let new_max = running_max.max(score);
                 let alpha = if running_max.is_finite() {
                     (running_max - new_max).exp()
@@ -192,6 +238,7 @@ impl CustomOp3 for AttentionOp {
             },
             self.scale,
             self.causal,
+            self.softcap,
         );
         Ok((CpuStorage::F32(out), l1.shape().clone()))
     }
@@ -208,9 +255,29 @@ impl CustomOp3 for AttentionOp {
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
         let dim = l1.dims().get(3).copied().unwrap_or(0);
         if tiled_smem_ok(dim) {
-            cuda_tiled_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
+            cuda_tiled_attn(
+                self.scale,
+                self.causal,
+                self.softcap,
+                s1,
+                l1,
+                s2,
+                l2,
+                s3,
+                l3,
+            )
         } else {
-            cuda_online_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
+            cuda_online_attn(
+                self.scale,
+                self.causal,
+                self.softcap,
+                s1,
+                l1,
+                s2,
+                l2,
+                s3,
+                l3,
+            )
         }
     }
 }
@@ -235,6 +302,7 @@ fn tiled_smem_ok(dim: usize) -> bool {
 fn cuda_online_attn(
     scale: f32,
     causal: bool,
+    softcap: f32,
     sq: &candle_core::CudaStorage,
     lq: &Layout,
     sk: &candle_core::CudaStorage,
@@ -280,7 +348,12 @@ fn cuda_online_attn(
     let v = sv.as_cuda_slice::<f32>()?.slice(v_span.0..v_span.1);
     let y = alloc_f32(&dev, rows * dim)?;
 
-    let func = load_func(&dev, "attn_online_f32", "unsloth_attn_online_f32", ATTN_SRC)?;
+    let func = load_func(
+        &dev,
+        "attn_online_f32",
+        "unsloth_attn_online_f32_sc",
+        ATTN_SRC,
+    )?;
     let block = next_pow2(dim.min(1024)).max(1);
     let smem = (block + dim) * std::mem::size_of::<f32>();
     let cfg = launch_config(rows, block, smem)?;
@@ -299,6 +372,7 @@ fn cuda_online_attn(
     builder.arg(&dim_i);
     builder.arg(&scale);
     builder.arg(&causal_i);
+    builder.arg(&softcap);
     launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
 }
@@ -308,6 +382,7 @@ fn cuda_online_attn(
 fn cuda_tiled_attn(
     scale: f32,
     causal: bool,
+    softcap: f32,
     sq: &candle_core::CudaStorage,
     lq: &Layout,
     sk: &candle_core::CudaStorage,
@@ -356,7 +431,7 @@ fn cuda_tiled_attn(
     let func = load_func(
         &dev,
         "attn_tiled_f32",
-        "unsloth_attn_tiled_f32",
+        "unsloth_attn_tiled_f32_sc",
         ATTN_TILED_SRC,
     )?;
     let n_qtiles = seq.div_ceil(ATTN_TILE_BR);
@@ -380,6 +455,7 @@ fn cuda_tiled_attn(
     builder.arg(&dim_i);
     builder.arg(&scale);
     builder.arg(&causal_i);
+    builder.arg(&softcap);
     launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
 }
@@ -394,7 +470,8 @@ extern "C" __global__ void attn_tiled_f32(
     int seq,
     int dim,
     float scale,
-    int causal
+    int causal,
+    float softcap
 ) {
     const int BR = 16;
     const int BC = 16;
@@ -469,6 +546,9 @@ extern "C" __global__ void attn_tiled_f32(
                     dot += qr[d] * kr[d];
                 }
                 score = dot * scale;
+                if (softcap > 0.f) {
+                    score = tanhf(score / softcap) * softcap;
+                }
             }
             S[sidx] = score;
         }
@@ -528,7 +608,8 @@ extern "C" __global__ void attn_online_f32(
     int seq,
     int dim,
     float scale,
-    int causal
+    int causal,
+    float softcap
 ) {
     extern __shared__ float smem[];
     const int row = (int)blockIdx.x;
@@ -567,6 +648,9 @@ extern "C" __global__ void attn_online_f32(
             __syncthreads();
         }
         float score = red[0] * scale;
+        if (softcap > 0.f) {
+            score = tanhf(score / softcap) * softcap;
+        }
         float new_max = fmaxf(running_max, score);
         float alpha = (running_max > -1.0e30f) ? expf(running_max - new_max) : 0.f;
         float weight = expf(score - new_max);
@@ -603,13 +687,33 @@ pub fn attention_device(
     mask: Option<&Tensor>,
     causal: bool,
 ) -> CandleResult<Tensor> {
+    attention_device_softcap(q, k, v, scale, mask, causal, 0.0)
+}
+
+/// Like [`attention_device`] with optional tanh score softcap.
+///
+/// # Errors
+///
+/// Shape/dtype errors from [`attention_custom_op_softcap`] or Candle.
+pub fn attention_device_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f64,
+    mask: Option<&Tensor>,
+    causal: bool,
+    softcap: f32,
+) -> CandleResult<Tensor> {
     let k = repeat_kv(k, q.dim(1)?)?;
     let v = repeat_kv(v, q.dim(1)?)?;
     if mask.is_none() {
-        return attention_custom_op(q, &k, &v, scale as f32, causal);
+        return attention_custom_op_softcap(q, &k, &v, scale as f32, causal, softcap);
     }
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
-    let scores = (scores * scale)?;
+    let mut scores = (scores * scale)?;
+    if softcap > 0.0 {
+        scores = ((&scores / f64::from(softcap))?.tanh()? * f64::from(softcap))?;
+    }
     let scores = match mask {
         Some(m) => scores.broadcast_add(m)?,
         None if causal => {
@@ -675,6 +779,25 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 1e-5, "mae={mae}");
+    }
+
+    #[test]
+    fn softcap_changes_output() {
+        let device = Device::Cpu;
+        let q = Tensor::randn(0.0f32, 2.0, (1, 1, 4, 8), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 2.0, (1, 1, 4, 8), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 2.0, (1, 1, 4, 8), &device).unwrap();
+        let y0 = attention_custom_op(&q, &k, &v, 1.0, false).unwrap();
+        let y1 = attention_custom_op_softcap(&q, &k, &v, 1.0, false, 1.0).unwrap();
+        let mae = (y0 - y1)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae > 1e-6, "softcap should change attn, mae={mae}");
     }
 
     #[cfg(feature = "cuda")]

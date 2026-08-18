@@ -19,7 +19,7 @@
 | Tiled FA SRAM (true Flash) | **Open** | [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1 |
 | CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
 | f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
-| Fused linear+CE / packing RoPE gather | **CPU landed** | CUDA fused CE still materializes `[N,V]`; GPU job |
+| Fused linear+CE | **CPU + device tiles** | CPU CustomOp; CUDA/other: vocab-chunk GEMM, peak `[N, chunk]` not `[N, V]` |
 
 **Last updated (Flash residual):** 2026-07-22
  

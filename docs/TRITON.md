@@ -26,6 +26,22 @@ It is **no longer the default**. `flash_attention_cubecl` uses
 [`attention_device`](../src/kernels/custom_op/attention.rs) unless
 `UNSLOTH_CUBECL_FA` is set.
 
-CUDA default is device-resident and **not** FA2 SRAM (`[B,H,S,S]` scores).
-Tiled FA is the first real triton-bridge payload — **that** work needs the
-5080; see [triton-bridge GPU_HANDOFF](https://github.com/tzervas/triton-bridge-rs/blob/main/docs/GPU_HANDOFF.md).
+CUDA default is device-resident **online-softmax** (no `[B,H,S,S]`). That is
+**not** FA2 SRAM. Tiled FA is the first real triton-bridge payload — **that**
+work needs the 5080; see
+[triton-bridge GPU_HANDOFF](https://github.com/tzervas/triton-bridge-rs/blob/main/docs/GPU_HANDOFF.md).
+
+## Dispatch (non-CustomOp policy)
+
+| Situation | Path | Why |
+|-----------|------|-----|
+| No extra mask | CustomOp online-softmax | Device-resident; extra `O(S·D)` |
+| Extra attention mask | Candle GEMM + softmax | Vendor GEMM; scores materialize |
+| `triton_bridge_ready()` | Tiled FA on a device pointer | Only after Job C launches |
+| `UNSLOTH_CUBECL_FA` | CubeCL FA | Opt-in only; still host D2H |
+| Fused linear+CE | CustomOp (CPU) or vocab-tile GEMM | No `[N, V]`; not CubeCL |
+| QKV / SwiGLU projections | Candle / cuBLAS GEMM | Do not NVRTC-fuse large GEMMs |
+
+Do **not** grow a third CubeCL kernel stack while
+`interop_requires_host_roundtrip()` is true. Do **not** add a
+`triton-bridge` Cargo dep while `bridge_ready() == false`.

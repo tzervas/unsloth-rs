@@ -11,7 +11,7 @@ Python lives in a venv *inside* the container. No 2× / 70% VRAM claims.
 | RoPE | yes | probe | yes |
 | SwiGLU | yes | probe | yes |
 | chunked CE | yes | probe | yes |
-| attention (causal SDPA) | yes | probe | yes (`attention_device`) |
+| attention (causal SDPA) | yes | probe | yes (`ops::attention`) |
 
 Shapes: `B=2 H=8 D=64`, seq **128** and **512**, dtype **f32**, seed 0.
 

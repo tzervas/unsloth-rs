@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FAIL_IO`. `compile_cached` is first-vs-second NVRTC, not a launch-tax close.
 
 ### Changed
+- `examples/compare_ops.rs` calls `unsloth_rs::ops` (`rmsnorm`, `rope`,
+  `swiglu`, `attention`, `cross_entropy`), not `*_custom_op` names.
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
   CubeCL `to_vec1`). CubeCL FA only if `UNSLOTH_CUBECL_FA` is set.
 - Added `attention_custom_op` / `attention_device` (online softmax on CPU).

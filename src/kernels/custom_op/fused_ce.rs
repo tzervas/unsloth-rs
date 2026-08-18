@@ -603,4 +603,57 @@ mod tests {
         assert!(hs.iter().all(|v| v.is_finite()));
         assert!(ws.iter().all(|v| v.is_finite()));
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_or_skip() -> Option<Device> {
+        Device::new_cuda(0).ok()
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_tile_fwd_matches_cpu() {
+        let Some(gpu) = cuda_or_skip() else {
+            return;
+        };
+        let cpu = Device::Cpu;
+        let hidden = Tensor::randn(0.0f32, 0.5, (6, 8), &cpu).unwrap();
+        let weight = Tensor::randn(0.0f32, 0.5, (20, 8), &cpu).unwrap();
+        let targets = Tensor::from_vec(vec![0i64, 3, -100, 19, 7, 2], (6,), &cpu).unwrap();
+        let cpu_y = fused_linear_cross_entropy(&hidden, &weight, &targets, -100, 7)
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        let hg = hidden.to_device(&gpu).unwrap();
+        let wg = weight.to_device(&gpu).unwrap();
+        let tg = targets.to_device(&gpu).unwrap();
+        let gpu_y = fused_linear_cross_entropy(&hg, &wg, &tg, -100, 7)
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        let err = (cpu_y - gpu_y).abs();
+        assert!(err < 1e-4, "cpu {cpu_y} vs cuda {gpu_y} err={err}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_tile_bwd_finite() {
+        let Some(gpu) = cuda_or_skip() else {
+            return;
+        };
+        let hidden = Tensor::randn(0.0f32, 0.3, (4, 6), &gpu).unwrap();
+        let weight = Tensor::randn(0.0f32, 0.3, (10, 6), &gpu).unwrap();
+        let targets = Tensor::from_vec(vec![1i64, 2, 0, 9], (4,), &gpu).unwrap();
+        let loss = fused_linear_cross_entropy(&hidden, &weight, &targets, -100, 4).unwrap();
+        let gy = Tensor::ones(loss.shape(), DType::F32, &gpu).unwrap();
+        let op = FusedLinearCrossEntropyOp {
+            ignore_index: -100,
+            chunk_size: 4,
+        };
+        let (dh, dw, dt) = op.bwd(&hidden, &weight, &targets, &loss, &gy).unwrap();
+        assert!(dt.is_none());
+        let hs: Vec<f32> = dh.unwrap().flatten_all().unwrap().to_vec1().unwrap();
+        let ws: Vec<f32> = dw.unwrap().flatten_all().unwrap().to_vec1().unwrap();
+        assert!(hs.iter().all(|v| v.is_finite()));
+        assert!(ws.iter().all(|v| v.is_finite()));
+    }
 }

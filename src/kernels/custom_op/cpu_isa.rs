@@ -30,49 +30,48 @@ pub fn prefer_tile_gemm(rows: usize, vocab: usize, dim: usize) -> bool {
 #[must_use]
 pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    let n = a.len().min(b.len());
+    let len = a.len().min(b.len());
     #[cfg(target_arch = "x86_64")]
     {
-        if n >= 8 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: AVX2+FMA advertised; `a`/`b` have at least `n` f32s.
-            return unsafe { dot_f32_avx2_fma(&a[..n], &b[..n]) };
+        if len >= 8 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: AVX2+FMA advertised; slices have at least `len` f32s.
+            return unsafe { dot_f32_avx2_fma(&a[..len], &b[..len]) };
         }
     }
-    let mut s = 0.0f32;
-    for i in 0..n {
-        s += a[i] * b[i];
+    let mut sum = 0.0f32;
+    for idx in 0..len {
+        sum += a[idx] * b[idx];
     }
-    s
+    sum
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-#[allow(clippy::many_single_char_names)]
-unsafe fn dot_f32_avx2_fma(a: &[f32], b: &[f32]) -> f32 {
+unsafe fn dot_f32_avx2_fma(lhs: &[f32], rhs: &[f32]) -> f32 {
     use std::arch::x86_64::{
         _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
     };
-    // SAFETY: caller checked AVX2+FMA; unaligned loads stay inside `a`/`b`.
-    let n = a.len();
+    // SAFETY: caller checked AVX2+FMA; unaligned loads stay inside lhs/rhs.
+    let len = lhs.len();
     let mut acc = _mm256_setzero_ps();
-    let mut i = 0usize;
-    while i + 8 <= n {
-        let va = _mm256_loadu_ps(a.as_ptr().add(i));
-        let vb = _mm256_loadu_ps(b.as_ptr().add(i));
-        acc = _mm256_fmadd_ps(va, vb, acc);
-        i += 8;
+    let mut offset = 0usize;
+    while offset + 8 <= len {
+        let left = _mm256_loadu_ps(lhs.as_ptr().add(offset));
+        let right = _mm256_loadu_ps(rhs.as_ptr().add(offset));
+        acc = _mm256_fmadd_ps(left, right, acc);
+        offset += 8;
     }
     let mut lanes = [0.0f32; 8];
     _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
-    let mut s = 0.0f32;
-    for v in lanes {
-        s += v;
+    let mut sum = 0.0f32;
+    for lane in lanes {
+        sum += lane;
     }
-    while i < n {
-        s += a[i] * b[i];
-        i += 1;
+    while offset < len {
+        sum += lhs[offset] * rhs[offset];
+        offset += 1;
     }
-    s
+    sum
 }
 
 #[cfg(test)]

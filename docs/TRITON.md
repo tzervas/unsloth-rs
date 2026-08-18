@@ -59,3 +59,19 @@ rows parallelize with `std::thread` (no rayon / MKL dep). The crate does
 **not** pin affinity — `taskset -c 0-15` for P-only if the compositor
 should keep the E-cores. Large GEMMs stay Candle (already AVX2). VNNI is
 INT8; unused until we have an INT8 CustomOp.
+
+## iGPU (UHD 770) — DIY, not a product path
+
+Hardware is present: `00:02.0` Intel UHD 770, DRM `card0` / `renderD128`
+(`vendor=0x8086`). Mesa `intel_icd.json` is installed. **This is not a
+supported unsloth-rs backend.**
+
+Measured on this box (2026-08-17): `vulkaninfo` lists the 5080 and
+llvmpipe only — ANV does not show the iGPU in the live instance. `clinfo
+-l` is empty. No oneAPI / Level Zero. Candle has no Intel device.
+
+A determined DIY path would be: force the Intel Vulkan ICD, then a
+CubeCL-Vulkan experiment, **or** install Intel compute-runtime/OpenCL
+and keep it off the 5080. Expect FAIL_ENV, no speed claims, no training
+story. Useful as a “does the laptop-class box even light up” probe for
+other people; not a reason to add an `igpu` feature this cycle.

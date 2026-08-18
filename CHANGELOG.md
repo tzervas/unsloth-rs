@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   others vocab-tile Candle GEMM (peak extra `[N, chunk]`).
 - CustomOp CPU dots use AVX2+FMA when advertised (14700K has these; no
   AVX-512/AMX). Fused-CE rows parallelize via `std::thread`.
+- CUDA fused-CE tile smoke on 5080: fwd matches CPU (`err < 1e-4`), bwd
+  finite. Not a throughput claim.
 - CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
   materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use

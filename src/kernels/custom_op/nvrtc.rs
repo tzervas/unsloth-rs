@@ -6,16 +6,17 @@
 //! Only compiled with `--features cuda`. Used by every CustomOp CUDA path so
 //! we do not copy-paste `compile_ptx_with_opts` four times.
 //!
-//! `load_func` caches C→PTX by `module_name`. `get_or_load_custom_func` already
-//! caches the device function; compiling on every call was the launch-tax leak.
+//! `load_func` caches C→PTX by `module_name` as `Arc<str>`.
+//! `get_or_load_custom_func` already caches the device function; compiling
+//! on every call was the launch-tax leak. A Mutex plus Candle dispatch still
+//! run on every launch — `compile_cached` is **not** a launch-tax close.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Arc;
 
 use candle_core::cuda::{cudarc, WrapErr};
 use candle_core::Result;
 
-static PTX_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+pub use super::ptx_cache::{next_pow2, ptx_compile_count, sorted_percentile};
 
 /// Compile CUDA C to PTX (fast-math on).
 pub fn compile_ptx(src: &str) -> Result<String> {
@@ -27,23 +28,9 @@ pub fn compile_ptx(src: &str) -> Result<String> {
     Ok(ptx.to_src().to_string())
 }
 
-fn cached_ptx(module_name: &str, src: &str) -> Result<String> {
-    let cache = PTX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    {
-        let guard = match cache.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        if let Some(ptx) = guard.get(module_name) {
-            return Ok(ptx.clone());
-        }
-    }
-    let ptx = compile_ptx(src)?;
-    let mut guard = match cache.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    Ok(guard.entry(module_name.to_string()).or_insert(ptx).clone())
+/// Cached C→PTX. Hits clone an `Arc`, not the PTX text.
+pub fn cached_ptx(module_name: &str, src: &str) -> Result<Arc<str>> {
+    super::ptx_cache::global_ptx_cache().get_or_insert(module_name, || compile_ptx(src))
 }
 
 /// Compile `src` (cached by `module_name`) and load `fn_name` (cached on device).
@@ -54,15 +41,5 @@ pub fn load_func(
     src: &str,
 ) -> Result<impl core::ops::Deref<Target = cudarc::driver::CudaFunction>> {
     let ptx = cached_ptx(module_name, src)?;
-    dev.get_or_load_custom_func(fn_name, module_name, &ptx)
-}
-
-/// Next power of two, minimum 1.
-#[must_use]
-pub fn next_pow2(n: usize) -> usize {
-    if n <= 1 {
-        1
-    } else {
-        n.next_power_of_two()
-    }
+    dev.get_or_load_custom_func(fn_name, module_name, ptx.as_ref())
 }

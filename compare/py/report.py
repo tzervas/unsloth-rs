@@ -35,9 +35,10 @@ def main() -> None:
     rust_meta = json.loads(rust_meta_p.read_text()) if rust_meta_p.is_file() else {}
     report = {
         "sacred_bar": False,
-        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims.",
+        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims. rust.ms is pre-cache NVRTC-per-launch (one shot after 3 warmups), superseded by artifacts/custom_op_cuda.json host/event p50/p99. torch/Unsloth still one-shot.",
         "caveats": [
             "Latency is one wall-clock shot after 3 warmups, not p50/p99.",
+            "rust.ms is pre-cache NVRTC-per-launch, superseded by artifacts/custom_op_cuda.json.",
             "Shapes are tiny (B=2 H=8 D=64); elementwise is launch-bound.",
             "Rust attention is attention_device (GEMM+softmax, materializes [B,H,S,S]), not tiled FA.",
             "Rust kernels compiled with CUDA_COMPUTE_CAP=90 on SM 12.0 hardware (compile pin).",

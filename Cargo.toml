@@ -78,7 +78,6 @@ harness = false
 [[bench]]
 name = "custom_op_cuda"
 harness = false
-required-features = ["cuda"]
 
 [workspace]
 members = ["."]

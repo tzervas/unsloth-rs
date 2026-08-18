@@ -8,7 +8,7 @@
 
 #[cfg(not(feature = "cuda"))]
 fn main() {
-    eprintln!("FAIL_ENV");
+    eprintln!("FAIL_ENV: missing feature cuda");
     std::process::exit(2);
 }
 
@@ -32,7 +32,7 @@ fn cuda_main() -> Result<(), i32> {
     const WARMUP: usize = 5;
 
     if !Path::new("/dev/nvidia0").exists() {
-        eprintln!("FAIL_ENV");
+        eprintln!("FAIL_ENV: missing /dev/nvidia0");
         return Err(2);
     }
     let device = match Device::new_cuda(0) {
@@ -53,28 +53,44 @@ fn cuda_main() -> Result<(), i32> {
     let gpu = nvsmi_query(&["--query-gpu=name", "--format=csv,noheader"])
         .trim()
         .to_string();
+    let gpu_compute_cap = nvsmi_query(&["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .trim()
+        .to_string();
+    let cuda_compute_cap = std::env::var("CUDA_COMPUTE_CAP").unwrap_or_else(|_| "unset".into());
     let compute_apps = nvsmi_query(&[
         "--query-compute-apps=pid,process_name,used_gpu_memory",
         "--format=csv",
     ]);
+    if let Some(line) = blocked_compute_app(&compute_apps) {
+        eprintln!("FAIL_ENV: compute-apps lists llama-server or hypha-control: {line}");
+        return Err(2);
+    }
+
+    let compile_cached = match measure_compile_cached() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("FAIL: cache probe: {e}");
+            return Err(1);
+        }
+    };
 
     let cases = match build_cases(&device) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("FAIL_ENV: tensor setup: {e}");
-            return Err(2);
+            eprintln!("FAIL: tensor setup: {e}");
+            return Err(1);
         }
     };
 
     let mut rows = Vec::with_capacity(cases.len());
     for case in &cases {
         if let Err(e) = warmup(&case.work, WARMUP) {
-            eprintln!("FAIL_ENV: warmup {}: {e}", case.id);
-            return Err(2);
+            eprintln!("FAIL: warmup {}: {e}", case.id);
+            return Err(1);
         }
         if let Err(e) = stream.synchronize() {
-            eprintln!("FAIL_ENV: warmup sync: {e}");
-            return Err(2);
+            eprintln!("FAIL: warmup sync: {e}");
+            return Err(1);
         }
 
         let mut host = Vec::with_capacity(N_SAMPLES);
@@ -84,23 +100,23 @@ fn cuda_main() -> Result<(), i32> {
             match case.work.run() {
                 Ok(y) => {
                     if let Err(e) = stream.synchronize() {
-                        eprintln!("FAIL_ENV: host sync: {e}");
-                        return Err(2);
+                        eprintln!("FAIL: host sync {}: {e}", case.id);
+                        return Err(1);
                     }
                     host.push(t0.elapsed().as_secs_f64() * 1.0e3);
                     drop(y);
                 }
                 Err(e) => {
-                    eprintln!("FAIL_ENV: host op {}: {e}", case.id);
-                    return Err(2);
+                    eprintln!("FAIL: host op {}: {e}", case.id);
+                    return Err(1);
                 }
             }
 
             let start = match stream.record_event(Some(CUevent_flags::CU_EVENT_DEFAULT)) {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("FAIL_ENV: record start: {e}");
-                    return Err(2);
+                    eprintln!("FAIL: record start {}: {e}", case.id);
+                    return Err(1);
                 }
             };
             match case.work.run() {
@@ -108,22 +124,22 @@ fn cuda_main() -> Result<(), i32> {
                     let end = match stream.record_event(Some(CUevent_flags::CU_EVENT_DEFAULT)) {
                         Ok(e) => e,
                         Err(e) => {
-                            eprintln!("FAIL_ENV: record end: {e}");
-                            return Err(2);
+                            eprintln!("FAIL: record end {}: {e}", case.id);
+                            return Err(1);
                         }
                     };
                     match start.elapsed_ms(&end) {
                         Ok(ms) => event.push(f64::from(ms)),
                         Err(e) => {
-                            eprintln!("FAIL_ENV: elapsed_ms: {e}");
-                            return Err(2);
+                            eprintln!("FAIL: elapsed_ms {}: {e}", case.id);
+                            return Err(1);
                         }
                     }
                     drop(y);
                 }
                 Err(e) => {
-                    eprintln!("FAIL_ENV: event op {}: {e}", case.id);
-                    return Err(2);
+                    eprintln!("FAIL: event op {}: {e}", case.id);
+                    return Err(1);
                 }
             }
         }
@@ -137,11 +153,11 @@ fn cuda_main() -> Result<(), i32> {
             vocab: case.vocab,
             n: case.n,
             launch_bound: case.launch_bound,
-            compile_cached: true,
-            host_p50_ms: percentile(&host, 0.50),
-            host_p99_ms: percentile(&host, 0.99),
-            event_p50_ms: percentile(&event, 0.50),
-            event_p99_ms: percentile(&event, 0.99),
+            compile_cached,
+            host_p50_ms: unsloth_rs::kernels::custom_op::sorted_percentile(&host, 0.50),
+            host_p99_ms: unsloth_rs::kernels::custom_op::sorted_percentile(&host, 0.99),
+            event_p50_ms: unsloth_rs::kernels::custom_op::sorted_percentile(&event, 0.50),
+            event_p99_ms: unsloth_rs::kernels::custom_op::sorted_percentile(&event, 0.99),
         };
         println!(
             "{} host_p50={:.4} host_p99={:.4} event_p50={:.4} event_p99={:.4} elems={} launch_bound={}",
@@ -157,9 +173,16 @@ fn cuda_main() -> Result<(), i32> {
     }
 
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/custom_op_cuda.json");
-    if let Err(e) = write_json(&out, &gpu, &compute_apps, &rows) {
-        eprintln!("FAIL_ENV: write {}: {e}", out.display());
-        return Err(2);
+    if let Err(e) = write_json(
+        &out,
+        &gpu,
+        &cuda_compute_cap,
+        &gpu_compute_cap,
+        &compute_apps,
+        &rows,
+    ) {
+        eprintln!("FAIL_IO: write {}: {e}", out.display());
+        return Err(1);
     }
     println!("wrote {}", out.display());
 
@@ -205,6 +228,38 @@ fn nvsmi_query(args: &[&str]) -> String {
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default()
+}
+
+#[cfg(feature = "cuda")]
+fn blocked_compute_app(csv: &str) -> Option<String> {
+    for line in csv.lines().skip(1) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("llama-server") || lower.contains("hypha-control") {
+            return Some(line.trim().to_string());
+        }
+    }
+    None
+}
+
+/// First-vs-second NVRTC compile on a unique module. True only if the second
+/// call did not increment the compile counter and was wall-clock faster.
+#[cfg(feature = "cuda")]
+fn measure_compile_cached() -> Result<bool, String> {
+    use std::time::Instant;
+    use unsloth_rs::kernels::custom_op::nvrtc::{cached_ptx, ptx_compile_count};
+
+    let src = r#"extern "C" __global__ void g_uns01_cache_probe(float *x) { *x = 0.f; }"#;
+    let name = "g_uns01_cache_probe";
+    let c0 = ptx_compile_count();
+    let t0 = Instant::now();
+    cached_ptx(name, src).map_err(|e| format!("first compile: {e}"))?;
+    let first = t0.elapsed();
+    let c1 = ptx_compile_count();
+    let t1 = Instant::now();
+    cached_ptx(name, src).map_err(|e| format!("second compile: {e}"))?;
+    let second = t1.elapsed();
+    let c2 = ptx_compile_count();
+    Ok(c1 == c0 + 1 && c2 == c1 && second < first)
 }
 
 #[cfg(feature = "cuda")]
@@ -474,29 +529,12 @@ fn warmup(work: &Work, n: usize) -> candle_core::Result<()> {
     Ok(())
 }
 
-/// p50 = midpoint; p99 = ceil(0.99*(n-1)) into sorted samples.
-#[cfg(feature = "cuda")]
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    let n = sorted.len();
-    if n == 0 {
-        return f64::NAN;
-    }
-    if (p - 0.50).abs() < 1e-12 {
-        if n % 2 == 1 {
-            sorted[n / 2]
-        } else {
-            0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
-        }
-    } else {
-        let idx = ((p * (n - 1) as f64).ceil() as usize).min(n - 1);
-        sorted[idx]
-    }
-}
-
 #[cfg(feature = "cuda")]
 fn write_json(
     path: &std::path::Path,
     gpu: &str,
+    cuda_compute_cap: &str,
+    gpu_compute_cap: &str,
     compute_apps: &str,
     rows: &[MeasuredRow],
 ) -> std::io::Result<()> {
@@ -505,11 +543,12 @@ fn write_json(
     writeln!(s, "{{").unwrap();
     writeln!(s, "  \"sacred_bar\": false,").unwrap();
     writeln!(s, "  \"gpu\": {},", json_str(gpu)).unwrap();
-    writeln!(s, "  \"cuda_compute_cap\": \"90\",").unwrap();
+    writeln!(s, "  \"cuda_compute_cap\": {},", json_str(cuda_compute_cap)).unwrap();
+    writeln!(s, "  \"gpu_compute_cap\": {},", json_str(gpu_compute_cap)).unwrap();
     writeln!(s, "  \"compute_apps\": {},", json_str(compute_apps.trim())).unwrap();
     writeln!(
         s,
-        "  \"note\": \"Rust host+event p50/p99 after PTX cache. First NVRTC compile is outside timed regions. torch/Unsloth remain one-shot in artifacts/py-rs-compare.json. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar.\","
+        "  \"note\": \"Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth remain one-shot in artifacts/py-rs-compare.json. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.\","
     )
     .unwrap();
     writeln!(s, "  \"samples\": 100,").unwrap();

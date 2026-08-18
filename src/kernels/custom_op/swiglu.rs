@@ -116,8 +116,8 @@ fn cuda_swiglu(
     lu: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
-    use candle_core::cuda::CudaStorage;
     use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
 
     let (a, b) = lg.contiguous_offsets().ok_or_else(|| {
         candle_core::Error::Msg("SwiGLU CUDA: gate must be contiguous".into()).bt()

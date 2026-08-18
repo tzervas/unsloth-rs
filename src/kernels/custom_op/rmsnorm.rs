@@ -159,8 +159,8 @@ fn cuda_rmsnorm(
     lw: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
-    use candle_core::cuda::CudaStorage;
     use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
 
     let (o1, o2) = lx.contiguous_offsets().ok_or_else(|| {
         candle_core::Error::Msg("RMSNorm CustomOp CUDA: x must be contiguous".into()).bt()

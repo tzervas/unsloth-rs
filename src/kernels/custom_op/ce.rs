@@ -272,8 +272,8 @@ fn cuda_ce_fwd(
     lt: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
-    use candle_core::cuda::CudaStorage;
     use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
 
     let (a, b) = ll
         .contiguous_offsets()
@@ -356,8 +356,8 @@ impl CustomOp2 for CeBwdOp {
         lt: &Layout,
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
         use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
-        use candle_core::cuda::CudaStorage;
         use candle_core::cuda::cudarc::driver::PushKernelArg;
+        use candle_core::cuda::CudaStorage;
 
         let (a, b) = ll.contiguous_offsets().ok_or_else(|| {
             candle_core::Error::Msg("CE bwd CUDA: logits must be contiguous".into()).bt()

@@ -219,8 +219,8 @@ fn cuda_online_attn(
     lv: &Layout,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::{alloc_f32, launch, launch_config, load_func, next_pow2};
-    use candle_core::cuda::CudaStorage;
     use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
 
     let q_span = lq
         .contiguous_offsets()

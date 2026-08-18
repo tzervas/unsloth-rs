@@ -267,8 +267,8 @@ fn cuda_rope(
     batched_cache: bool,
 ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
     use super::nvrtc::{alloc_f32, launch, launch_config, load_func};
-    use candle_core::cuda::CudaStorage;
     use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
 
     let (a, b) = lx
         .contiguous_offsets()

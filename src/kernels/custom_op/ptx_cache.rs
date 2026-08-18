@@ -40,6 +40,7 @@ pub fn sorted_percentile(sorted: &[f64], p: f64) -> f64 {
 }
 
 /// In-process PTX text cache keyed by module name.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub struct PtxCache {
     map: Mutex<HashMap<String, Arc<str>>>,
     compiles: AtomicUsize,
@@ -54,6 +55,7 @@ impl Default for PtxCache {
     }
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 impl PtxCache {
     /// Empty cache.
     #[must_use]

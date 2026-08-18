@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 
-//! Device-resident attention (Flash-style online softmax) via [`CustomOp3`].
+//! Device-resident attention via [`CustomOp3`].
 //!
-//! Default path for `flash_attention_cubecl`: no CubeCL handle, no `to_vec1`.
-//! CPU and CUDA CustomOp: online softmax, extra working set `O(S·D)` per
-//! query (no `[B,H,S,S]` scores). CUDA still streams K/V from HBM — this is
-//! **not** tiled SRAM Flash Attention (that is
-//! [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1).
-//! Extra masks still take Candle GEMM+softmax on `CudaStorage`.
+//! * CPU: per-query online softmax (no `[B,H,S,S]`).
+//! * CUDA, no extra mask, head dim ≤ [`ATTN_TILE_DIM_MAX`]: SRAM-tiled
+//!   Flash-style kernel (Q/K/V tiles in shared memory). Owned NVRTC, not
+//!   Unsloth PTX. Wider heads fall back to the HBM-streaming online kernel.
+//! * Extra masks still take Candle GEMM+softmax (scores materialize).
+//!
+//! CubeCL FA still `to_vec1`s and is not the default.
 
 use candle_core::{CpuStorage, CustomOp3, DType, Layout, Result as CandleResult, Shape, Tensor};
+
+/// Q rows per CUDA SRAM tile.
+pub const ATTN_TILE_BR: usize = 16;
+/// K/V rows per CUDA SRAM tile.
+pub const ATTN_TILE_BC: usize = 16;
+/// Tiled path is only used at or below this head dim (48 KiB smem cap).
+pub const ATTN_TILE_DIM_MAX: usize = 128;
 
 /// Causal / non-causal scaled dot-product with online softmax.
 #[derive(Clone, Debug)]
@@ -198,8 +206,28 @@ impl CustomOp3 for AttentionOp {
         s3: &candle_core::CudaStorage,
         l3: &Layout,
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-        cuda_online_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
+        let dim = l1.dims().get(3).copied().unwrap_or(0);
+        if tiled_smem_ok(dim) {
+            cuda_tiled_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
+        } else {
+            cuda_online_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
+        }
     }
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[must_use]
+fn tiled_smem_bytes(dim: usize) -> usize {
+    let tiles = (2 * ATTN_TILE_BC + 2 * ATTN_TILE_BR) * dim
+        + ATTN_TILE_BR * ATTN_TILE_BC
+        + 3 * ATTN_TILE_BR;
+    tiles * std::mem::size_of::<f32>()
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[must_use]
+fn tiled_smem_ok(dim: usize) -> bool {
+    dim > 0 && dim <= ATTN_TILE_DIM_MAX && tiled_smem_bytes(dim) <= 48 * 1024
 }
 
 #[cfg(feature = "cuda")]
@@ -276,6 +304,221 @@ fn cuda_online_attn(
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn cuda_tiled_attn(
+    scale: f32,
+    causal: bool,
+    sq: &candle_core::CudaStorage,
+    lq: &Layout,
+    sk: &candle_core::CudaStorage,
+    lk: &Layout,
+    sv: &candle_core::CudaStorage,
+    lv: &Layout,
+) -> CandleResult<(candle_core::CudaStorage, Shape)> {
+    use super::nvrtc::{alloc_f32, launch, launch_config, load_func};
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
+
+    let q_span = lq
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: q must be contiguous".into()).bt())?;
+    let k_span = lk
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: k must be contiguous".into()).bt())?;
+    let v_span = lv
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: v must be contiguous".into()).bt())?;
+    let dims = lq.dims();
+    if dims.len() != 4 {
+        candle_core::bail!("attn CUDA rank {}", dims.len());
+    }
+    if lk.dims() != dims || lv.dims() != dims {
+        candle_core::bail!(
+            "attn CUDA Q/K/V shape mismatch {:?} / {:?} / {:?}",
+            dims,
+            lk.dims(),
+            lv.dims()
+        );
+    }
+    let (batch, heads, seq, dim) = (dims[0], dims[1], dims[2], dims[3]);
+    let n_elem = batch * heads * seq * dim;
+    let dev = sq.device.clone();
+    if n_elem == 0 {
+        let y = alloc_f32(&dev, 0)?;
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()));
+    }
+
+    let q = sq.as_cuda_slice::<f32>()?.slice(q_span.0..q_span.1);
+    let k = sk.as_cuda_slice::<f32>()?.slice(k_span.0..k_span.1);
+    let v = sv.as_cuda_slice::<f32>()?.slice(v_span.0..v_span.1);
+    let y = alloc_f32(&dev, n_elem)?;
+
+    let func = load_func(
+        &dev,
+        "attn_tiled_f32",
+        "unsloth_attn_tiled_f32",
+        ATTN_TILED_SRC,
+    )?;
+    let n_qtiles = seq.div_ceil(ATTN_TILE_BR);
+    let grid = batch
+        .checked_mul(heads)
+        .and_then(|bh| bh.checked_mul(n_qtiles))
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA tiled grid overflow".into()).bt())?;
+    let cfg = launch_config(grid, 128, tiled_smem_bytes(dim))?;
+    let seq_i = i32::try_from(seq)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA seq {seq} exceeds i32")).bt())?;
+    let dim_i = i32::try_from(dim)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA dim {dim} exceeds i32")).bt())?;
+    let causal_i = i32::from(causal);
+    let stream = dev.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&q);
+    builder.arg(&k);
+    builder.arg(&v);
+    builder.arg(&y);
+    builder.arg(&seq_i);
+    builder.arg(&dim_i);
+    builder.arg(&scale);
+    builder.arg(&causal_i);
+    launch(&mut builder, cfg)?;
+    Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
+const ATTN_TILED_SRC: &str = r#"
+extern "C" __global__ void attn_tiled_f32(
+    const float* __restrict__ q,
+    const float* __restrict__ k,
+    const float* __restrict__ v,
+    float* __restrict__ out,
+    int seq,
+    int dim,
+    float scale,
+    int causal
+) {
+    const int BR = 16;
+    const int BC = 16;
+    const int n_qtiles = (seq + BR - 1) / BR;
+    const int bh = (int)blockIdx.x / n_qtiles;
+    const int qtile = (int)blockIdx.x % n_qtiles;
+    const int q0 = qtile * BR;
+    const int tid = (int)threadIdx.x;
+    const int bdx = (int)blockDim.x;
+
+    extern __shared__ float smem[];
+    float* Ki = smem;
+    float* Vi = Ki + BC * dim;
+    float* Qi = Vi + BC * dim;
+    float* Oi = Qi + BR * dim;
+    float* S = Oi + BR * dim;
+    float* mstat = S + BR * BC;
+    float* lstat = mstat + BR;
+    float* alph = lstat + BR;
+
+    const size_t bh_off = (size_t)bh * (size_t)seq * (size_t)dim;
+    const float* qbase = q + bh_off;
+    const float* kbase = k + bh_off;
+    const float* vbase = v + bh_off;
+    float* obase = out + bh_off;
+
+    for (int i = tid; i < BR * dim; i += bdx) {
+        int qi = i / dim;
+        int d = i - qi * dim;
+        int qrow = q0 + qi;
+        Qi[i] = (qrow < seq) ? qbase[(size_t)qrow * (size_t)dim + (size_t)d] : 0.f;
+        Oi[i] = 0.f;
+    }
+    if (tid < BR) {
+        mstat[tid] = -1.0e30f;
+        lstat[tid] = 0.f;
+    }
+    __syncthreads();
+
+    const int n_ktiles = (seq + BC - 1) / BC;
+    for (int kt = 0; kt < n_ktiles; kt++) {
+        int k0 = kt * BC;
+        if (causal && k0 > (q0 + BR - 1)) {
+            break;
+        }
+        for (int i = tid; i < BC * dim; i += bdx) {
+            int kj = i / dim;
+            int d = i - kj * dim;
+            int krow = k0 + kj;
+            float kval = 0.f;
+            float vval = 0.f;
+            if (krow < seq) {
+                kval = kbase[(size_t)krow * (size_t)dim + (size_t)d];
+                vval = vbase[(size_t)krow * (size_t)dim + (size_t)d];
+            }
+            Ki[i] = kval;
+            Vi[i] = vval;
+        }
+        __syncthreads();
+
+        for (int sidx = tid; sidx < BR * BC; sidx += bdx) {
+            int qi = sidx / BC;
+            int kj = sidx - qi * BC;
+            int qrow = q0 + qi;
+            int krow = k0 + kj;
+            float score = -1.0e30f;
+            if (qrow < seq && krow < seq && !(causal && krow > qrow)) {
+                const float* qr = Qi + qi * dim;
+                const float* kr = Ki + kj * dim;
+                float dot = 0.f;
+                for (int d = 0; d < dim; d++) {
+                    dot += qr[d] * kr[d];
+                }
+                score = dot * scale;
+            }
+            S[sidx] = score;
+        }
+        __syncthreads();
+
+        for (int qi = 0; qi < BR; qi++) {
+            if (tid == 0) {
+                float row_max = -1.0e30f;
+                for (int kj = 0; kj < BC; kj++) {
+                    row_max = fmaxf(row_max, S[qi * BC + kj]);
+                }
+                float m_old = mstat[qi];
+                float m_new = fmaxf(m_old, row_max);
+                float alpha = (m_old > -1.0e30f) ? expf(m_old - m_new) : 0.f;
+                float row_sum = 0.f;
+                for (int kj = 0; kj < BC; kj++) {
+                    float p = expf(S[qi * BC + kj] - m_new);
+                    S[qi * BC + kj] = p;
+                    row_sum += p;
+                }
+                alph[qi] = alpha;
+                mstat[qi] = m_new;
+                lstat[qi] = lstat[qi] * alpha + row_sum;
+            }
+            __syncthreads();
+            float alpha = alph[qi];
+            for (int d = tid; d < dim; d += bdx) {
+                float acc = 0.f;
+                for (int kj = 0; kj < BC; kj++) {
+                    acc += S[qi * BC + kj] * Vi[kj * dim + d];
+                }
+                Oi[qi * dim + d] = Oi[qi * dim + d] * alpha + acc;
+            }
+            __syncthreads();
+        }
+    }
+
+    for (int i = tid; i < BR * dim; i += bdx) {
+        int qi = i / dim;
+        int d = i - qi * dim;
+        int qrow = q0 + qi;
+        if (qrow < seq) {
+            float inv = (lstat[qi] > 0.f) ? (1.f / lstat[qi]) : 0.f;
+            obase[(size_t)qrow * (size_t)dim + (size_t)d] = Oi[i] * inv;
+        }
+    }
+}
+"#;
+
+#[cfg(feature = "cuda")]
 const ATTN_SRC: &str = r#"
 extern "C" __global__ void attn_online_f32(
     const float* __restrict__ q,
@@ -343,11 +586,11 @@ extern "C" __global__ void attn_online_f32(
 }
 "#;
 
-/// Device-resident attention: CustomOp online-softmax when there is no extra mask.
+/// Device-resident attention: tiled SRAM FA on CUDA when there is no extra mask
+/// and head dim ≤ [`ATTN_TILE_DIM_MAX`]; otherwise online-softmax.
 ///
-/// CUDA CustomOp does **not** `to_vec1` and does **not** allocate `[B,H,S,S]`.
-/// An explicit `mask` still uses Candle GEMM+softmax (scores materialize).
-/// Tiled SRAM FA is the Triton-bridge job.
+/// Does **not** `to_vec1`. An explicit `mask` still uses Candle GEMM+softmax.
+/// This is an owned kernel, not Unsloth PTX.
 ///
 /// # Errors
 ///
@@ -407,6 +650,14 @@ mod tests {
     }
 
     #[test]
+    fn tiled_smem_fits_compare_heads() {
+        assert!(tiled_smem_ok(64));
+        assert!(tiled_smem_ok(128));
+        assert!(!tiled_smem_ok(0));
+        assert!(!tiled_smem_ok(256));
+    }
+
+    #[test]
     fn online_matches_softmax() {
         let device = Device::Cpu;
         let q = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
@@ -429,6 +680,38 @@ mod tests {
     #[cfg(feature = "cuda")]
     fn cuda_or_skip() -> Option<Device> {
         Device::new_cuda(0).ok()
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_tiled_matches_softmax_s512() {
+        let Some(device) = cuda_or_skip() else {
+            return;
+        };
+        let q = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
+        let scale = 1.0f64 / 64.0f64.sqrt();
+        let y = attention_custom_op(&q, &k, &v, scale as f32, true).unwrap();
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let scores = (scores * scale).unwrap();
+        let mask = causal_mask_tensor(512, &device).unwrap();
+        let scores = scores.broadcast_add(&mask).unwrap();
+        let r = candle_nn::ops::softmax(&scores, 3)
+            .unwrap()
+            .matmul(&v)
+            .unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 1e-4, "tiled s512 causal mae={mae}");
     }
 
     #[cfg(feature = "cuda")]

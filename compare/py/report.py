@@ -59,7 +59,7 @@ def main() -> None:
             "torch/unsloth/rust compare ms are host+cuda-sync p50/p99 (n=100 after 5 warmups), not one-shot.",
             "Rust event (device-only) p50/p99 is artifacts/custom_op_cuda.json, not this file.",
             "Shapes are tiny (B=2 H=8 D=64); elementwise is launch-bound.",
-            "Rust attention is unsloth_rs::ops::attention (online-softmax on CudaStorage, no [B,H,S,S]), not tiled FA.",
+            "Rust attention is unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC). Not Unsloth PTX. Extra mask still GEMM.",
             "Rust kernels compiled with CUDA_COMPUTE_CAP=90 on SM 12.0 hardware (compile pin).",
             "Unsloth attn is not a standalone kernel; not compared.",
         ],

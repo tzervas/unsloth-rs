@@ -20,7 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `unsloth_rs::ops` — Triton-shaped names (`rmsnorm`, `rope`, `swiglu`,
   `attention`, `cross_entropy`, `fused_linear_ce`). Backends stay internal.
 - CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
-  materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
+  materializes `[B,H,S,S]` when there is no extra mask.
+- CustomOp CUDA attention is SRAM-tiled Flash-style softmax for head dim
+  ≤ 128 (owned NVRTC, not Unsloth PTX). Wider heads keep the HBM-streaming
+  online kernel. Extra masks still Candle GEMM.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use
   `alloc_zeros`. The only remaining `unsafe` is `nvrtc::launch` (cudarc
   cannot check PTX ABI).

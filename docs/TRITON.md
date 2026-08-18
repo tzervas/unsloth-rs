@@ -42,18 +42,20 @@ It is **no longer the default**. `flash_attention_cubecl` uses
 [`attention_device`](../src/kernels/custom_op/attention.rs) unless
 `UNSLOTH_CUBECL_FA` is set.
 
-CUDA default is device-resident **online-softmax** (no `[B,H,S,S]`). That is
-**not** FA2 SRAM. Tiled FA is the first real triton-bridge payload — **that**
-work needs the 5080; see
+CUDA default (no extra mask, head dim ≤ 128) is an **owned** SRAM-tiled
+Flash-style kernel (NVRTC). That is not Unsloth `flash_attention_2` PTX.
+triton-bridge Job C is still the *foreign* Unsloth JIT payload; it remains
+FAIL_ENV until Unsloth ships one. See
 [triton-bridge GPU_HANDOFF](https://github.com/tzervas/triton-bridge-rs/blob/main/docs/GPU_HANDOFF.md).
 
 ## Dispatch (non-CustomOp policy)
 
 | Situation | Path | Why |
 |-----------|------|-----|
-| No extra mask | CustomOp online-softmax | Device-resident; extra `O(S·D)` |
+| No extra mask, head dim ≤ 128 | CustomOp tiled SRAM FA | Owned NVRTC; not Unsloth PTX |
+| No extra mask, wider head | CustomOp online-softmax | HBM-streaming fallback |
 | Extra attention mask | Candle GEMM + softmax | Vendor GEMM; scores materialize |
-| `triton_bridge_ready()` | Tiled FA on a device pointer | Only after Job C launches |
+| `triton_bridge_ready()` | Foreign Unsloth FA PTX | Only after Job C launches |
 | `UNSLOTH_CUBECL_FA` | CubeCL FA | Opt-in only; still host D2H |
 | Fused linear+CE | CustomOp (CPU) or vocab-tile GEMM | No `[N, V]`; not CubeCL |
 | QKV / SwiGLU projections | Candle / cuBLAS GEMM | Do not NVRTC-fuse large GEMMs |

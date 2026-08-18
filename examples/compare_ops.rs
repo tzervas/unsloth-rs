@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
     let json = format!(
-        "{{\"device\":\"cuda\",\"warmup\":{WARMUP},\"n_samples\":{N_SAMPLES},\"cuda_compute_cap\":{},\"attn\":\"unsloth_rs::ops::attention online-softmax on CudaStorage, not tiled FA\",\"ms\":{{{}}}}}\n",
+        "{{\"device\":\"cuda\",\"warmup\":{WARMUP},\"n_samples\":{N_SAMPLES},\"cuda_compute_cap\":{},\"attn\":\"unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC, not Unsloth PTX)\",\"ms\":{{{}}}}}\n",
         env::var("CUDA_COMPUTE_CAP").unwrap_or_else(|_| "unset".into()),
         ms_json.trim_end_matches(',')
     );

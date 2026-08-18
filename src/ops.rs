@@ -11,7 +11,7 @@
 //! | [`rmsnorm`] | CustomOp | CubeCL D2H |
 //! | [`rope`] | CustomOp | host `to_vec1` |
 //! | [`swiglu`] | CustomOp elementwise | fusing the GEMMs |
-//! | [`attention`] | CustomOp online-softmax (no extra mask) | tiled SRAM FA |
+//! | [`attention`] | CustomOp tiled SRAM FA (CUDA, no extra mask) | Unsloth FA PTX / extra-mask GEMM |
 //! | [`cross_entropy`] | chunked CustomOp | full `[N,V]` softmax |
 //! | [`fused_linear_ce`] | CPU CustomOp / device vocab tiles | a Triton JIT |
 
@@ -51,7 +51,8 @@ pub fn swiglu(gate: &Tensor, up: &Tensor) -> CandleResult<Tensor> {
 
 /// Causal/non-causal attention. Extra `mask` still uses Candle GEMM+softmax.
 ///
-/// Not tiled Flash Attention. Scale is typically `1/sqrt(head_dim)`.
+/// CUDA default (no extra mask, head dim ≤ 128) is SRAM-tiled Flash-style
+/// softmax. Scale is typically `1/sqrt(head_dim)`.
 ///
 /// # Errors
 ///

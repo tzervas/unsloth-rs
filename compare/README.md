@@ -58,9 +58,8 @@ Latency in **this** artifact is host+`cuda.synchronize` **p50/p99**
 (`torch_p50_ms` / `unsloth_p50_ms` / `rust_p50_ms`). Device-only
 (CUDA-event) rust p50/p99 stays in `artifacts/custom_op_cuda.json`.
 Shapes are launch-bound. Do not market compare rust p50 against torch p50
-as a 2× claim. Rust attention is CustomOp online-softmax on `CudaStorage`
-(no `[B,H,S,S]`), not tiled SRAM FA; on s512 it is **slower** than
-torch SDPA (1.25 ms vs 0.097 ms p50).
+as a 2× claim. Rust attention is owned SRAM-tiled FA (not Unsloth PTX).
+On s512 it is still **slower** than torch SDPA (0.68 ms vs 0.097 ms p50).
 
 Host+sync p50 ms (5080, CAP pin 90, n=100):
 
@@ -70,7 +69,7 @@ Host+sync p50 ms (5080, CAP pin 90, n=100):
 | RoPE | 0.027 / 0.070 | 0.060 / 0.061 | 0.009 / 0.012 |
 | SwiGLU | 0.010 / 0.010 | 0.014 / 0.016 | 0.007 / 0.007 |
 | CE | 0.011 / 0.016 | 0.051 / 0.052 | 0.011 / 0.012 |
-| attn | 0.023 / 0.097 | n/a | 0.112 / 1.251 |
+| attn | 0.023 / 0.097 | n/a | 0.106 / 0.679 |
 
 Host+event p50/p99 (after cache; not a sacred-bar number):
 

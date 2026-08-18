@@ -1,4 +1,5 @@
 /target/
+artifacts/compare-work/
 Cargo.lock
 **/*.rs.bk
 *.pdb

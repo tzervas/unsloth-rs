@@ -26,7 +26,15 @@ Needs: Podman + `nvidia-ctk` + `/dev/nvidia0`. Writes `artifacts/py-rs-compare.j
 
 `FAIL_ENV` if the GPU, CUDA image, or Unsloth import is missing — never a silent green.
 
-The Python image venv installs `unsloth` then force-reinstalls `torchvision` from the **cu128** index (PyPI's wheel fails `torchvision::nms` against `torch==2.11+cu128`). Import is still probed at runtime. Triton JIT needs `gcc` in the image.
+Torch stays in the image venv. Unsloth is pip-installed into a **named
+volume** (`unsloth-rs-compare-site` → `/opt/site-extra`, `PYTHONPATH`).
+Later runs skip pip if `import unsloth` works. Baking Unsloth into the
+image OOMs `/var/tmp`. Force-reinstall `torchvision` from the **cu128**
+index (PyPI's wheel fails `nms` against `torch==2.11+cu128`). Import is
+still probed at runtime. Triton JIT needs `gcc` in the image.
+
+`COMPARE_SITE_VOL` overrides the volume name. `podman volume rm
+unsloth-rs-compare-site` to force a reinstall.
 
 Unsloth attention is **not** a standalone kernel here (patched SDPA/flex) — recorded as such, not compared.
 
@@ -48,8 +56,8 @@ Latency in **this** artifact is **one shot after 3 warmups**, not p50/p99.
 `rust.ms` is **pre-cache NVRTC-per-launch** (compile on every CustomOp call)
 and is **superseded** by `artifacts/custom_op_cuda.json` (host vs CUDA-event
 p50/p99 after the PTX cache). torch/Unsloth remain one-shot. Do not market
-the pre-cache rust.ms against torch ~0.03 ms. Rust attention is GEMM+softmax
-on `CudaStorage`, not tiled FA.
+the pre-cache rust.ms against torch ~0.03 ms. Rust attention is CustomOp online-softmax on `CudaStorage` (no `[B,H,S,S]`),
+not tiled SRAM FA.
 
 Host+event p50/p99 (after cache; not a sacred-bar number):
 

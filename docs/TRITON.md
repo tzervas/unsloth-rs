@@ -70,8 +70,6 @@ Measured on this box (2026-08-17): `vulkaninfo` lists the 5080 and
 llvmpipe only — ANV does not show the iGPU in the live instance. `clinfo
 -l` is empty. No oneAPI / Level Zero. Candle has no Intel device.
 
-A determined DIY path would be: force the Intel Vulkan ICD, then a
-CubeCL-Vulkan experiment, **or** install Intel compute-runtime/OpenCL
-and keep it off the 5080. Expect FAIL_ENV, no speed claims, no training
-story. Useful as a “does the laptop-class box even light up” probe for
-other people; not a reason to add an `igpu` feature this cycle.
+**Backlog.** Do not add an `igpu` feature this cycle. A later DIY probe
+would force the Intel Vulkan ICD or install compute-runtime/OpenCL, off
+the 5080. Expect FAIL_ENV, no speed claims, no training story.

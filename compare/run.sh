@@ -24,10 +24,16 @@ echo "==> python fixtures + torch (+ unsloth pip-installed into image venv)"
 # lives on /home so we do not re-download 100MB wheels every run.
 PIP_CACHE="${COMPARE_PIP_CACHE:-$HOME/.cache/pip}"
 TRITON_CACHE="${COMPARE_TRITON_CACHE:-$HOME/.triton}"
+SITE_VOL="${COMPARE_SITE_VOL:-unsloth-rs-compare-site}"
 mkdir -p "$PIP_CACHE" "$TRITON_CACHE"
+if ! podman volume exists "$SITE_VOL" >/dev/null 2>&1; then
+  echo "==> create persist volume $SITE_VOL (Unsloth site-packages, not the image venv)"
+  podman volume create "$SITE_VOL" >/dev/null
+fi
 PY_MOUNTS=(
   -e COMPARE_WORK=/work/out
   -e UNSLOTH_SKIP_TORCHVISION_CHECK=1
+  -e PYTHONPATH=/opt/site-extra
   -e CC=gcc
   -e CXX=g++
   -e TMPDIR=/work/tmp
@@ -36,13 +42,21 @@ PY_MOUNTS=(
   -v "$PIP_CACHE:/root/.cache/pip:Z"
   -v "$TRITON_CACHE:/root/.triton:Z"
   -v "${TMPDIR:-/home/kang/tmp}:/work/tmp:Z"
+  -v "$SITE_VOL:/opt/site-extra:Z"
 )
 if [[ "${COMPARE_PIP_UNSLOTH:-1}" == "1" ]]; then
+  # Install Unsloth into the named volume once. Re-runs skip pip if import works.
   podman run --rm "${GPU_ARGS[@]}" \
     --entrypoint /bin/bash \
     "${PY_MOUNTS[@]}" \
     "$IMG_PY" \
-    -lc 'pip install unsloth && pip install --force-reinstall --no-deps --index-url https://download.pytorch.org/whl/cu128 torchvision && python /opt/compare/py/generate_and_unsloth.py'
+    -lc 'if python -c "import unsloth" >/dev/null 2>&1; then
+           echo "persist: unsloth already importable (skip pip)"
+         else
+           pip install --target /opt/site-extra unsloth
+           pip install --target /opt/site-extra --force-reinstall --no-deps --index-url https://download.pytorch.org/whl/cu128 torchvision
+         fi
+         python /opt/compare/py/generate_and_unsloth.py'
 else
   podman run --rm "${GPU_ARGS[@]}" \
     "${PY_MOUNTS[@]}" \

@@ -257,8 +257,10 @@ fn logsumexp(xs: &[f32]) -> f32 {
 
 struct FusedFwd {
     mean: f32,
+    n_valid: usize,
 }
 
+#[derive(Clone, Copy)]
 struct FusedGeom {
     rows: usize,
     dim: usize,
@@ -273,17 +275,64 @@ fn cpu_fused_fwd(
     targets: &[i64],
     geom: &FusedGeom,
 ) -> CandleResult<FusedFwd> {
+    let rows = geom.rows;
+    let workers = super::cpu_isa::cpu_worker_threads(rows);
+    if workers == 1 || rows < 8 {
+        return cpu_fused_fwd_range(hidden, weight, targets, geom, 0, rows);
+    }
+    let chunk_rows = rows.div_ceil(workers);
+    std::thread::scope(|scope| {
+        let mut joins = Vec::with_capacity(workers);
+        let mut start = 0usize;
+        while start < rows {
+            let end = (start + chunk_rows).min(rows);
+            let geom = *geom;
+            joins
+                .push(scope.spawn(move || {
+                    cpu_fused_fwd_range(hidden, weight, targets, &geom, start, end)
+                }));
+            start = end;
+        }
+        let mut sum = 0.0f32;
+        let mut n_valid = 0usize;
+        for j in joins {
+            let part = j.join().map_err(|_| {
+                candle_core::Error::Msg("fused CE CPU worker panicked".into()).bt()
+            })??;
+            // Re-weight: each part.mean is over its own n_valid. Recover sums.
+            if part.n_valid > 0 {
+                sum += part.mean * part.n_valid as f32;
+                n_valid += part.n_valid;
+            }
+        }
+        let mean = if n_valid == 0 {
+            0.0
+        } else {
+            sum / n_valid as f32
+        };
+        Ok(FusedFwd { mean, n_valid })
+    })
+}
+
+fn cpu_fused_fwd_range(
+    hidden: &[f32],
+    weight: &[f32],
+    targets: &[i64],
+    geom: &FusedGeom,
+    row0: usize,
+    row1: usize,
+) -> CandleResult<FusedFwd> {
     let FusedGeom {
-        rows,
         dim,
         vocab,
         ignore,
         chunk,
+        ..
     } = *geom;
     let mut scratch = vec![0.0f32; chunk.min(vocab)];
     let mut sum = 0.0f32;
     let mut n_valid = 0usize;
-    for r in 0..rows {
+    for r in row0..row1 {
         let t = targets[r];
         if t == ignore {
             continue;
@@ -300,11 +349,7 @@ fn cpu_fused_fwd(
             let width = end - c0;
             for (k, slot) in scratch[..width].iter_mut().enumerate() {
                 let wrow = &weight[(c0 + k) * dim..(c0 + k + 1) * dim];
-                let mut dot = 0.0f32;
-                for d in 0..dim {
-                    dot += h[d] * wrow[d];
-                }
-                *slot = dot;
+                *slot = super::cpu_isa::dot_f32(h, wrow);
             }
             lse = logaddexp(lse, logsumexp(&scratch[..width]));
             let ti = t as usize;
@@ -321,7 +366,7 @@ fn cpu_fused_fwd(
     } else {
         sum / n_valid as f32
     };
-    Ok(FusedFwd { mean })
+    Ok(FusedFwd { mean, n_valid })
 }
 
 struct FusedBwd {
@@ -364,11 +409,7 @@ fn cpu_fused_bwd(
             let width = end - c0;
             for (k, slot) in scratch[..width].iter_mut().enumerate() {
                 let wrow = &weight[(c0 + k) * dim..(c0 + k + 1) * dim];
-                let mut dot = 0.0f32;
-                for d in 0..dim {
-                    dot += h[d] * wrow[d];
-                }
-                *slot = dot;
+                *slot = super::cpu_isa::dot_f32(h, wrow);
             }
             lse = logaddexp(lse, logsumexp(&scratch[..width]));
             c0 = end;
@@ -379,10 +420,7 @@ fn cpu_fused_bwd(
             let width = end - c0;
             for (k, slot) in scratch[..width].iter_mut().enumerate() {
                 let wrow = &weight[(c0 + k) * dim..(c0 + k + 1) * dim];
-                let mut dot = 0.0f32;
-                for d in 0..dim {
-                    dot += h[d] * wrow[d];
-                }
+                let dot = super::cpu_isa::dot_f32(h, wrow);
                 let mut p = scale * (dot - lse).exp();
                 if (t as usize) == c0 + k {
                     p -= scale;

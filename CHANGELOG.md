@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rope_with_position_ids` + `RotaryEmbedding::forward` honors packed `[B,S]` ids.
 - `fused_linear_cross_entropy` avoids `[N, V]` on every device: CPU CustomOp,
   others vocab-tile Candle GEMM (peak extra `[N, chunk]`).
+- CustomOp CPU dots use AVX2+FMA when advertised (14700K has these; no
+  AVX-512/AMX). Fused-CE rows parallelize via `std::thread`.
 - CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
   materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use

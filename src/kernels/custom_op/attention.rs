@@ -113,11 +113,7 @@ fn cpu_online_attn(
             let k_end = if causal { query_i + 1 } else { seq };
             for key_j in 0..k_end {
                 let krow = &k[q_base + key_j * dim..q_base + key_j * dim + dim];
-                let mut dot = 0.0f32;
-                for pos in 0..dim {
-                    dot += qrow[pos] * krow[pos];
-                }
-                let score = dot * scale;
+                let score = super::cpu_isa::dot_f32(qrow, krow) * scale;
                 let new_max = running_max.max(score);
                 let alpha = if running_max.is_finite() {
                     (running_max - new_max).exp()

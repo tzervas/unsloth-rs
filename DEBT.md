@@ -20,6 +20,7 @@
 | CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
 | f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
 | Fused linear+CE | **CPU + device tiles** | CPU CustomOp; CUDA/other: vocab-chunk GEMM, peak `[N, chunk]` not `[N, V]` |
+| Host CPU ISA | **AVX2+FMA** | 14700K: no AVX-512/AMX. P=`0-15` E=`16-27`. No MKL dep. |
 
 **Last updated (Flash residual):** 2026-07-22
  

@@ -45,3 +45,17 @@ work needs the 5080; see
 Do **not** grow a third CubeCL kernel stack while
 `interop_requires_host_roundtrip()` is true. Do **not** add a
 `triton-bridge` Cargo dep while `bridge_ready() == false`.
+
+## Host CPU (akula-prime i7-14700K)
+
+| Have | Do not have |
+|------|-------------|
+| AVX2, FMA, AVX-VNNI | AVX-512, AMX (those are Xeon, not this desktop SKU) |
+| P-cores `0-15` (8×2) | — |
+| E-cores `16-27` (12×1) | — |
+
+CustomOp CPU dots use AVX2+FMA when `is_x86_feature_detected`. Fused-CE
+rows parallelize with `std::thread` (no rayon / MKL dep). The crate does
+**not** pin affinity — `taskset -c 0-15` for P-only if the compositor
+should keep the E-cores. Large GEMMs stay Candle (already AVX2). VNNI is
+INT8; unused until we have an INT8 CustomOp.

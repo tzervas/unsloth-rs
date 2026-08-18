@@ -12,6 +12,7 @@
 
 pub mod attention;
 pub mod ce;
+mod cpu_isa;
 pub mod fused_ce;
 #[cfg(feature = "cuda")]
 pub mod nvrtc;

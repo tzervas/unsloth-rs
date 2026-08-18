@@ -1,0 +1,24 @@
+{
+  "sacred_bar": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "cuda_compute_cap": "90",
+  "compute_apps": "pid, process_name, used_gpu_memory [MiB]\n685340, /home/kang/code/personal/unsloth-rs/target/release/deps/custom_op_cuda-574a15967e062568, 328 MiB",
+  "note": "Rust host+event p50/p99 after PTX cache. First NVRTC compile is outside timed regions. torch/Unsloth remain one-shot in artifacts/py-rs-compare.json. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar.",
+  "samples": 100,
+  "ops": [
+    {"op":"rmsnorm","tag":"s128","elems":16384,"vocab":null,"n_tokens":null,"host_p50_ms":0.006910,"host_p99_ms":0.121915,"event_p50_ms":0.003776,"event_p99_ms":0.007392,"launch_bound":true,"compile_cached":true},
+    {"op":"rmsnorm","tag":"s512","elems":65536,"vocab":null,"n_tokens":null,"host_p50_ms":0.007477,"host_p99_ms":0.013212,"event_p50_ms":0.003808,"event_p99_ms":0.010688,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s128","elems":16384,"vocab":null,"n_tokens":null,"host_p50_ms":0.006298,"host_p99_ms":0.008240,"event_p50_ms":0.002592,"event_p99_ms":0.004320,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s512","elems":65536,"vocab":null,"n_tokens":null,"host_p50_ms":0.006404,"host_p99_ms":0.006891,"event_p50_ms":0.002464,"event_p99_ms":0.004288,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s128","elems":131072,"vocab":null,"n_tokens":null,"host_p50_ms":0.009893,"host_p99_ms":0.014371,"event_p50_ms":0.004240,"event_p99_ms":0.005824,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s512","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.012799,"host_p99_ms":0.014041,"event_p50_ms":0.005536,"event_p99_ms":0.006592,"launch_bound":true,"compile_cached":true},
+    {"op":"ce","tag":"s128","elems":32768,"vocab":128,"n_tokens":256,"host_p50_ms":0.011501,"host_p99_ms":0.198172,"event_p50_ms":0.006768,"event_p99_ms":0.011136,"launch_bound":true,"compile_cached":true},
+    {"op":"ce","tag":"s512","elems":131072,"vocab":128,"n_tokens":1024,"host_p50_ms":0.013234,"host_p99_ms":0.127503,"event_p50_ms":0.007504,"event_p99_ms":0.010784,"launch_bound":true,"compile_cached":true},
+    {"op":"rmsnorm","tag":"s2048_launch","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.011251,"host_p99_ms":0.011740,"event_p50_ms":0.006816,"event_p99_ms":0.008608,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s2048_launch","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.008346,"host_p99_ms":0.008756,"event_p50_ms":0.004544,"event_p99_ms":0.005568,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s2048_launch","elems":4194304,"vocab":null,"n_tokens":null,"host_p50_ms":0.021914,"host_p99_ms":0.082214,"event_p50_ms":0.017408,"event_p99_ms":0.019328,"launch_bound":true,"compile_cached":true},
+    {"op":"rmsnorm","tag":"compute","elems":16777216,"vocab":null,"n_tokens":null,"host_p50_ms":0.164398,"host_p99_ms":0.364099,"event_p50_ms":0.159408,"event_p99_ms":0.175648,"launch_bound":false,"compile_cached":true},
+    {"op":"swiglu","tag":"compute","elems":16777216,"vocab":null,"n_tokens":null,"host_p50_ms":0.238630,"host_p99_ms":0.394107,"event_p50_ms":0.233552,"event_p99_ms":0.247360,"launch_bound":false,"compile_cached":true},
+    {"op":"ce","tag":"compute","elems":16777216,"vocab":32768,"n_tokens":512,"host_p50_ms":0.053107,"host_p99_ms":0.305796,"event_p50_ms":0.050352,"event_p99_ms":0.125312,"launch_bound":false,"compile_cached":true}
+  ]
+}

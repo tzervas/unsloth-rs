@@ -32,7 +32,7 @@ For residual GPU/env debt, see [DEBT.md](DEBT.md). For packaging, see [PUBLISHIN
 ## Issue-by-Issue Status
 
 ### Issue #5: [Kernel] Fused Flash Attention (Single-Pass Q·K^T·V) GPU Kernel Implementation
-**Status:** Completed (Phase 1 - Minimal Viable Kernel)
+**Status:** In Progress (Phase 1 - Minimal Viable Kernel)
 **Priority:** Highest
 
 - ✅ CPU reference implementation exists (`src/kernels/attention.rs`)
@@ -42,13 +42,13 @@ For residual GPU/env debt, see [DEBT.md](DEBT.md). For packaging, see [PUBLISHIN
 - ✅ Module structure created (`src/kernels/cubecl/`)
 - ✅ Candle ↔ CubeCL interop implemented
 - ✅ Kernel configuration implemented (`FlashAttentionConfig`)
-- ✅ CubeCL GPU kernel implementation completed (`src/kernels/cubecl/kernel.rs`)
-- ✅ Numerical equivalence tests completed (`tests/gpu/flash_attention.rs`)
-- ✅ GPU benchmarks completed (`tests/gpu/flash_attention.rs` & `benches/kernels.rs`)
-- ✅ VRAM profiling completed (`tests/gpu/flash_attention.rs` & `src/kernels/attention_cubecl.rs`)
+- 🚧 CubeCL GPU kernel implementation IN PROGRESS
+- ❌ Numerical equivalence tests NOT done
+- ❌ GPU benchmarks NOT done
+- ❌ VRAM profiling NOT done
 
-**Branch:** `experimental` (merged)
-**Status:** Phase 1 Completed
+**Branch:** `feature/flash-attention-cubecl`
+**Estimated Completion:** 1-3 weeks for Phase 1 (RTX 5080 target)
 
 ---
 
@@ -158,9 +158,9 @@ Flash Attention is the highest priority task because:
 - [x] Module structure (`src/kernels/cubecl/`)
 - [x] Tensor interop utilities
 - [x] Kernel configuration
-- [x] Actual kernel implementation
-- [x] Test suite
-- [x] RTX 5080 profiling
+- [ ] Actual kernel implementation
+- [ ] Test suite
+- [ ] RTX 5080 profiling
 
 **Reference Documents:**
 - `docs/cubecl-context.md` - CubeCL v0.8.1 API reference

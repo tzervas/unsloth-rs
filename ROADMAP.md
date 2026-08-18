@@ -310,9 +310,9 @@ pub struct MixedPrecisionConfig {
 **Dependencies**: Phase 1 (partial)
 
 ### Task 2.1: Fused Flash Attention Kernel
-**Branch**: `experimental` (merged)
+**Branch**: `experimental/flash-attention-cubecl`
 **Files**: `src/kernels/cubecl/kernel.rs`, `src/kernels/attention_cubecl.rs`  
-**Status**: ✅ Phase 1 Completed
+**Status**: 🚧 In Progress (Phase 1)
 
 **Objective**: Implement single-pass QKV^T attention with O(N) memory complexity.
 

@@ -1,5 +1,8 @@
 # Triton, CubeCL, and this crate
 
+**Next Grok Build session:**
+[crate-track `GROK_BUILD.md`](https://github.com/tzervas/crate-track/blob/main/GROK_BUILD.md).
+
 **Decision (2026-08-17):** Triton-the-compiler does **not** live in unsloth-rs.
 
 ## Ergonomics bar (non-negotiable)

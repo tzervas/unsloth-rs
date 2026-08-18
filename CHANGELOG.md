@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- CustomOp `rmsnorm` / `swiglu` / `attention` accept [`DType::F16`]
+  (f16 I/O, float accumulate). `ops` names unchanged. MAE vs f32 ref
+  is the check (`< 2e-3`). f16 CUDA attention uses the online kernel,
+  not the SRAM tile. `custom_op_f32_only()` is now false.
 - `ops::attention_window` — sliding-window causal on the same CustomOp
   tiled/online path as `attention`. CUDA SRAM tiles honor the window.
   MAE vs masked softmax at s512 is the check, not a throughput claim.

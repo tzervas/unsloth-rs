@@ -18,6 +18,57 @@ use candle_core::Result;
 
 pub use super::ptx_cache::{next_pow2, ptx_compile_count, sorted_percentile};
 
+/// IEEE f16 <-> f32 helpers for NVRTC. No `cuda_fp16.h` (NVRTC has an empty
+/// include path on this host). Bits match `half::f16`.
+pub const F16_CONV_SRC: &str = r#"
+__device__ float u16_as_f32(unsigned short h) {
+    unsigned int s = ((unsigned int)h & 0x8000u) << 16;
+    unsigned int e = (h >> 10) & 0x1fu;
+    unsigned int m = h & 0x3ffu;
+    unsigned int bits;
+    if (e == 0) {
+        if (m == 0) {
+            bits = s;
+        } else {
+            e = 1;
+            while ((m & 0x400u) == 0) { m <<= 1; --e; }
+            m &= 0x3ffu;
+            bits = s | ((e + (127 - 15)) << 23) | (m << 13);
+        }
+    } else if (e == 31) {
+        bits = s | 0x7f800000u | (m << 13);
+    } else {
+        bits = s | ((e + (127 - 15)) << 23) | (m << 13);
+    }
+    return __uint_as_float(bits);
+}
+__device__ unsigned short f32_as_u16(float f) {
+    unsigned int x = __float_as_uint(f);
+    unsigned int sign = (x >> 16) & 0x8000u;
+    unsigned int exp8 = (x >> 23) & 0xffu;
+    unsigned int man = x & 0x7fffffu;
+    if (exp8 == 0xffu) {
+        return (unsigned short)(sign | 0x7c00u | (man ? 0x200u : 0));
+    }
+    int exp = (int)exp8 - 127 + 15;
+    if (exp <= 0) {
+        return (unsigned short)sign;
+    }
+    if (exp >= 31) {
+        return (unsigned short)(sign | 0x7c00u);
+    }
+    unsigned int half = man + 0x1000u;
+    if (half & 0x800000u) {
+        ++exp;
+        half = 0;
+    }
+    if (exp >= 31) {
+        return (unsigned short)(sign | 0x7c00u);
+    }
+    return (unsigned short)(sign | ((unsigned int)exp << 10) | ((half >> 13) & 0x3ffu));
+}
+"#;
+
 /// Compile CUDA C to PTX (fast-math on).
 pub fn compile_ptx(src: &str) -> Result<String> {
     let opts = cudarc::nvrtc::CompileOptions {
@@ -51,6 +102,14 @@ pub fn alloc_f32(
     n: usize,
 ) -> Result<cudarc::driver::CudaSlice<f32>> {
     dev.alloc_zeros::<f32>(n)
+}
+
+/// Device buffer for f16 CustomOp output.
+pub fn alloc_f16(
+    dev: &candle_core::CudaDevice,
+    n: usize,
+) -> Result<cudarc::driver::CudaSlice<half::f16>> {
+    dev.alloc_zeros::<half::f16>(n)
 }
 
 /// 1-D launch config after range checks. Call sites should not build raw

@@ -45,9 +45,17 @@ pub const fn custom_op_device_resident() -> bool {
 }
 
 /// Dtype scope for CustomOp kernels.
+///
+/// RMSNorm, SwiGLU, and attention accept f32 and f16. Other ops stay f32-only.
 #[must_use]
 pub const fn custom_op_f32_only() -> bool {
-    true
+    false
+}
+
+/// f32 and f16 are the supported CustomOp compute dtypes for rmsnorm/swiglu/attention.
+#[must_use]
+pub fn is_f32_or_f16(dtype: candle_core::DType) -> bool {
+    matches!(dtype, candle_core::DType::F32 | candle_core::DType::F16)
 }
 
 #[cfg(test)]
@@ -55,7 +63,8 @@ mod tests {
     #[test]
     fn honesty_flags() {
         assert!(super::custom_op_device_resident());
-        assert!(super::custom_op_f32_only());
+        assert!(!super::custom_op_f32_only());
+        assert!(super::is_f32_or_f16(candle_core::DType::F16));
         assert!(crate::kernels::cubecl::interop_requires_host_roundtrip());
     }
 }

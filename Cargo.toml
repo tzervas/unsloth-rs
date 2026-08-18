@@ -22,6 +22,7 @@ candle-nn = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytemuck = { version = "1.21", features = ["derive"] }
+half = "2"
 
 # GPU compute - CubeCL for cross-platform GPU kernels
 cubecl = { workspace = true }

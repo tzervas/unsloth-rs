@@ -18,7 +18,7 @@
 | CustomOp CUDA `unsafe` | **Narrowed** | `alloc` → `alloc_zeros`; one `nvrtc::launch` FFI |
 | Tiled FA SRAM (true Flash) | **Open** | [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1 |
 | CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
-| f16/bf16 CustomOp | **Out of 1.0.4** | f32 only (`custom_op_f32_only()`) |
+| f16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | f16 I/O, float acc. bf16 still open. `custom_op_f32_only() == false` |
 | Fused linear+CE | **CPU + device tiles** | CPU CustomOp; CUDA tile smoke PASS on 5080 (fwd vs CPU `< 1e-4`) |
 | Host CPU ISA | **AVX2+FMA** | 14700K: no AVX-512/AMX. P=`0-15` E=`16-27`. No MKL dep. |
 

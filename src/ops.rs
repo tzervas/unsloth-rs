@@ -8,7 +8,7 @@
 //!
 //! | Name | Today | Not |
 //! |------|--------|-----|
-//! | [`rmsnorm`] | CustomOp | CubeCL D2H |
+//! | [`rmsnorm`] | CustomOp f32/f16 | CubeCL D2H |
 //! | [`layernorm`] | CustomOp mean/var + affine | RMSNorm |
 //! | [`rope`] / [`rope_with_ids`] | CustomOp | host `to_vec1` |
 //! | [`swiglu`] | CustomOp `silu⊙up` | fusing the GEMMs |
@@ -19,7 +19,7 @@
 //! | [`cross_entropy`] | chunked CustomOp | full `[N,V]` softmax |
 //! | [`fused_linear_ce`] | CPU CustomOp / device vocab tiles | a Triton JIT |
 
-use candle_core::{Result as CandleResult, Tensor};
+use candle_core::{DType, Result as CandleResult, Tensor};
 
 use crate::kernels::custom_op::{
     attention_device, attention_device_softcap, attention_device_window, chunked_cross_entropy,
@@ -27,7 +27,7 @@ use crate::kernels::custom_op::{
     rope_custom_op, rope_with_position_ids, swiglu_custom_op, DEFAULT_CE_CHUNK,
 };
 
-/// `y = x / rms(x) * weight` over the last dim. f32.
+/// `y = x / rms(x) * weight` over the last dim. [`DType::F32`] or [`DType::F16`].
 ///
 /// # Errors
 ///
@@ -181,6 +181,9 @@ mod tests {
         let b = Tensor::zeros((8,), candle_core::DType::F32, &d).unwrap();
         let ln = layernorm(&x, &w, &b, 1e-5).unwrap();
         assert_eq!(ln.dims(), x.dims());
+        let xf = x.to_dtype(DType::F16).unwrap();
+        let wf = w.to_dtype(DType::F16).unwrap();
+        assert_eq!(rmsnorm(&xf, &wf, 1e-5).unwrap().dtype(), DType::F16);
         let g = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         let u = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         assert_eq!(geglu(&g, &u).unwrap().dims(), g.dims());

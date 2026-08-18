@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finite. Not a throughput claim.
 - Compare harness: persist Unsloth in Podman volume `unsloth-rs-compare-site`
   (skip pip when import works). Image bake still avoided.
+- `unsloth_rs::ops` — Triton-shaped names (`rmsnorm`, `rope`, `swiglu`,
+  `attention`, `cross_entropy`, `fused_linear_ce`). Backends stay internal.
 - CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
   materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use

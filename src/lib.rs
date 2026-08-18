@@ -32,16 +32,11 @@
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use unsloth_rs::kernels::{FusedAttention, FusedAttentionConfig};
 //! use candle_core::Device;
+//! use unsloth_rs::ops::{attention, rmsnorm, rope, swiglu};
 //!
-//! let config = FusedAttentionConfig {
-//!     hidden_size: 768,
-//!     num_heads: 12,
-//!     head_dim: 64,
-//!     ..Default::default()
-//! };
-//! let attention = FusedAttention::new(config, &Device::Cpu)?;
+//! let y = rmsnorm(&x, &weight, 1e-5)?;
+//! let a = attention(&q, &k, &v, scale, None, true)?;
 //! ```
 
 #![warn(missing_docs)]
@@ -64,6 +59,7 @@
 pub mod error;
 pub mod kernels;
 pub mod memory;
+pub mod ops;
 pub mod training;
 
 pub use error::{Result, UnslothError};

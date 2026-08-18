@@ -2,6 +2,22 @@
 
 **Decision (2026-08-17):** Triton-the-compiler does **not** live in unsloth-rs.
 
+## Ergonomics bar (non-negotiable)
+
+Call sites must stay as easy as a Triton JIT launch / Unsloth kernel import,
+**regardless of backend** (CustomOp, Candle GEMM, later device-pointer FA).
+
+- Public names live in [`unsloth_rs::ops`](../src/ops.rs): `rmsnorm`, `rope`,
+  `swiglu`, `attention`, `cross_entropy`, `fused_linear_ce`.
+- One function, tensors in, tensor out. No NVRTC, CubeCL handles, or
+  `LaunchConfig` at the call site.
+- Device dispatch is inside the function. CPU and CUDA share the name.
+- Missing GPU / toolkit is `FAIL_ENV`, not a different API.
+- Tiled FA, when it exists, must keep `attention(q,k,v,scale,mask,causal)`.
+
+Implementation may be NVRTC, Candle GEMM, or triton-bridge. The names do not
+change. Do not make users pick `*_custom_op` vs `*_cubecl` vs `*_device`.
+
 | Need | Where |
 |------|--------|
 | Transformer ops on Candle tensors | **this crate** `kernels::custom_op` |

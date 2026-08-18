@@ -10,7 +10,9 @@
 //! Backward uses Candle tensor ops on the same device (not fused). That is
 //! still device-resident — it is not the G0 win; forward is.
 
-use candle_core::{CpuStorage, CustomOp2, DType, Layout, Result as CandleResult, Shape, Tensor, D};
+use candle_core::{CpuStorage, CustomOp2, Layout, Result as CandleResult, Shape, Tensor, D};
+#[cfg(any(test, feature = "cuda"))]
+use candle_core::DType;
 
 /// Binary CustomOp: `x` (any rank, last dim = `H`) × `weight` (`[H]`).
 #[derive(Clone, Debug)]

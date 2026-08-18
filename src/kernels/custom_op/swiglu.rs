@@ -6,7 +6,9 @@
 //! This is the elementwise fuse after the two FFN GEMMs. It does **not**
 //! fuse the GEMMs (cuBLAS already owns those).
 
-use candle_core::{CpuStorage, CustomOp2, DType, Layout, Result as CandleResult, Shape, Tensor};
+use candle_core::{CpuStorage, CustomOp2, Layout, Result as CandleResult, Shape, Tensor};
+#[cfg(any(test, feature = "cuda"))]
+use candle_core::DType;
 
 /// `y = silu(gate) * up`, `silu(g) = g * sigmoid(g)`.
 #[derive(Clone, Debug, Default)]

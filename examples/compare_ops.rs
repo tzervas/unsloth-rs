@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (ce, ce_p50, ce_p99) = timed_stats(&device, || Ok(cross_entropy(&lt, &tt)?))?;
         write_f32(&root.join("rust_ce.f32"), &[ce.to_vec0::<f32>()?]);
 
-        // Online-softmax on CudaStorage (no [B,H,S,S], not tiled FA).
+        // Owned tiled SRAM FA on CudaStorage (no [B,H,S,S]). Not Unsloth PTX.
         let scale = (d as f64).sqrt().recip();
         let (at, attn_p50, attn_p99) =
             timed_stats(&device, || Ok(attention(&qt, &kt, &vt, scale, None, true)?))?;

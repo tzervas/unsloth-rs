@@ -11,7 +11,9 @@
 //!
 //! CubeCL FA still `to_vec1`s and is not the default.
 
-use candle_core::{CpuStorage, CustomOp3, DType, Layout, Result as CandleResult, Shape, Tensor};
+use candle_core::{CpuStorage, CustomOp3, Layout, Result as CandleResult, Shape, Tensor};
+#[cfg(any(test, feature = "cuda"))]
+use candle_core::DType;
 
 /// Q rows per CUDA SRAM tile.
 pub const ATTN_TILE_BR: usize = 16;
@@ -186,6 +188,7 @@ fn window_hi_excl(query_i: usize, seq: usize, window: i32, causal: bool) -> usiz
     causal_end.min(query_i.saturating_add(span))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cpu_online_attn(
     q: &[f32],
     k: &[f32],
@@ -1063,6 +1066,7 @@ fn causal_mask_tensor(seq: usize, device: &candle_core::Device) -> CandleResult<
 }
 
 /// Additive mask: `-inf` outside the sliding window (and future keys if `causal`).
+#[cfg(test)]
 fn window_mask_tensor(
     seq: usize,
     window: usize,

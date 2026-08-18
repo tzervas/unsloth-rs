@@ -19,7 +19,7 @@
 //! | [`cross_entropy`] | chunked CustomOp | full `[N,V]` softmax |
 //! | [`fused_linear_ce`] | CPU CustomOp / device vocab tiles | a Triton JIT |
 
-use candle_core::{DType, Result as CandleResult, Tensor};
+use candle_core::{Result as CandleResult, Tensor};
 
 use crate::kernels::custom_op::{
     attention_device, attention_device_softcap, attention_device_window, chunked_cross_entropy,
@@ -169,7 +169,7 @@ pub fn fused_linear_ce(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, Tensor};
+    use candle_core::{DType, Device, Tensor};
 
     #[test]
     fn names_match_custom_op() {
@@ -197,5 +197,80 @@ mod tests {
         let v = Tensor::randn(0.0f32, 1.0, (1, 1, 8, 4), &d).unwrap();
         let y = attention_window(&q, &k, &v, 0.5, true, 3).unwrap();
         assert_eq!(y.dims(), q.dims());
+    }
+
+    fn mae(a: &Tensor, b: &Tensor) -> f32 {
+        (a - b)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap()
+    }
+
+    #[test]
+    fn public_ops_mae_vs_cpu_ref() {
+        let d = Device::Cpu;
+        let gate = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
+        let up = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
+        let silu = candle_nn::ops::silu(&gate).unwrap().mul(&up).unwrap();
+        assert!(mae(&swiglu(&gate, &up).unwrap(), &silu) < 1e-6);
+
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 8), &d).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 8), &d).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 8), &d).unwrap();
+        let scale = 1.0f64 / 8.0f64.sqrt();
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let ref_attn = candle_nn::ops::softmax(&(scores * scale).unwrap(), 3)
+            .unwrap()
+            .matmul(&v)
+            .unwrap();
+        assert!(
+            mae(
+                &attention(&q, &k, &v, scale, None, false).unwrap(),
+                &ref_attn
+            ) < 1e-5
+        );
+
+        let half = 4usize;
+        let s = 8usize;
+        let cos = Tensor::randn(0.0f32, 1.0, (s, half), &d).unwrap();
+        let sin = Tensor::randn(0.0f32, 1.0, (s, half), &d).unwrap();
+        let x1 = q.narrow(3, 0, half).unwrap();
+        let x2 = q.narrow(3, half, half).unwrap();
+        let c = cos.reshape((1, 1, s, half)).unwrap();
+        let n = sin.reshape((1, 1, s, half)).unwrap();
+        let rope_ref = Tensor::cat(
+            &[
+                x1.broadcast_mul(&c)
+                    .unwrap()
+                    .sub(&x2.broadcast_mul(&n).unwrap())
+                    .unwrap(),
+                x2.broadcast_mul(&c)
+                    .unwrap()
+                    .add(&x1.broadcast_mul(&n).unwrap())
+                    .unwrap(),
+            ],
+            3,
+        )
+        .unwrap();
+        assert!(mae(&rope(&q, &cos, &sin).unwrap(), &rope_ref) < 1e-5);
+
+        let logits = Tensor::randn(0.0f32, 1.0, (4, 8), &d).unwrap();
+        let targets = Tensor::from_vec(vec![0i64, 3, 7, 1], (4,), &d).unwrap();
+        let log_sm = candle_nn::ops::log_softmax(&logits, 1).unwrap();
+        let nll = log_sm
+            .gather(&targets.reshape((4, 1)).unwrap(), 1)
+            .unwrap()
+            .neg()
+            .unwrap()
+            .mean_all()
+            .unwrap();
+        let ce = cross_entropy(&logits, &targets).unwrap();
+        assert!(mae(&ce, &nll) < 1e-5);
     }
 }

@@ -64,7 +64,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let xt = Tensor::from_vec(x, (rows, hidden), &device)?.to_dtype(DType::F32)?;
         let wt = Tensor::from_vec(w, hidden, &device)?;
         let (y, rms_ms) = timed_ms(|| Ok(rmsnorm_custom_op(&xt, &wt, 1e-5)?))?;
-        write_f32(&root.join("rust_rmsnorm.f32"), &y.flatten_all()?.to_vec1::<f32>()?);
+        write_f32(
+            &root.join("rust_rmsnorm.f32"),
+            &y.flatten_all()?.to_vec1::<f32>()?,
+        );
 
         let q = load_f32(&root.join("q.f32"));
         let k = load_f32(&root.join("k.f32"));
@@ -79,14 +82,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cost = Tensor::from_vec(cos, (s, d / 2), &device)?;
         let sint = Tensor::from_vec(sin, (s, d / 2), &device)?;
         let (rq, rope_ms) = timed_ms(|| Ok(rope_custom_op(&qt, &cost, &sint)?))?;
-        write_f32(&root.join("rust_rope.f32"), &rq.flatten_all()?.to_vec1::<f32>()?);
+        write_f32(
+            &root.join("rust_rope.f32"),
+            &rq.flatten_all()?.to_vec1::<f32>()?,
+        );
 
         let gate = load_f32(&root.join("gate.f32"));
         let up = load_f32(&root.join("up.f32"));
         let gt = Tensor::from_vec(gate, (b, s, d), &device)?;
         let ut = Tensor::from_vec(up, (b, s, d), &device)?;
         let (sw, swi_ms) = timed_ms(|| Ok(swiglu_custom_op(&gt, &ut)?))?;
-        write_f32(&root.join("rust_swiglu.f32"), &sw.flatten_all()?.to_vec1::<f32>()?);
+        write_f32(
+            &root.join("rust_swiglu.f32"),
+            &sw.flatten_all()?.to_vec1::<f32>()?,
+        );
 
         let logits = load_f32(&root.join("logits.f32"));
         let targets = load_i64(&root.join("targets.i64"));
@@ -97,18 +106,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (ce, ce_ms) = timed_ms(|| Ok(chunked_cross_entropy(&lt, &tt, -100, 4096)?))?;
         write_f32(&root.join("rust_ce.f32"), &[ce.to_vec0::<f32>()?]);
 
-        // CUDA CustomOp cuda_fwd is unimplemented; attention_device is GEMM+softmax
-        // on CudaStorage (materializes [B,H,S,S], no D2H). Not tiled FA.
+        // CustomOp online-softmax on CudaStorage (no [B,H,S,S], not tiled FA).
         let scale = (d as f64).sqrt().recip();
         let (at, attn_ms) = timed_ms(|| Ok(attention_device(&qt, &kt, &vt, scale, None, true)?))?;
-        write_f32(&root.join("rust_attn.f32"), &at.flatten_all()?.to_vec1::<f32>()?);
+        write_f32(
+            &root.join("rust_attn.f32"),
+            &at.flatten_all()?.to_vec1::<f32>()?,
+        );
 
         ms_json.push_str(&format!(
             "\"{tag}\":{{\"rmsnorm\":{rms_ms:.4},\"rope\":{rope_ms:.4},\"swiglu\":{swi_ms:.4},\"ce\":{ce_ms:.4},\"attn\":{attn_ms:.4}}},"
         ));
     }
     let json = format!(
-        "{{\"device\":\"cuda\",\"warmup\":3,\"cuda_compute_cap\":{},\"attn\":\"attention_device GEMM+softmax on CudaStorage, not tiled FA\",\"ms\":{{{}}}}}\n",
+        "{{\"device\":\"cuda\",\"warmup\":3,\"cuda_compute_cap\":{},\"attn\":\"attention_custom_op online-softmax on CudaStorage, not tiled FA\",\"ms\":{{{}}}}}\n",
         env::var("CUDA_COMPUTE_CAP").unwrap_or_else(|_| "unset".into()),
         ms_json.trim_end_matches(',')
     );

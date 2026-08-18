@@ -4,9 +4,11 @@
 //! Device-resident attention (Flash-style online softmax) via [`CustomOp3`].
 //!
 //! Default path for `flash_attention_cubecl`: no CubeCL handle, no `to_vec1`.
-//! CPU: online softmax O(S·D) extra. CUDA: Candle GEMM+softmax on `CudaStorage`
-//! (still no host copy; materializes `[B,H,S,S]`). Tiled FA is
-//! [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1.
+//! CPU and CUDA CustomOp: online softmax, extra working set `O(S·D)` per
+//! query (no `[B,H,S,S]` scores). CUDA still streams K/V from HBM — this is
+//! **not** tiled SRAM Flash Attention (that is
+//! [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1).
+//! Extra masks still take Candle GEMM+softmax on `CudaStorage`.
 
 use candle_core::{CpuStorage, CustomOp3, DType, Layout, Result as CandleResult, Shape, Tensor};
 
@@ -193,23 +195,174 @@ impl CustomOp3 for AttentionOp {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        _s1: &candle_core::CudaStorage,
-        _l1: &Layout,
-        _s2: &candle_core::CudaStorage,
-        _l2: &Layout,
-        _s3: &candle_core::CudaStorage,
-        _l3: &Layout,
+        s1: &candle_core::CudaStorage,
+        l1: &Layout,
+        s2: &candle_core::CudaStorage,
+        l2: &Layout,
+        s3: &candle_core::CudaStorage,
+        l3: &Layout,
     ) -> CandleResult<(candle_core::CudaStorage, Shape)> {
-        candle_core::bail!(
-            "CustomOp online-attn cuda_fwd not implemented; use attention_device (Candle CUDA, no D2H)"
-        )
+        cuda_online_attn(self.scale, self.causal, s1, l1, s2, l2, s3, l3)
     }
 }
 
-/// Device-resident attention: CustomOp on CPU, Candle GEMM+softmax on CUDA.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn cuda_online_attn(
+    scale: f32,
+    causal: bool,
+    sq: &candle_core::CudaStorage,
+    lq: &Layout,
+    sk: &candle_core::CudaStorage,
+    lk: &Layout,
+    sv: &candle_core::CudaStorage,
+    lv: &Layout,
+) -> CandleResult<(candle_core::CudaStorage, Shape)> {
+    use super::nvrtc::{load_func, next_pow2};
+    use candle_core::cuda::{cudarc, CudaStorage, WrapErr};
+    use cudarc::driver::{LaunchConfig, PushKernelArg};
+
+    let q_span = lq
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: q must be contiguous".into()).bt())?;
+    let k_span = lk
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: k must be contiguous".into()).bt())?;
+    let v_span = lv
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: v must be contiguous".into()).bt())?;
+    let dims = lq.dims();
+    if dims.len() != 4 {
+        candle_core::bail!("attn CUDA rank {}", dims.len());
+    }
+    if lk.dims() != dims || lv.dims() != dims {
+        candle_core::bail!(
+            "attn CUDA Q/K/V shape mismatch {:?} / {:?} / {:?}",
+            dims,
+            lk.dims(),
+            lv.dims()
+        );
+    }
+    let (batch, heads, seq, dim) = (dims[0], dims[1], dims[2], dims[3]);
+    let rows = batch * heads * seq;
+    let dev = sq.device.clone();
+    if rows == 0 || dim == 0 {
+        // SAFETY: zero-length device buffer; wrap_cuda_slice takes ownership.
+        let y = unsafe { dev.alloc::<f32>(0) }?;
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()));
+    }
+
+    let q = sq.as_cuda_slice::<f32>()?.slice(q_span.0..q_span.1);
+    let k = sk.as_cuda_slice::<f32>()?.slice(k_span.0..k_span.1);
+    let v = sv.as_cuda_slice::<f32>()?.slice(v_span.0..v_span.1);
+    // SAFETY: output is written by the kernel before wrap_cuda_slice returns it.
+    let y = unsafe { dev.alloc::<f32>(rows * dim) }?;
+
+    let func = load_func(&dev, "attn_online_f32", "unsloth_attn_online_f32", ATTN_SRC)?;
+    let block = next_pow2(dim.min(1024)).max(1);
+    let smem = (block + dim) * std::mem::size_of::<f32>();
+    if smem > 48 * 1024 {
+        candle_core::bail!("attn CUDA shared mem {smem} exceeds 48KiB (dim={dim})");
+    }
+    let cfg = LaunchConfig {
+        grid_dim: (rows as u32, 1, 1),
+        block_dim: (block as u32, 1, 1),
+        shared_mem_bytes: smem as u32,
+    };
+    let seq_i = i32::try_from(seq)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA seq {seq} exceeds i32")).bt())?;
+    let dim_i = i32::try_from(dim)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA dim {dim} exceeds i32")).bt())?;
+    let causal_i = i32::from(causal);
+    let stream = dev.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&q);
+    builder.arg(&k);
+    builder.arg(&v);
+    builder.arg(&y);
+    builder.arg(&seq_i);
+    builder.arg(&dim_i);
+    builder.arg(&scale);
+    builder.arg(&causal_i);
+    // SAFETY: pointers are live CudaSlices of matching f32 length; grid is one
+    // block per query row; shared mem is [block] reduce + [dim] acc.
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
+const ATTN_SRC: &str = r#"
+extern "C" __global__ void attn_online_f32(
+    const float* __restrict__ q,
+    const float* __restrict__ k,
+    const float* __restrict__ v,
+    float* __restrict__ out,
+    int seq,
+    int dim,
+    float scale,
+    int causal
+) {
+    extern __shared__ float smem[];
+    const int row = (int)blockIdx.x;
+    const int tid = (int)threadIdx.x;
+    const int bdx = (int)blockDim.x;
+    const int query_i = row % seq;
+    const int block = row / seq;
+    const float* qrow = q + (size_t)row * (size_t)dim;
+    const float* kbase = k + (size_t)block * (size_t)seq * (size_t)dim;
+    const float* vbase = v + (size_t)block * (size_t)seq * (size_t)dim;
+    float* dest = out + (size_t)row * (size_t)dim;
+    float* red = smem;
+    float* acc = smem + bdx;
+
+    for (int i = tid; i < dim; i += bdx) {
+        acc[i] = 0.f;
+    }
+    __syncthreads();
+
+    float running_max = -1.0e30f;
+    float running_sum = 0.f;
+    const int k_end = causal ? (query_i + 1) : seq;
+
+    for (int key_j = 0; key_j < k_end; key_j++) {
+        const float* krow = kbase + (size_t)key_j * (size_t)dim;
+        float local = 0.f;
+        for (int i = tid; i < dim; i += bdx) {
+            local += qrow[i] * krow[i];
+        }
+        red[tid] = local;
+        __syncthreads();
+        for (int stride = bdx >> 1; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                red[tid] += red[tid + stride];
+            }
+            __syncthreads();
+        }
+        float score = red[0] * scale;
+        float new_max = fmaxf(running_max, score);
+        float alpha = (running_max > -1.0e30f) ? expf(running_max - new_max) : 0.f;
+        float weight = expf(score - new_max);
+        running_sum = running_sum * alpha + weight;
+        const float* vrow = vbase + (size_t)key_j * (size_t)dim;
+        for (int i = tid; i < dim; i += bdx) {
+            acc[i] = acc[i] * alpha + weight * vrow[i];
+        }
+        running_max = new_max;
+        __syncthreads();
+    }
+
+    float inv = (running_sum > 0.f) ? (1.f / running_sum) : 0.f;
+    for (int i = tid; i < dim; i += bdx) {
+        dest[i] = acc[i] * inv;
+    }
+}
+"#;
+
+/// Device-resident attention: CustomOp online-softmax when there is no extra mask.
 ///
-/// CUDA path **does not** `to_vec1`. It materializes `[B,H,S,S]` scores
-/// (not FA SRAM). Tiled FA is the Triton-bridge / NVRTC job.
+/// CUDA CustomOp does **not** `to_vec1` and does **not** allocate `[B,H,S,S]`.
+/// An explicit `mask` still uses Candle GEMM+softmax (scores materialize).
+/// Tiled SRAM FA is the Triton-bridge job.
 ///
 /// # Errors
 ///
@@ -224,7 +377,7 @@ pub fn attention_device(
 ) -> CandleResult<Tensor> {
     let k = repeat_kv(k, q.dim(1)?)?;
     let v = repeat_kv(v, q.dim(1)?)?;
-    if q.device().is_cpu() && mask.is_none() {
+    if mask.is_none() {
         return attention_custom_op(q, &k, &v, scale as f32, causal);
     }
     let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
@@ -286,6 +439,66 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 1e-5, "mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_or_skip() -> Option<Device> {
+        Device::new_cuda(0).ok()
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_online_matches_softmax() {
+        let Some(device) = cuda_or_skip() else {
+            return;
+        };
+        let q = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
+        let scale = 1.0f64 / 32.0f64.sqrt();
+        let y = attention_custom_op(&q, &k, &v, scale as f32, false).unwrap();
+        let r = reference(&q, &k, &v, scale);
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 1e-5, "cuda mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_causal_matches_masked_softmax() {
+        let Some(device) = cuda_or_skip() else {
+            return;
+        };
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let scale = 1.0f64 / 16.0f64.sqrt();
+        let y = attention_custom_op(&q, &k, &v, scale as f32, true).unwrap();
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let scores = (scores * scale).unwrap();
+        let mask = causal_mask_tensor(8, &device).unwrap();
+        let scores = scores.broadcast_add(&mask).unwrap();
+        let r = candle_nn::ops::softmax(&scores, 3)
+            .unwrap()
+            .matmul(&v)
+            .unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 1e-5, "cuda causal mae={mae}");
     }
 
     #[test]

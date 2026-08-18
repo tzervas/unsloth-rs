@@ -25,7 +25,7 @@ kernels:
 
 | Building block | CPU (Candle) | CUDA feature |
 |----------------|--------------|--------------|
-| Multi-head attention + GQA | ✅ CustomOp online-softmax | Candle CUDA GEMM (no CubeCL copy). CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
+| Multi-head attention + GQA | ✅ CustomOp online-softmax | CustomOp online-softmax on `CudaStorage` (no `[B,H,S,S]`, not tiled SRAM FA). Extra mask → Candle GEMM. CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
 | RoPE | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | SwiGLU `silu⊙up` | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |

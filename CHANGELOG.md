@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `rope_with_position_ids` + `RotaryEmbedding::forward` honors packed `[B,S]` ids.
 - CPU `fused_linear_cross_entropy` (no `[N,V]`). CUDA still materializes logits.
+- CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
+  materializes `[B,H,S,S]` when there is no extra mask. Not tiled SRAM FA.
+- NVRTC C→PTX cache in `nvrtc::load_func` (`Arc<str>` by `module_name`).
+- `cargo bench --features cuda --bench custom_op_cuda` writes
+  `artifacts/custom_op_cuda.json` (host vs CUDA-event p50/p99).
+  `CUDA_COMPUTE_CAP` + `TMPDIR` on this host. Missing feature/device/toolkit:
+  `FAIL_ENV` exit 2. Kernel/launch errors: `FAIL`. Artifact write errors:
+  `FAIL_IO`. `compile_cached` is first-vs-second NVRTC, not a launch-tax close.
 
 ### Changed
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
@@ -20,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/TRITON.md`: Triton compiler/FFI is
   [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) `v0.1.0`
   (contract only). Hook: `kernels::triton_bridge` (no Cargo dep, never dispatches).
+- `compare/README.md`: `py-rs-compare.json` rust.ms is pre-cache
+  NVRTC-per-launch, superseded by `artifacts/custom_op_cuda.json`.
+  torch/Unsloth remain one-shot.
 
 ## [1.0.4] - 2026-08-17
 

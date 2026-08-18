@@ -130,8 +130,8 @@ pub fn flash_attention_cubecl(
     flash_attention_fallback(q, k, v, scale, mask)
 }
 
-/// Fallback: CustomOp online-softmax on CPU, Candle GEMM+softmax on CUDA.
-/// Neither path `to_vec1`s into CubeCL.
+/// Fallback: CustomOp online-softmax (CPU + CUDA, no `[B,H,S,S]`).
+/// An explicit mask still uses Candle GEMM+softmax. Neither path `to_vec1`s.
 fn flash_attention_fallback(
     q: &Tensor,
     k: &Tensor,

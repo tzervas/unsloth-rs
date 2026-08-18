@@ -44,4 +44,15 @@ MAE (f32, seed 0) — all under 3e-6; elementwise ~1e-8:
 | CE | 1.9e-6 / 2.4e-6 | 0 / 4.8e-7 | 1.9e-6 / 2.9e-6 |
 | attn | 8.3e-8 / 5.9e-8 | n/a | n/a |
 
-Latency is **one shot after 3 warmups**, not a criterion p50. Tiny shapes are launch-bound. Rust elementwise landed ~5 ms vs torch ~0.03 ms — that is **not** a product speed claim either way. Rust attention is GEMM+softmax on `CudaStorage`, not tiled FA.
+Latency in **this** artifact is **one shot after 3 warmups**, not p50/p99.
+`rust.ms` is **pre-cache NVRTC-per-launch** (compile on every CustomOp call)
+and is **superseded** by `artifacts/custom_op_cuda.json` (host vs CUDA-event
+p50/p99 after the PTX cache). torch/Unsloth remain one-shot. Do not market
+the pre-cache rust.ms against torch ~0.03 ms. Rust attention is GEMM+softmax
+on `CudaStorage`, not tiled FA.
+
+Host+event p50/p99 (after cache; not a sacred-bar number):
+
+```bash
+CUDA_COMPUTE_CAP=90 TMPDIR=/home/kang/tmp cargo bench --features cuda --bench custom_op_cuda
+```

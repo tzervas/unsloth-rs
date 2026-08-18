@@ -234,19 +234,34 @@ enum WorkKind {
         logits: candle_core::Tensor,
         targets: candle_core::Tensor,
     },
+    Attn {
+        q: candle_core::Tensor,
+        k: candle_core::Tensor,
+        v: candle_core::Tensor,
+        scale: f32,
+        causal: bool,
+    },
 }
 
 #[cfg(feature = "cuda")]
 impl Work {
     fn run(&self) -> candle_core::Result<candle_core::Tensor> {
         use unsloth_rs::kernels::custom_op::{
-            chunked_cross_entropy, rmsnorm_custom_op, rope_custom_op, swiglu_custom_op,
+            attention_custom_op, chunked_cross_entropy, rmsnorm_custom_op, rope_custom_op,
+            swiglu_custom_op,
         };
         match &self.kind {
             WorkKind::Rms { x, w, eps } => rmsnorm_custom_op(x, w, *eps),
             WorkKind::Rope { x, cos, sin } => rope_custom_op(x, cos, sin),
             WorkKind::Swi { gate, up } => swiglu_custom_op(gate, up),
             WorkKind::Ce { logits, targets } => chunked_cross_entropy(logits, targets, -100, 4096),
+            WorkKind::Attn {
+                q,
+                k,
+                v,
+                scale,
+                causal,
+            } => attention_custom_op(q, k, v, *scale, *causal),
         }
     }
 }
@@ -297,6 +312,8 @@ fn build_cases(device: &candle_core::Device) -> candle_core::Result<Vec<Case>> {
         rope_case(device, "s512", 2, 8, 512, 64, true)?,
         ce_case(device, "s128", 2 * 128, 128, true)?,
         ce_case(device, "s512", 2 * 512, 128, true)?,
+        attn_case(device, "s128", 2, 8, 128, 64, true)?,
+        attn_case(device, "s512", 2, 8, 512, 64, false)?,
         // Larger but still launch-bound. Do not treat as the compute point.
         rms_case(device, "s2048_launch", 2, 2048, 128, true)?,
         swi_case(device, "s2048_launch", 2, 2048, 128, true)?,
@@ -410,6 +427,41 @@ fn ce_case(
         launch_bound,
         work: Work {
             kind: WorkKind::Ce { logits, targets },
+        },
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn attn_case(
+    device: &candle_core::Device,
+    tag: &'static str,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    head_dim: usize,
+    launch_bound: bool,
+) -> candle_core::Result<Case> {
+    use candle_core::Tensor;
+    let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, head_dim), device)?;
+    let k = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, head_dim), device)?;
+    let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, head_dim), device)?;
+    let scale = (head_dim as f32).sqrt().recip();
+    Ok(Case {
+        id: format!("attn/{tag}"),
+        op: "attn",
+        tag,
+        elems: batch * heads * seq * head_dim,
+        vocab: None,
+        n: None,
+        launch_bound,
+        work: Work {
+            kind: WorkKind::Attn {
+                q,
+                k,
+                v,
+                scale,
+                causal: true,
+            },
         },
     })
 }

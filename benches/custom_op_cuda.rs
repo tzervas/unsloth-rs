@@ -308,8 +308,8 @@ enum WorkKind {
 impl Work {
     fn run(&self) -> candle_core::Result<candle_core::Tensor> {
         use unsloth_rs::kernels::custom_op::{
-            attention_custom_op, chunked_cross_entropy, fused_linear_cross_entropy,
-            rmsnorm_custom_op, rope_custom_op, swiglu_custom_op,
+            attention_custom_op, chunked_cross_entropy, rmsnorm_custom_op, rope_custom_op,
+            swiglu_custom_op,
         };
         match &self.kind {
             WorkKind::Rms { x, w, eps } => rmsnorm_custom_op(x, w, *eps),
@@ -328,7 +328,7 @@ impl Work {
                 weight,
                 targets,
                 chunk,
-            } => fused_linear_cross_entropy(hidden, weight, targets, -100, *chunk),
+            } => unsloth_rs::ops::fused_linear_ce(hidden, weight, targets, *chunk),
         }
     }
 }
@@ -597,7 +597,7 @@ fn write_json(
     writeln!(s, "  \"compute_apps\": {},", json_str(compute_apps.trim())).unwrap();
     writeln!(
         s,
-        "  \"note\": \"Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth host+sync p50/p99 live in artifacts/py-rs-compare.json. fused_linear_ce is vocab-tile GEMM (no [N,V]). Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.\","
+        "  \"note\": \"Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth host+sync p50/p99 live in artifacts/py-rs-compare.json. fused_linear_ce is vocab-tile GEMM (no [N,V]). C-UNS-06-P50 harvest only; G-UNS-06 stays open. No 2x/VRAM claims. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.\","
     )
     .unwrap();
     writeln!(s, "  \"samples\": 100,").unwrap();

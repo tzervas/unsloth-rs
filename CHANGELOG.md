@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`cubecl` is optional.** Default and CPU (`--no-default-features`) builds no longer pull the cubecl graph. Enable `cuda` (`dep:cubecl`, `cubecl/cuda`, `dep:cubecl-cuda`) when GPU kernels are needed.
+
 ### Documentation
 - Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
 - README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.

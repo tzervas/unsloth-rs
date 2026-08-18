@@ -38,12 +38,12 @@ pub use cubecl::{flash_attention_kernel, FlashAttentionConfig};
 
 // G0 CustomOp
 pub use custom_op::{
-    attention_custom_op, attention_custom_op_softcap, attention_device, attention_device_softcap,
-    chunked_cross_entropy, custom_op_device_resident, custom_op_f32_only,
-    fused_linear_ce_avoids_full_logits, fused_linear_cross_entropy, geglu_custom_op,
-    layernorm_custom_op, rmsnorm_custom_op, rope_custom_op, rope_with_position_ids,
-    swiglu_custom_op, AttentionOp, ChunkedCrossEntropyOp, FusedLinearCrossEntropyOp, GeGluOp,
-    LayerNormOp, RmsNormOp, RopeOp, SwiGluOp, DEFAULT_CE_CHUNK,
+    attention_custom_op, attention_custom_op_softcap, attention_custom_op_window, attention_device,
+    attention_device_softcap, attention_device_window, chunked_cross_entropy,
+    custom_op_device_resident, custom_op_f32_only, fused_linear_ce_avoids_full_logits,
+    fused_linear_cross_entropy, geglu_custom_op, layernorm_custom_op, rmsnorm_custom_op,
+    rope_custom_op, rope_with_position_ids, swiglu_custom_op, AttentionOp, ChunkedCrossEntropyOp,
+    FusedLinearCrossEntropyOp, GeGluOp, LayerNormOp, RmsNormOp, RopeOp, SwiGluOp, DEFAULT_CE_CHUNK,
 };
 
 // Legacy layer exports

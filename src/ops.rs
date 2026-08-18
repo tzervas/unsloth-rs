@@ -14,6 +14,7 @@
 //! | [`swiglu`] | CustomOp `silu⊙up` | fusing the GEMMs |
 //! | [`geglu`] | CustomOp exact GELU⊙up | tanh-approx GELU |
 //! | [`attention`] | CustomOp tiled SRAM FA (CUDA, no extra mask) | Unsloth FA PTX |
+//! | [`attention_window`] | same path, sliding-window causal | flex `torch.compile` |
 //! | [`attention_softcap`] | tanh softcap then softmax | flex `torch.compile` |
 //! | [`cross_entropy`] | chunked CustomOp | full `[N,V]` softmax |
 //! | [`fused_linear_ce`] | CPU CustomOp / device vocab tiles | a Triton JIT |
@@ -21,9 +22,9 @@
 use candle_core::{Result as CandleResult, Tensor};
 
 use crate::kernels::custom_op::{
-    attention_device, attention_device_softcap, chunked_cross_entropy, fused_linear_cross_entropy,
-    geglu_custom_op, layernorm_custom_op, rmsnorm_custom_op, rope_custom_op,
-    rope_with_position_ids, swiglu_custom_op, DEFAULT_CE_CHUNK,
+    attention_device, attention_device_softcap, attention_device_window, chunked_cross_entropy,
+    fused_linear_cross_entropy, geglu_custom_op, layernorm_custom_op, rmsnorm_custom_op,
+    rope_custom_op, rope_with_position_ids, swiglu_custom_op, DEFAULT_CE_CHUNK,
 };
 
 /// `y = x / rms(x) * weight` over the last dim. f32.
@@ -104,6 +105,25 @@ pub fn attention(
     attention_device(q, k, v, scale, mask, causal)
 }
 
+/// Sliding-window attention. `window == 0` is full [`attention`] (no extra mask).
+///
+/// Causal: each query attends to at most `window` keys ending at itself.
+/// CUDA tiled path honors the window (owned NVRTC, not Unsloth PTX).
+///
+/// # Errors
+///
+/// Shape/dtype errors from [`attention_device_window`].
+pub fn attention_window(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f64,
+    causal: bool,
+    window: usize,
+) -> CandleResult<Tensor> {
+    attention_device_window(q, k, v, scale, causal, window)
+}
+
 /// Attention with tanh score softcap (`score = cap * tanh(score / cap)`).
 ///
 /// `softcap <= 0` is identical to [`attention`]. Gemma-style logits softcap.
@@ -164,5 +184,15 @@ mod tests {
         let g = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         let u = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         assert_eq!(geglu(&g, &u).unwrap().dims(), g.dims());
+    }
+
+    #[test]
+    fn attention_window_is_the_public_name() {
+        let d = Device::Cpu;
+        let q = Tensor::randn(0.0f32, 1.0, (1, 1, 8, 4), &d).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 1, 8, 4), &d).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 1, 8, 4), &d).unwrap();
+        let y = attention_window(&q, &k, &v, 0.5, true, 3).unwrap();
+        assert_eq!(y.dims(), q.dims());
     }
 }

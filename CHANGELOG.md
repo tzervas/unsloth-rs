@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ops::attention_window` — sliding-window causal on the same CustomOp
+  tiled/online path as `attention`. CUDA SRAM tiles honor the window.
+  MAE vs masked softmax at s512 is the check, not a throughput claim.
 - `rope_with_position_ids` + `RotaryEmbedding::forward` honors packed `[B,S]` ids.
 - `fused_linear_cross_entropy` avoids `[N, V]` on every device: CPU CustomOp,
   others vocab-tile Candle GEMM (peak extra `[N, chunk]`).

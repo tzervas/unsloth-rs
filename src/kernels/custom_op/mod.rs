@@ -24,8 +24,8 @@ pub mod rope;
 pub mod swiglu;
 
 pub use attention::{
-    attention_custom_op, attention_custom_op_softcap, attention_device, attention_device_softcap,
-    AttentionOp,
+    attention_custom_op, attention_custom_op_softcap, attention_custom_op_window, attention_device,
+    attention_device_softcap, attention_device_window, AttentionOp,
 };
 pub use ce::{chunked_cross_entropy, ChunkedCrossEntropyOp, DEFAULT_CE_CHUNK};
 pub use fused_ce::{

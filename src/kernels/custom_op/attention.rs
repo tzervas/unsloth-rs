@@ -29,6 +29,9 @@ pub struct AttentionOp {
     pub causal: bool,
     /// Gemma-style tanh softcap. `<= 0` disables.
     pub softcap: f32,
+    /// Sliding window in tokens. `<= 0` disables (full causal / full).
+    /// Causal: keys in `[q - window + 1, q]`. Non-causal: `[q - window + 1, q + window - 1]`.
+    pub window: i32,
 }
 
 /// Attention on `[B, H, S, D]` Q/K/V. f32. Device-resident.
@@ -43,7 +46,7 @@ pub fn attention_custom_op(
     scale: f32,
     causal: bool,
 ) -> CandleResult<Tensor> {
-    attention_custom_op_cfg(q, k, v, scale, causal, 0.0)
+    attention_custom_op_cfg(q, k, v, scale, causal, 0.0, 0)
 }
 
 /// Attention with optional tanh score softcap.
@@ -59,7 +62,23 @@ pub fn attention_custom_op_softcap(
     causal: bool,
     softcap: f32,
 ) -> CandleResult<Tensor> {
-    attention_custom_op_cfg(q, k, v, scale, causal, softcap)
+    attention_custom_op_cfg(q, k, v, scale, causal, softcap, 0)
+}
+
+/// Attention with a sliding window. `window <= 0` is full [`attention_custom_op`].
+///
+/// # Errors
+///
+/// Same as [`attention_custom_op`].
+pub fn attention_custom_op_window(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f32,
+    causal: bool,
+    window: i32,
+) -> CandleResult<Tensor> {
+    attention_custom_op_cfg(q, k, v, scale, causal, 0.0, window)
 }
 
 fn attention_custom_op_cfg(
@@ -69,6 +88,7 @@ fn attention_custom_op_cfg(
     scale: f32,
     causal: bool,
     softcap: f32,
+    window: i32,
 ) -> CandleResult<Tensor> {
     if q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32 {
         candle_core::bail!(
@@ -106,6 +126,7 @@ fn attention_custom_op_cfg(
             scale,
             causal,
             softcap,
+            window,
         },
     )
 }
@@ -140,6 +161,31 @@ fn apply_softcap(score: f32, softcap: f32) -> f32 {
     }
 }
 
+/// First allowed key index for `query_i` under an optional sliding window.
+fn window_lo(query_i: usize, window: i32) -> usize {
+    if window <= 0 {
+        return 0;
+    }
+    let span = usize::try_from(window)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(1);
+    query_i.saturating_sub(span)
+}
+
+/// Exclusive last allowed key index.
+fn window_hi_excl(query_i: usize, seq: usize, window: i32, causal: bool) -> usize {
+    let causal_end = if causal {
+        query_i.saturating_add(1).min(seq)
+    } else {
+        seq
+    };
+    if window <= 0 || causal {
+        return causal_end;
+    }
+    let span = usize::try_from(window).unwrap_or(usize::MAX);
+    causal_end.min(query_i.saturating_add(span))
+}
+
 fn cpu_online_attn(
     q: &[f32],
     k: &[f32],
@@ -148,6 +194,7 @@ fn cpu_online_attn(
     scale: f32,
     causal: bool,
     softcap: f32,
+    window: i32,
 ) -> Vec<f32> {
     let AttnGeom {
         batch,
@@ -164,8 +211,9 @@ fn cpu_online_attn(
             let mut running_max = f32::NEG_INFINITY;
             let mut running_sum = 0.0f32;
             let mut acc = vec![0.0f32; dim];
-            let k_end = if causal { query_i + 1 } else { seq };
-            for key_j in 0..k_end {
+            let k_start = window_lo(query_i, window);
+            let k_end = window_hi_excl(query_i, seq, window, causal);
+            for key_j in k_start..k_end {
                 let krow = &k[q_base + key_j * dim..q_base + key_j * dim + dim];
                 let score = apply_softcap(super::cpu_isa::dot_f32(qrow, krow) * scale, softcap);
                 let new_max = running_max.max(score);
@@ -239,6 +287,7 @@ impl CustomOp3 for AttentionOp {
             self.scale,
             self.causal,
             self.softcap,
+            self.window,
         );
         Ok((CpuStorage::F32(out), l1.shape().clone()))
     }
@@ -259,6 +308,7 @@ impl CustomOp3 for AttentionOp {
                 self.scale,
                 self.causal,
                 self.softcap,
+                self.window,
                 s1,
                 l1,
                 s2,
@@ -271,6 +321,7 @@ impl CustomOp3 for AttentionOp {
                 self.scale,
                 self.causal,
                 self.softcap,
+                self.window,
                 s1,
                 l1,
                 s2,
@@ -303,6 +354,7 @@ fn cuda_online_attn(
     scale: f32,
     causal: bool,
     softcap: f32,
+    window: i32,
     sq: &candle_core::CudaStorage,
     lq: &Layout,
     sk: &candle_core::CudaStorage,
@@ -351,7 +403,7 @@ fn cuda_online_attn(
     let func = load_func(
         &dev,
         "attn_online_f32",
-        "unsloth_attn_online_f32_sc",
+        "unsloth_attn_online_f32_w",
         ATTN_SRC,
     )?;
     let block = next_pow2(dim.min(1024)).max(1);
@@ -373,6 +425,7 @@ fn cuda_online_attn(
     builder.arg(&scale);
     builder.arg(&causal_i);
     builder.arg(&softcap);
+    builder.arg(&window);
     launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
 }
@@ -383,6 +436,7 @@ fn cuda_tiled_attn(
     scale: f32,
     causal: bool,
     softcap: f32,
+    window: i32,
     sq: &candle_core::CudaStorage,
     lq: &Layout,
     sk: &candle_core::CudaStorage,
@@ -431,7 +485,7 @@ fn cuda_tiled_attn(
     let func = load_func(
         &dev,
         "attn_tiled_f32",
-        "unsloth_attn_tiled_f32_sc",
+        "unsloth_attn_tiled_f32_w",
         ATTN_TILED_SRC,
     )?;
     let n_qtiles = seq.div_ceil(ATTN_TILE_BR);
@@ -456,6 +510,7 @@ fn cuda_tiled_attn(
     builder.arg(&scale);
     builder.arg(&causal_i);
     builder.arg(&softcap);
+    builder.arg(&window);
     launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
 }
@@ -471,7 +526,8 @@ extern "C" __global__ void attn_tiled_f32(
     int dim,
     float scale,
     int causal,
-    float softcap
+    float softcap,
+    int window
 ) {
     const int BR = 16;
     const int BC = 16;
@@ -517,6 +573,15 @@ extern "C" __global__ void attn_tiled_f32(
         if (causal && k0 > (q0 + BR - 1)) {
             break;
         }
+        if (window > 0) {
+            int lo = q0 - window + 1;
+            if (k0 + BC - 1 < lo) {
+                continue;
+            }
+            if (!causal && k0 > (q0 + BR - 1 + window - 1)) {
+                continue;
+            }
+        }
         for (int i = tid; i < BC * dim; i += bdx) {
             int kj = i / dim;
             int d = i - kj * dim;
@@ -538,7 +603,18 @@ extern "C" __global__ void attn_tiled_f32(
             int qrow = q0 + qi;
             int krow = k0 + kj;
             float score = -1.0e30f;
-            if (qrow < seq && krow < seq && !(causal && krow > qrow)) {
+            int allowed = (qrow < seq && krow < seq);
+            if (causal && krow > qrow) {
+                allowed = 0;
+            }
+            if (window > 0 && allowed) {
+                int lo = qrow - window + 1;
+                int hi = causal ? qrow : (qrow + window - 1);
+                if (krow < lo || krow > hi) {
+                    allowed = 0;
+                }
+            }
+            if (allowed) {
                 const float* qr = Qi + qi * dim;
                 const float* kr = Ki + kj * dim;
                 float dot = 0.f;
@@ -609,7 +685,8 @@ extern "C" __global__ void attn_online_f32(
     int dim,
     float scale,
     int causal,
-    float softcap
+    float softcap,
+    int window
 ) {
     extern __shared__ float smem[];
     const int row = (int)blockIdx.x;
@@ -631,9 +708,22 @@ extern "C" __global__ void attn_online_f32(
 
     float running_max = -1.0e30f;
     float running_sum = 0.f;
-    const int k_end = causal ? (query_i + 1) : seq;
+    int k_end = causal ? (query_i + 1) : seq;
+    int k_start = 0;
+    if (window > 0) {
+        int lo = query_i - window + 1;
+        if (lo > 0) {
+            k_start = lo;
+        }
+        if (!causal) {
+            int hi = query_i + window;
+            if (hi < k_end) {
+                k_end = hi;
+            }
+        }
+    }
 
-    for (int key_j = 0; key_j < k_end; key_j++) {
+    for (int key_j = k_start; key_j < k_end; key_j++) {
         const float* krow = kbase + (size_t)key_j * (size_t)dim;
         float local = 0.f;
         for (int i = tid; i < dim; i += bdx) {
@@ -690,6 +780,23 @@ pub fn attention_device(
     attention_device_softcap(q, k, v, scale, mask, causal, 0.0)
 }
 
+/// Sliding-window attention. `window == 0` is full [`attention_device`] (no extra mask).
+///
+/// # Errors
+///
+/// Shape/dtype errors from [`attention_custom_op_window`].
+pub fn attention_device_window(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    scale: f64,
+    causal: bool,
+    window: usize,
+) -> CandleResult<Tensor> {
+    let window_i = i32::try_from(window).unwrap_or(i32::MAX);
+    attention_custom_op_window(q, k, v, scale as f32, causal, window_i)
+}
+
 /// Like [`attention_device`] with optional tanh score softcap.
 ///
 /// # Errors
@@ -732,6 +839,26 @@ fn causal_mask_tensor(seq: usize, device: &candle_core::Device) -> CandleResult<
     for row in 0..seq {
         for col in 0..seq {
             if col > row {
+                data[row * seq + col] = f32::NEG_INFINITY;
+            }
+        }
+    }
+    Tensor::from_vec(data, (seq, seq), device)
+}
+
+/// Additive mask: `-inf` outside the sliding window (and future keys if `causal`).
+fn window_mask_tensor(
+    seq: usize,
+    window: usize,
+    causal: bool,
+    device: &candle_core::Device,
+) -> CandleResult<Tensor> {
+    let mut data = vec![0.0f32; seq * seq];
+    for row in 0..seq {
+        let lo = window_lo(row, i32::try_from(window).unwrap_or(i32::MAX));
+        let hi = window_hi_excl(row, seq, i32::try_from(window).unwrap_or(i32::MAX), causal);
+        for col in 0..seq {
+            if col < lo || col >= hi {
                 data[row * seq + col] = f32::NEG_INFINITY;
             }
         }
@@ -915,5 +1042,68 @@ mod tests {
             y[0][0] < y[3][0],
             "causal should accumulate more on later rows"
         );
+    }
+
+    #[test]
+    fn window_matches_masked_softmax_cpu() {
+        let device = Device::Cpu;
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 8), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 8), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 8), &device).unwrap();
+        let scale = 1.0f64 / 8.0f64.sqrt();
+        let window = 4usize;
+        let y = attention_custom_op_window(&q, &k, &v, scale as f32, true, 4).unwrap();
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let scores = (scores * scale).unwrap();
+        let mask = window_mask_tensor(16, window, true, &device).unwrap();
+        let scores = scores.broadcast_add(&mask).unwrap();
+        let r = candle_nn::ops::softmax(&scores, 3)
+            .unwrap()
+            .matmul(&v)
+            .unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 1e-5, "cpu window mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_tiled_window_matches_masked_softmax_s512() {
+        let Some(device) = cuda_or_skip() else {
+            return;
+        };
+        let q = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();
+        let scale = 1.0f64 / 64.0f64.sqrt();
+        let window = 128usize;
+        let y = attention_custom_op_window(&q, &k, &v, scale as f32, true, 128).unwrap();
+        let scores = q
+            .matmul(&k.transpose(2, 3).unwrap().contiguous().unwrap())
+            .unwrap();
+        let scores = (scores * scale).unwrap();
+        let mask = window_mask_tensor(512, window, true, &device).unwrap();
+        let scores = scores.broadcast_add(&mask).unwrap();
+        let r = candle_nn::ops::softmax(&scores, 3)
+            .unwrap()
+            .matmul(&v)
+            .unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 1e-4, "tiled s512 window mae={mae}");
     }
 }

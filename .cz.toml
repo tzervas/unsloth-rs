@@ -14,16 +14,18 @@
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.0.4"
+version = "1.1.0"
 tag_format = "v$version"
 version_scheme = "semver"
 
+# Suffix after `file:` is a regex. Markdown `**` is invalid (`nothing to repeat`).
 version_files = [
     "Cargo.toml:version",
     "README.md:Version:",
-    "PUBLISHING.md:**Cargo.toml version**",
+    "PUBLISHING.md:Cargo.toml version",
 ]
 
-update_changelog_on_bump = true
+# Keep a Changelog is hand-maintained. Do not pass `cz bump --changelog`.
+update_changelog_on_bump = false
 changelog_file = "CHANGELOG.md"
 changelog_incremental = true

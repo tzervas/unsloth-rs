@@ -4,8 +4,8 @@
 
 | Field | Value |
 |-------|--------|
-| **Cargo.toml version** | `1.0.4` |
-| **Git tags** | `v1.0.3` (and older). Tag `v1.0.4` via `.github/workflows/release.yml` (`bump=none`) |
+| **Cargo.toml version** | `1.1.0` |
+| **Git tags** | `v1.0.4` (and older). Tag `v1.1.0` via `.github/workflows/release.yml` (`bump=none`) |
 | **docs.rs** | Builds for 1.0.2 historically |
 | **crates.io tarball 1.0.2** | **Broken** — dual-path case collision (`ROADMAP.md` + `roadmap.md`) |
 | **Fix in this tree** | Only `ROADMAP.md` remains; `cargo package` succeeds |

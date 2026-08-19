@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-19
+
 ### Added
 - `RmsNorm::vram_estimate(batch, seq)` — f32 activation bytes, same helper
   shape as SwiGLU. Offline planning only; not a measured allocation.
@@ -17,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tiled FA occupancy: row-softmax and O-update no longer serialize on
   `tid==0`. Br=Bc=32 was measured slower on the 5080 (s512 event p50
   0.68 → 0.93 ms) and is not the default. Still not a 2× vs torch SDPA.
+- `CUDA_COMPUTE_CAP=120` tiled s512 test PASS on this SM 12.0 card.
+  Default compile pin stays 90. Not a native-Blackwell claim.
 - CustomOp `rmsnorm` / `swiglu` / `attention` accept [`DType::F16`]
   (f16 I/O, float accumulate). `ops` names unchanged. MAE vs f32 ref
   is the check (`< 2e-3`). f16 CUDA attention uses the online kernel,

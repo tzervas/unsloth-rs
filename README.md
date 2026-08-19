@@ -37,7 +37,7 @@ kernels:
 
 ## Status (honest)
 
-**Version:** `1.0.4` (see `Cargo.toml`). Semver 1.x means the **public CPU
+**Version:** `1.1.0` (see `Cargo.toml`). Semver 1.x means the **public CPU
 kernel APIs** are intended to be usable; GPU paths and training utilities are
 still incomplete.
 

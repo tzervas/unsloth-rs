@@ -1,0 +1,29 @@
+# Commitizen configuration (commitizen-tools).
+# Install: `uv tool install commitizen` or `pip install commitizen`
+# Canonical peer: tzervas/gha-runner-ctl/.cz.toml
+#
+# WHY `major_version_zero` IS DELIBERATELY ABSENT
+# -----------------------------------------------
+# Fleet 0.x repos set `major_version_zero = true` so breaking changes stay
+# MINOR. This crate is published on crates.io at 1.x. That key does not stop
+# applying after 1.0 — it pins major forever and demotes BREAKING to MINOR.
+# A dependent on `unsloth-rs = "1.0"` accepts >=1.0.0,<2.0.0. Do not add it.
+# No agent may cut 2.0.0.
+#
+# `version` is what cz bumps *from*. Keep it lockstep with Cargo.toml.
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.4"
+tag_format = "v$version"
+version_scheme = "semver"
+
+version_files = [
+    "Cargo.toml:version",
+    "README.md:Version:",
+    "PUBLISHING.md:**Cargo.toml version**",
+]
+
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true

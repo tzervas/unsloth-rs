@@ -12,8 +12,7 @@
 #[must_use]
 pub fn cpu_worker_threads(rows: usize) -> usize {
     let hw = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+        .map_or(1, usize::from)
         .max(1);
     hw.min(rows).max(1)
 }

@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
   CubeCL `to_vec1`). CubeCL FA only if `UNSLOTH_CUBECL_FA` is set.
 - Added `attention_custom_op` / `attention_device` (online softmax on CPU).
+- **`cubecl` is optional.** Default and CPU (`--no-default-features`) builds no longer pull the cubecl graph. Enable `cuda` (`dep:cubecl`, `cubecl/cuda`, `dep:cubecl-cuda`) when GPU kernels are needed.
 
 ### Documentation
 - `docs/TRITON.md`: Triton compiler/FFI is

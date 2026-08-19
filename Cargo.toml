@@ -24,8 +24,9 @@ tracing = { workspace = true }
 bytemuck = { version = "1.21", features = ["derive"] }
 half = "2"
 
-# GPU compute - CubeCL for cross-platform GPU kernels
-cubecl = { workspace = true }
+# GPU compute - CubeCL for cross-platform GPU kernels (optional: CPU/default
+# builds must not pull the cubecl graph).
+cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 # Tensor-core accelerated matmul for Q@K^T and Attn@V operations
 # Note: Fallback to manual implementation initially; integrate once validated
@@ -38,7 +39,7 @@ anyhow = { workspace = true }
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
+cuda = ["candle-core/cuda", "dep:cubecl", "cubecl/cuda", "dep:cubecl-cuda"]
 # Empty placeholder only — does NOT compile archive/ternary_cubecl (UNS-P2-01 non-goal)
 _ternary_cubecl_todo = []
 # Experimental tiled FA-2; gated off until CubeCL comptime issues resolved

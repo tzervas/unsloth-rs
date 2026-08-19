@@ -69,6 +69,23 @@ __device__ unsigned short f32_as_u16(float f) {
 }
 "#;
 
+/// IEEE bf16 <-> f32 for NVRTC. Same `u16_as_f32` / `f32_as_u16` names as
+/// [`F16_CONV_SRC`] so f16 kernel C can be reused. Truncating convert.
+pub const BF16_CONV_SRC: &str = r#"
+__device__ float u16_as_f32(unsigned short h) {
+    unsigned int bits = ((unsigned int)h) << 16;
+    return __uint_as_float(bits);
+}
+__device__ unsigned short f32_as_u16(float f) {
+    unsigned int x = __float_as_uint(f);
+    unsigned int mag = x & 0x7fffffffu;
+    if (mag < 0x7f800000u) {
+        x += 0x8000u;
+    }
+    return (unsigned short)(x >> 16);
+}
+"#;
+
 /// Compile CUDA C to PTX (fast-math on).
 pub fn compile_ptx(src: &str) -> Result<String> {
     let opts = cudarc::nvrtc::CompileOptions {
@@ -110,6 +127,14 @@ pub fn alloc_f16(
     n: usize,
 ) -> Result<cudarc::driver::CudaSlice<half::f16>> {
     dev.alloc_zeros::<half::f16>(n)
+}
+
+/// Device buffer for bf16 CustomOp output.
+pub fn alloc_bf16(
+    dev: &candle_core::CudaDevice,
+    n: usize,
+) -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+    dev.alloc_zeros::<half::bf16>(n)
 }
 
 /// 1-D launch config after range checks. Call sites should not build raw

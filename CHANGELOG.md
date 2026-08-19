@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- CustomOp `rmsnorm` / `swiglu` / `attention` accept [`DType::BF16`]
+  (bf16 I/O, float accumulate). CUDA uses the online path for attention,
+  same as f16. MAE vs f32 ref `< 2e-3`. Not a 2× claim.
+
 ## [1.1.0] - 2026-08-19
 
 ### Added

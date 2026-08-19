@@ -19,7 +19,7 @@ use candle_core::{CpuStorage, CustomOp3, Layout, Result as CandleResult, Shape, 
 pub const ATTN_TILE_BR: usize = 16;
 /// Conservative K/V rows per CUDA SRAM tile.
 pub const ATTN_TILE_BC: usize = 16;
-/// Occupancy tile used when [`tiled_smem_bytes_cfg`] fits in 48 KiB (dim 64).
+/// Occupancy tile that fits 48 KiB smem at dim 64. Measured slower on the 5080; not the default.
 pub const ATTN_TILE_BR_OCC: usize = 32;
 /// Occupancy K/V tile paired with [`ATTN_TILE_BR_OCC`].
 pub const ATTN_TILE_BC_OCC: usize = 32;

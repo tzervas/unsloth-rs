@@ -58,6 +58,17 @@ impl RmsNorm {
     pub fn eps(&self) -> f64 {
         self.eps
     }
+
+    /// Activation bytes for `(batch, seq)` at f32. Weight is not included.
+    ///
+    /// Offline planning helper, same contract as [`crate::kernels::swiglu::SwiGLU::vram_estimate`].
+    /// Not a measured allocation and not a 2× / 70% VRAM claim.
+    #[must_use]
+    pub fn vram_estimate(&self, batch_size: usize, seq_len: usize) -> usize {
+        let hidden_size = self.weight.dim(0).unwrap_or(0);
+        let bytes_per_elem = 4; // f32
+        batch_size * seq_len * hidden_size * bytes_per_elem
+    }
 }
 
 #[cfg(test)]
@@ -141,5 +152,13 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 1e-6, "mae={mae}");
+    }
+
+    #[test]
+    fn test_rmsnorm_vram_estimate() {
+        let device = Device::Cpu;
+        let norm = RmsNorm::new(768, 1e-5, &device).unwrap();
+        let vram = norm.vram_estimate(4, 2048);
+        assert_eq!(vram, 4 * 2048 * 768 * 4);
     }
 }

@@ -107,6 +107,20 @@ CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
   test_flash_attention_gpu_numerical_equivalence -- --nocapture
 ```
 
+### C-UNS-SM120 (2026-08-18, this 5080)
+
+`CUDA_COMPUTE_CAP=120 cargo test --features cuda --lib -- cuda_tiled_matches_softmax_s512`
+**PASS** (exit 0). Host is SM 12.0; toolkit CUDA 13.1 can emit 120. **Default pin stays 90**
+(`compare/run.sh`, benches). Not a native-Blackwell kernel rewrite and not a
+throughput claim.
+
+### C-UNS-TILE-OCC (2026-08-18)
+
+s512 causal tiled FA event p50: **0.547 ms** (was 0.68 ms) after parallel
+row-softmax / flattened O. Br=Bc=32 smem occupancy **regressed** to 0.93 ms
+and is not the default. Still slower than torch SDPA (~0.097 ms host+sync).
+G-UNS-03 stays open. No 2× claim. MAE vs softmax still `< 1e-4`.
+
 ### CI policy
 
 - Workflows under `.github/workflows/` run **CPU** check/test by default.

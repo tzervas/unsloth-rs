@@ -381,6 +381,7 @@ fn build_cases(device: &candle_core::Device) -> candle_core::Result<Vec<Case>> {
         ce_case(device, "s512", 2 * 512, 128, true)?,
         attn_case(device, "s128", 2, 8, 128, 64, true)?,
         attn_case(device, "s512", 2, 8, 512, 64, false)?,
+        attn_case(device, "s2048", 2, 8, 2048, 64, false)?,
         // Larger but still launch-bound. Do not treat as the compute point.
         rms_case(device, "s2048_launch", 2, 2048, 128, true)?,
         swi_case(device, "s2048_launch", 2, 2048, 128, true)?,

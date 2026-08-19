@@ -10,7 +10,18 @@ from pathlib import Path
 import numpy as np
 
 WORK = Path(os.environ.get("COMPARE_WORK", "/work/out"))
-OPS = ("rmsnorm", "rope", "swiglu", "ce", "attn")
+OPS = (
+    "rmsnorm",
+    "layernorm",
+    "rope",
+    "rope_with_ids",
+    "swiglu",
+    "geglu",
+    "ce",
+    "attn",
+    "attn_window",
+    "attn_softcap",
+)
 
 
 def _stat_map(raw: dict, key: str) -> dict:
@@ -54,14 +65,15 @@ def main() -> None:
     rust_meta = json.loads(rust_meta_p.read_text()) if rust_meta_p.is_file() else {}
     report = {
         "sacred_bar": False,
-        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims. torch/Unsloth/rust compare latency is host+sync p50/p99 (warmup 5, n=100). Rust host+event p50/p99 after PTX cache still lives in artifacts/custom_op_cuda.json. Shapes are launch-bound; not a sacred-bar number.",
+        "note": "f32 same-shape compare. Not Unsloth product parity. No 2x/VRAM claims. torch/Unsloth/rust compare latency is host+sync p50/p99 (warmup 5, n=100). Rust host+event p50/p99 after PTX cache still lives in artifacts/custom_op_cuda.json. Elementwise shapes are launch-bound; not a sacred-bar number.",
         "caveats": [
             "torch/unsloth/rust compare ms are host+cuda-sync p50/p99 (n=100 after 5 warmups), not one-shot.",
             "Rust event (device-only) p50/p99 is artifacts/custom_op_cuda.json, not this file.",
-            "Shapes are tiny (B=2 H=8 D=64); elementwise is launch-bound.",
+            "Shapes are B=2 H=8 D=64; s128/s512/s2048. Elementwise is launch-bound.",
             "Rust attention is unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC). Not Unsloth PTX. Extra mask still GEMM.",
             "Rust kernels compiled with CUDA_COMPUTE_CAP=90 on SM 12.0 hardware (compile pin).",
-            "Unsloth attn is not a standalone kernel; not compared.",
+            "Unsloth attn / attn_window / attn_softcap are not standalone kernels; not compared (not invented).",
+            "layernorm/geglu/rope_with_ids Unsloth probes use published kernels when importable.",
         ],
         "python": meta,
         "rust": rust_meta,

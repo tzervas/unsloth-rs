@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Apache-2.0 kernel-name gaps (exact GeGLU, affine LayerNorm, packed RoPE
   ids, Gemma tanh softcap). Not peft/QLoRA/MoE/FP8.
 - CustomOp CUDA call sites no longer write `unsafe`. Outputs use
-  `alloc_zeros`. The only remaining `unsafe` is `nvrtc::launch` (cudarc
-  cannot check PTX ABI).
+  `alloc_zeros`. Remaining `unsafe`: `nvrtc::launch` (cudarc cannot
+  check PTX ABI) and CPU AVX2+FMA in `cpu_isa` (runtime-detected).
 - NVRTC C→PTX cache in `nvrtc::load_func` (`Arc<str>` by `module_name`).
 - `cargo bench --features cuda --bench custom_op_cuda` writes
   `artifacts/custom_op_cuda.json` (host vs CUDA-event p50/p99).

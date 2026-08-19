@@ -58,8 +58,8 @@ fn tensor_erf_as(x: &Tensor) -> CandleResult<Tensor> {
     let zeros = Tensor::zeros_like(x)?;
     let ax = x.abs()?;
     let t = ((&ax * 0.327_591_1)? + 1.0)?.recip()?;
-    let p = t.affine(1.061_405_429, 0.0)?;
-    let p = t.mul(&p)?.affine(1.0, -1.453_152_027)?;
+    // Horner for a1 + t*(a2 + t*(a3 + t*(a4 + t*a5))), then poly = t * that.
+    let p = t.affine(1.061_405_429, -1.453_152_027)?;
     let p = t.mul(&p)?.affine(1.0, 1.421_413_741)?;
     let p = t.mul(&p)?.affine(1.0, -0.284_496_736)?;
     let p = t.mul(&p)?.affine(1.0, 0.254_829_592)?;
@@ -126,7 +126,7 @@ impl CustomOp2 for GeGluOp {
         let pdf = (gate.sqr()?.neg()? * 0.5)?
             .exp()?
             .affine(f64::from(inv_sqrt_2pi), 0.0)?;
-        let dgelu = (erf_z.add(&one)? * 0.5)?.add(&pdf)?;
+        let dgelu = (erf_z.add(&one)? * 0.5)?.add(&(gate * pdf)?)?;
         let d_gate = gy.mul(up)?.mul(&dgelu)?;
         let d_up = gy.mul(&gelu)?;
         Ok((Some(d_gate), Some(d_up)))
@@ -194,6 +194,7 @@ extern "C" __global__ void geglu_f32(
 "#;
 
 #[cfg(test)]
+#[allow(clippy::similar_names, clippy::many_single_char_names)]
 mod tests {
     use super::*;
     use candle_core::Device;
@@ -244,9 +245,10 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_matches_cpu() {
-        let Ok(gpu) = Device::new_cuda(0) else {
-            return;
-        };
+        let gpu = Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        });
         let cpu = Device::Cpu;
         let gate = Tensor::randn(0.0f32, 1.0, (3, 19), &cpu).unwrap();
         let up = Tensor::randn(0.0f32, 1.0, (3, 19), &cpu).unwrap();
@@ -264,6 +266,29 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 1e-5, "cuda mae={mae}");
+    }
+
+    #[test]
+    fn backward_matches_central_diff() {
+        let d = Device::Cpu;
+        let h = 1e-3f32;
+        for &e in &[0.0f32, 1.0, -1.0, 2.0, -2.0] {
+            let gate = Tensor::new(&[e], &d).unwrap();
+            let up = Tensor::new(&[1.25f32], &d).unwrap();
+            let y = geglu_custom_op(&gate, &up).unwrap();
+            let gy = Tensor::new(&[1.0f32], &d).unwrap();
+            let (dg, du) = GeGluOp.bwd(&gate, &up, &y, &gy).unwrap();
+            let dg = dg.unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let du = du.unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let y_plus = geglu_custom_op(&Tensor::new(&[e + h], &d).unwrap(), &up).unwrap();
+            let y_minus = geglu_custom_op(&Tensor::new(&[e - h], &d).unwrap(), &up).unwrap();
+            let y_plus = y_plus.flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let y_minus = y_minus.flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let want_dg = (y_plus - y_minus) / (2.0 * h); // central diff vs CustomOp fwd
+            let want_du = gelu_exact(e);
+            assert!((dg - want_dg).abs() < 2e-3, "e={e} dg={dg} fd={want_dg}");
+            assert!((du - want_du).abs() < 2e-5, "e={e} du={du} want={want_du}");
+        }
     }
 
     #[test]

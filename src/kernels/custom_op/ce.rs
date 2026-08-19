@@ -339,9 +339,16 @@ impl CustomOp2 for CeBwdOp {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> CandleResult<(CpuStorage, Shape)> {
-        let (a, b) = l1.contiguous_offsets().unwrap();
-        let (c, d) = l2.contiguous_offsets().unwrap();
-        let vocab = *l1.dims().last().unwrap();
+        let (a, b) = l1.contiguous_offsets().ok_or_else(|| {
+            candle_core::Error::Msg("CE bwd: logits must be contiguous".into()).bt()
+        })?;
+        let (c, d) = l2.contiguous_offsets().ok_or_else(|| {
+            candle_core::Error::Msg("CE bwd: targets must be contiguous".into()).bt()
+        })?;
+        let vocab = *l1
+            .dims()
+            .last()
+            .ok_or_else(|| candle_core::Error::Msg("CE bwd: empty logits shape".into()).bt())?;
         let logits = &s1.as_slice::<f32>()?[a..b];
         let targets = &s2.as_slice::<i64>()?[c..d];
         let out = cpu_ce_bwd(logits, targets, vocab, self.ignore, 4096, self.scale);
@@ -575,7 +582,7 @@ mod tests {
             .unwrap()
             .to_scalar::<f32>()
             .unwrap();
-        assert_eq!(y, 0.0);
+        assert!(y.abs() < 1e-7, "all-ignore mean={y}");
     }
 
     #[test]

@@ -605,16 +605,17 @@ mod tests {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_or_skip() -> Option<Device> {
-        Device::new_cuda(0).ok()
+    fn cuda_or_fail() -> Device {
+        Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        })
     }
 
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_tile_fwd_matches_cpu() {
-        let Some(gpu) = cuda_or_skip() else {
-            return;
-        };
+        let gpu = cuda_or_fail();
         let cpu = Device::Cpu;
         let hidden = Tensor::randn(0.0f32, 0.5, (6, 8), &cpu).unwrap();
         let weight = Tensor::randn(0.0f32, 0.5, (20, 8), &cpu).unwrap();
@@ -637,9 +638,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_tile_bwd_finite() {
-        let Some(gpu) = cuda_or_skip() else {
-            return;
-        };
+        let gpu = cuda_or_fail();
         let hidden = Tensor::randn(0.0f32, 0.3, (4, 6), &gpu).unwrap();
         let weight = Tensor::randn(0.0f32, 0.3, (10, 6), &gpu).unwrap();
         let targets = Tensor::from_vec(vec![1i64, 2, 0, 9], (4,), &gpu).unwrap();

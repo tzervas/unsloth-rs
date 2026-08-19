@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2026 Tyler Zervas
 
+#![allow(clippy::many_single_char_names)]
+
 //! # unsloth-rs
 //!
 //! Candle/CubeCL **transformer kernel building blocks** for LLM inference experiments.

@@ -41,7 +41,7 @@ PY_MOUNTS=(
   -v "$ROOT/compare/py:/opt/compare/py:ro,Z"
   -v "$PIP_CACHE:/root/.cache/pip:Z"
   -v "$TRITON_CACHE:/root/.triton:Z"
-  -v "${TMPDIR:-/home/kang/tmp}:/work/tmp:Z"
+  -v "${TMPDIR:-/tmp}:/work/tmp:Z"
   -v "$SITE_VOL:/opt/site-extra:Z"
 )
 if [[ "${COMPARE_PIP_UNSLOTH:-1}" == "1" ]]; then

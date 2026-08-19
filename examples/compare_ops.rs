@@ -1,5 +1,5 @@
 //! Read fixture tensors and run `unsloth_rs::ops` on CUDA. Dump rust_*.npy-compatible f32.
-//! Output dumps use a host copy; the kernels themselves stay on CudaStorage.
+//! Output dumps use a host copy; the kernels themselves stay on `CudaStorage`.
 
 use std::env;
 use std::fs;
@@ -64,8 +64,7 @@ fn ms_pair(p50: f64, p99: f64) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let work = env::args()
         .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/work/out"));
+        .map_or_else(|| PathBuf::from("/work/out"), PathBuf::from);
     let device = Device::new_cuda(0).map_err(|e| format!("FAIL_ENV cuda: {e}"))?;
     let mut ms_json = String::new();
     for tag in ["s128", "s512"] {
@@ -131,14 +130,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &at.flatten_all()?.to_vec1::<f32>()?,
         );
 
-        ms_json.push_str(&format!(
+        let chunk = format!(
             "\"{tag}\":{{\"rmsnorm\":{},\"rope\":{},\"swiglu\":{},\"ce\":{},\"attn\":{}}},",
             ms_pair(rms_p50, rms_p99),
             ms_pair(rope_p50, rope_p99),
             ms_pair(swi_p50, swi_p99),
             ms_pair(ce_p50, ce_p99),
             ms_pair(attn_p50, attn_p99),
-        ));
+        );
+        ms_json.push_str(&chunk);
     }
     let json = format!(
         "{{\"device\":\"cuda\",\"warmup\":{WARMUP},\"n_samples\":{N_SAMPLES},\"cuda_compute_cap\":{},\"attn\":\"unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC, not Unsloth PTX)\",\"ms\":{{{}}}}}\n",
@@ -160,10 +160,10 @@ fn load_shape_meta(root: &Path) -> (usize, usize, usize, usize) {
         t[i..]
             .trim_start()
             .chars()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect::<String>()
             .parse()
-            .unwrap_or_else(|e| panic!("dim {k}: {e}"))
+            .unwrap_or_else(|err| panic!("dim {k}: {err}"))
     };
     (num("B"), num("H"), num("S"), num("D"))
 }

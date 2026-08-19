@@ -8,7 +8,7 @@
 //!
 //! ## CubeCL (optional, host D2H/H2D)
 //! - [`cubecl`] — Flash Attention; [`cubecl::interop_requires_host_roundtrip`] is `true`
-//! - [`fused_rmsnorm_rope`] / [`fused_swiglu`] — CubeCL drafts + CPU fallback
+//! - [`mod@fused_rmsnorm_rope`] / [`fused_swiglu`] — CubeCL drafts + CPU fallback
 //!
 //! ## Candle reference layers
 //! - [`attention`] — Multi-head attention with GQA

@@ -11,9 +11,9 @@
 //!
 //! CubeCL FA still `to_vec1`s and is not the default.
 
-use candle_core::{CpuStorage, CustomOp3, Layout, Result as CandleResult, Shape, Tensor};
 #[cfg(any(test, feature = "cuda"))]
 use candle_core::DType;
+use candle_core::{CpuStorage, CustomOp3, Layout, Result as CandleResult, Shape, Tensor};
 
 /// Q rows per CUDA SRAM tile.
 pub const ATTN_TILE_BR: usize = 16;
@@ -1087,6 +1087,7 @@ fn window_mask_tensor(
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
     use candle_core::Device;
@@ -1148,16 +1149,17 @@ mod tests {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_or_skip() -> Option<Device> {
-        Device::new_cuda(0).ok()
+    fn cuda_or_fail() -> Device {
+        Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        })
     }
 
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_tiled_matches_softmax_s512() {
-        let Some(device) = cuda_or_skip() else {
-            return;
-        };
+        let device = cuda_or_fail();
         let q = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
         let k = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
         let v = Tensor::randn(0.0f32, 1.0, (2, 8, 512, 64), &device).unwrap();
@@ -1187,9 +1189,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_online_matches_softmax() {
-        let Some(device) = cuda_or_skip() else {
-            return;
-        };
+        let device = cuda_or_fail();
         let q = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
         let k = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
         let v = Tensor::randn(0.0f32, 1.0, (2, 4, 16, 32), &device).unwrap();
@@ -1210,9 +1210,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_causal_matches_masked_softmax() {
-        let Some(device) = cuda_or_skip() else {
-            return;
-        };
+        let device = cuda_or_fail();
         let q = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
         let k = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
         let v = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
@@ -1297,9 +1295,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_tiled_window_matches_masked_softmax_s512() {
-        let Some(device) = cuda_or_skip() else {
-            return;
-        };
+        let device = cuda_or_fail();
         let q = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();
         let k = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();
         let v = Tensor::randn(0.0f32, 1.0, (1, 4, 512, 64), &device).unwrap();

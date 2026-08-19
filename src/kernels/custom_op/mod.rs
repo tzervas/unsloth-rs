@@ -7,8 +7,9 @@
 //! CubeCL Flash Attention still host-roundtrips
 //! ([`crate::kernels::cubecl::interop_requires_host_roundtrip`]).
 //!
-//! Scope: f32. RMSNorm, LayerNorm, SwiGLU, GeGLU, RoPE (+ position_ids),
-//! chunked CE, fused linear+CE, tiled/online attention.
+//! Scope: f32 everywhere; RMSNorm / SwiGLU / attention also accept f16
+//! (float accumulate). LayerNorm, GeGLU, RoPE (+ position_ids), chunked CE,
+//! fused linear+CE stay f32. CUDA attention is tiled SRAM FA for dim≤128.
 
 pub mod attention;
 pub mod ce;

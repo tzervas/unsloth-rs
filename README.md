@@ -25,7 +25,7 @@ kernels:
 
 | Building block | CPU (Candle) | CUDA feature |
 |----------------|--------------|--------------|
-| Multi-head attention + GQA | ✅ CustomOp online-softmax | CustomOp online-softmax on `CudaStorage` (no `[B,H,S,S]`, not tiled SRAM FA). Extra mask → Candle GEMM. CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
+| Multi-head attention + GQA | ✅ CustomOp | CUDA: owned SRAM-tiled FA (dim≤128, no extra mask). Wider heads: HBM-streaming online. Extra mask → Candle GEMM. CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
 | RoPE | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
 | SwiGLU `silu⊙up` | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
@@ -44,17 +44,18 @@ still incomplete.
 ### Solid today
 
 - Multi-head attention (CPU reference; correct `1/√head_dim` scaling)
-- **RMSNorm / RoPE / SwiGLU / chunked CE CustomOps** (CPU + CUDA `CudaStorage`,
-  f32) — no CubeCL host copy (`custom_op_device_resident()`)
+- **RMSNorm / RoPE / SwiGLU / chunked CE CustomOps** (CPU + CUDA `CudaStorage`).
+  RMSNorm / SwiGLU / attention accept f16 I/O (float acc). No CubeCL host copy
+  (`custom_op_device_resident()`, `custom_op_f32_only() == false`)
 - Memory estimation helpers
 - Default-feature CPU test suite (unit + integration)
 
 ### Partial / experimental
 
-- Flash Attention via CubeCL (`cuda` feature): **opt-in** (`UNSLOTH_CUBECL_FA=1`).
-  Default FA path is CustomOp / Candle CUDA (**no** `to_vec1`). CubeCL still
-  host-roundtrips (`interop_requires_host_roundtrip()`). Tiled FA SRAM is
-  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) Phase 1, not this crate.
+- Default `ops::attention` on CUDA is **owned NVRTC tiled FA** (head dim ≤ 128,
+  no extra mask). Wider heads stay HBM-streaming online. Extra mask is GEMM.
+  Foreign Unsloth FA PTX / triton-bridge Job C remains FAIL_ENV.
+  CubeCL FA is opt-in (`UNSLOTH_CUBECL_FA=1`) and still host-roundtrips.
 - GPU numerical equivalence gate: runs under `--features cuda` (not default CI);
   needs `/dev/nvidia0` (see [DEBT.md](DEBT.md)); **BLOCKED:env** without full device nodes
 - Ternary quantization experiments (CPU compression ratios only; GPU ternary archived)

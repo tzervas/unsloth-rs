@@ -27,7 +27,7 @@ use crate::kernels::custom_op::{
     rope_custom_op, rope_with_position_ids, swiglu_custom_op, DEFAULT_CE_CHUNK,
 };
 
-/// `y = x / rms(x) * weight` over the last dim. [`DType::F32`] or [`DType::F16`].
+/// `y = x / rms(x) * weight` over the last dim. [`candle_core::DType::F32`] or [`candle_core::DType::F16`].
 ///
 /// # Errors
 ///
@@ -37,6 +37,9 @@ pub fn rmsnorm(x: &Tensor, weight: &Tensor, eps: f32) -> CandleResult<Tensor> {
 }
 
 /// Last-dim LayerNorm: `(x - mean) / sqrt(var + eps) * weight + bias`.
+///
+/// Forward only: `LayerNormOp` has no `bwd`, so this is inference (grads on
+/// x/weight/bias are dropped if this name is used in an autograd graph).
 ///
 /// # Errors
 ///
@@ -167,6 +170,7 @@ pub fn fused_linear_ce(
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
     use candle_core::{DType, Device, Tensor};

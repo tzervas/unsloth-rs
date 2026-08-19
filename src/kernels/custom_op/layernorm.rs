@@ -241,6 +241,7 @@ extern "C" __global__ void layernorm_f32(
 "#;
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
     use candle_core::Device;
@@ -285,9 +286,10 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_matches_cpu() {
-        let Ok(gpu) = Device::new_cuda(0) else {
-            return;
-        };
+        let gpu = Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        });
         let cpu = Device::Cpu;
         let x = Tensor::randn(0.0f32, 1.0, (2, 5, 17), &cpu).unwrap();
         let w = Tensor::randn(0.0f32, 1.0, 17, &cpu).unwrap();

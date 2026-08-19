@@ -71,6 +71,8 @@ unnecessary_wraps = "allow"
 needless_pass_by_value = "allow"
 needless_range_loop = "allow"
 field_reassign_with_default = "allow"
+many_single_char_names = "allow"
+excessive_precision = "allow"
 
 [[bench]]
 name = "kernels"

@@ -426,7 +426,6 @@ pub fn fused_ffn_swiglu(
 // ============================================================================
 
 #[cfg(feature = "cuda")]
-#[cfg(feature = "cuda")]
 #[allow(dead_code)] // CubeCL reference; default path is CustomOp (no D2H)
 fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};

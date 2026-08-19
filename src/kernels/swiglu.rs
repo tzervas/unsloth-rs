@@ -64,39 +64,10 @@ impl SwiGLU {
     /// # Returns
     /// Output tensor [..., `hidden_size`]
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let device = x.device();
-
-        if device.is_cuda() {
-            self.forward_cuda(x)
-        } else {
-            self.forward_cpu(x)
-        }
-    }
-
-    fn forward_cpu(&self, x: &Tensor) -> Result<Tensor> {
-        // Gate: Swish(x @ gate_weight^T) - use broadcast_matmul for 3D tensor with 2D weight
         let gate = x.broadcast_matmul(&self.gate_weight.t()?)?;
-        let gate = candle_nn::ops::silu(&gate)?;
-
-        // Up: x @ up_weight^T
         let up = x.broadcast_matmul(&self.up_weight.t()?)?;
-
-        // Element-wise multiply
-        let hidden = (gate * up)?;
-
-        // Down projection
-        let output = hidden.broadcast_matmul(&self.down_weight.t()?)?;
-
-        Ok(output)
-    }
-
-    /// CUDA implementation.
-    ///
-    /// Uses Candle's CUDA backend for GPU acceleration.
-    /// The algorithm is the same as the CPU implementation.
-    fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
-        tracing::debug!("Using CUDA SwiGLU path for input shape {:?}", x.shape());
-        self.forward_cpu(x)
+        let hidden = crate::kernels::custom_op::swiglu_custom_op(&gate, &up)?;
+        Ok(hidden.broadcast_matmul(&self.down_weight.t()?)?)
     }
 
     /// Estimate VRAM usage in bytes.

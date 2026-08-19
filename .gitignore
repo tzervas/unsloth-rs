@@ -1,4 +1,7 @@
 /target/
+artifacts/compare-work/
+**/__pycache__/
+*.pyc
 Cargo.lock
 **/*.rs.bk
 *.pdb

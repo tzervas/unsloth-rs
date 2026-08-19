@@ -7,12 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- CustomOp `rmsnorm` / `swiglu` / `attention` accept [`DType::F16`]
+  (f16 I/O, float accumulate). `ops` names unchanged. MAE vs f32 ref
+  is the check (`< 2e-3`). f16 CUDA attention uses the online kernel,
+  not the SRAM tile. `custom_op_f32_only()` is now false.
+- `ops::attention_window` — sliding-window causal on the same CustomOp
+  tiled/online path as `attention`. CUDA SRAM tiles honor the window.
+  MAE vs masked softmax at s512 is the check, not a throughput claim.
+- `rope_with_position_ids` + `RotaryEmbedding::forward` honors packed `[B,S]` ids.
+- `fused_linear_cross_entropy` avoids `[N, V]` on every device: CPU CustomOp,
+  others vocab-tile Candle GEMM (peak extra `[N, chunk]`).
+- CustomOp CPU dots use AVX2+FMA when advertised (14700K has these; no
+  AVX-512/AMX). Fused-CE rows parallelize via `std::thread`.
+- CUDA fused-CE tile smoke on 5080: fwd matches CPU (`err < 1e-4`), bwd
+  finite. Not a throughput claim.
+- Compare harness: persist Unsloth in Podman volume `unsloth-rs-compare-site`
+  (skip pip when import works). Image bake still avoided.
+- `unsloth_rs::ops` — Triton-shaped names (`rmsnorm`, `rope`, `swiglu`,
+  `attention`, `cross_entropy`, `fused_linear_ce`). Backends stay internal.
+- CustomOp online-attention `cuda_fwd` (NVRTC). Default CUDA path no longer
+  materializes `[B,H,S,S]` when there is no extra mask.
+- CustomOp CUDA attention is SRAM-tiled Flash-style softmax for head dim
+  ≤ 128 (owned NVRTC, not Unsloth PTX). Wider heads keep the HBM-streaming
+  online kernel. Extra masks still Candle GEMM.
+- `ops::{geglu, layernorm, rope_with_ids, attention_softcap}` close Unsloth
+  Apache-2.0 kernel-name gaps (exact GeGLU, affine LayerNorm, packed RoPE
+  ids, Gemma tanh softcap). Not peft/QLoRA/MoE/FP8.
+- CustomOp CUDA call sites no longer write `unsafe`. Outputs use
+  `alloc_zeros`. Remaining `unsafe`: `nvrtc::launch` (cudarc cannot
+  check PTX ABI) and CPU AVX2+FMA in `cpu_isa` (runtime-detected).
+- NVRTC C→PTX cache in `nvrtc::load_func` (`Arc<str>` by `module_name`).
+- `cargo bench --features cuda --bench custom_op_cuda` writes
+  `artifacts/custom_op_cuda.json` (host vs CUDA-event p50/p99).
+  `CUDA_COMPUTE_CAP` + `TMPDIR` on this host. Missing feature/device/toolkit:
+  `FAIL_ENV` exit 2. Kernel/launch errors: `FAIL`. Artifact write errors:
+  `FAIL_IO`. `compile_cached` is first-vs-second NVRTC, not a launch-tax close.
+
 ### Changed
+- Compare harness records torch / Unsloth / rust **host+sync p50/p99**
+  (warmup 5, n=100) in `artifacts/py-rs-compare.json`. Not one-shot.
+  Device-event rust numbers remain `artifacts/custom_op_cuda.json`.
+- `custom_op_cuda` bench harvests `fused_linear_ce` host+event p50/p99
+  (s128/s512 launch-bound + compute N=512 D=4096 V=32768). Not a 2× claim.
+- `examples/compare_ops.rs` calls `unsloth_rs::ops` (`rmsnorm`, `rope`,
+  `swiglu`, `attention`, `cross_entropy`), not `*_custom_op` names.
+- **G0:** `flash_attention_cubecl` defaults to CustomOp / Candle CUDA (no
+  CubeCL `to_vec1`). CubeCL FA only if `UNSLOTH_CUBECL_FA` is set.
+- Added `attention_custom_op` / `attention_device` (online softmax on CPU).
 - **`cubecl` is optional.** Default and CPU (`--no-default-features`) builds no longer pull the cubecl graph. Enable `cuda` (`dep:cubecl`, `cubecl/cuda`, `dep:cubecl-cuda`) when GPU kernels are needed.
 
 ### Documentation
-- Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
-- README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.
+- `docs/TRITON.md`: Triton compiler/FFI is
+  [triton-bridge-rs](https://github.com/tzervas/triton-bridge-rs) `v0.1.0`
+  (contract only). Hook: `kernels::triton_bridge` (no Cargo dep, never dispatches).
+- `compare/README.md`: compare artifact now has torch/Unsloth/rust
+  host+sync p50/p99. Event rust p50/p99 stays in
+  `artifacts/custom_op_cuda.json`.
+
+## [1.0.4] - 2026-08-17
+
+
+### Added
+- **G0 CustomOp family** (`kernels::custom_op`):
+  - RMSNorm (`CustomOp2`)
+  - SwiGLU `silu⊙up` (`CustomOp2`)
+  - RoPE apply (`CustomOp3`)
+  - Chunked cross-entropy (`CustomOp2`, mean over non-ignored tokens)
+- Shared NVRTC helper (`custom_op::nvrtc`, `--features cuda`).
+- Honesty flags: `custom_op_device_resident()`, `custom_op_f32_only()`.
+- `RmsNorm` / `RotaryEmbedding` / `SwiGLU` / `fused_swiglu::swiglu` /
+  `fused_rmsnorm_rope::{rmsnorm,rope}` now take the CustomOp path (f32).
+- `chunked_cross_entropy(logits, targets, ignore_index, chunk_size)`.
+- `docs/P1_CUSTOMOP_PLAN.md` (planning pass that this release implements).
+
+### Notes
+- CubeCL Flash Attention interop is **unchanged** (`interop_requires_host_roundtrip() == true`).
+- CustomOp is f32-only. CE backward still allocates `dlogits [N,V]` (needed
+  for `lm_head` autograd). Fused linear+CE is **not** in this crate.
+- `position_ids` on `RotaryEmbedding::forward` remain unused (sequential
+  `0..S` cache), same as 1.0.3.
+
+### Documentation
+- DEBT.md: P0d + P1 CustomOps landed; CubeCL host copy remains BLOCKED:api.
 
 ## [1.0.3] - 2026-07-22
 

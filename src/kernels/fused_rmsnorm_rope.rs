@@ -363,16 +363,9 @@ pub fn rmsnorm(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tenso
         )));
     }
 
-    // Check for CUDA support
-    #[cfg(feature = "cuda")]
-    {
-        if input.device().is_cuda() {
-            return launch_rmsnorm_kernel(input, weight, eps);
-        }
-    }
-
-    // CPU fallback
-    rmsnorm_cpu(input, weight, eps)
+    Ok(crate::kernels::custom_op::rmsnorm_custom_op(
+        input, weight, eps as f32,
+    )?)
 }
 
 /// Apply fused RMSNorm + RoPE using CubeCL GPU kernel.
@@ -454,15 +447,26 @@ pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothRe
         )));
     }
 
-    #[cfg(feature = "cuda")]
-    {
-        if input.device().is_cuda() {
-            return launch_rope_kernel(input, cos_cache, sin_cache);
-        }
+    let seq = input_shape[2];
+    let max = cos_cache.dim(0)?;
+    if max < seq {
+        return Err(UnslothError::InvalidConfig(format!(
+            "RoPE cache {max} < seq {seq}"
+        )));
     }
-
-    // CPU fallback
-    rope_cpu(input, cos_cache, sin_cache)
+    let cos = if max == seq {
+        cos_cache.clone()
+    } else {
+        cos_cache.narrow(0, 0, seq)?
+    };
+    let sin = if max == seq {
+        sin_cache.clone()
+    } else {
+        sin_cache.narrow(0, 0, seq)?
+    };
+    Ok(crate::kernels::custom_op::rope_custom_op(
+        input, &cos, &sin,
+    )?)
 }
 
 // ============================================================================
@@ -470,6 +474,7 @@ pub fn rope(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothRe
 // ============================================================================
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)] // CubeCL reference; default path is CustomOp (no D2H)
 fn launch_rmsnorm_kernel(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
@@ -586,6 +591,7 @@ fn launch_fused_rmsnorm_rope_kernel(
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)] // CubeCL reference; default path is CustomOp (no D2H)
 fn launch_rope_kernel(
     input: &Tensor,
     cos_cache: &Tensor,
@@ -709,6 +715,7 @@ fn fused_rmsnorm_rope_cpu(
     Ok(output)
 }
 
+#[allow(dead_code)] // CubeCL/CPU reference; default rope() is CustomOp
 fn rope_cpu(input: &Tensor, cos_cache: &Tensor, sin_cache: &Tensor) -> UnslothResult<Tensor> {
     let dims = input.dims();
     let seq_len = dims[2];

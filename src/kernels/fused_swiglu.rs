@@ -317,15 +317,7 @@ pub fn swiglu(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
         )));
     }
 
-    #[cfg(feature = "cuda")]
-    {
-        if gate.device().is_cuda() {
-            return launch_swiglu_kernel(gate, up);
-        }
-    }
-
-    // CPU fallback
-    swiglu_cpu(gate, up)
+    Ok(crate::kernels::custom_op::swiglu_custom_op(gate, up)?)
 }
 
 /// Apply SwiGLU backward pass using CubeCL GPU kernel.
@@ -434,6 +426,7 @@ pub fn fused_ffn_swiglu(
 // ============================================================================
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)] // CubeCL reference; default path is CustomOp (no D2H)
 fn launch_swiglu_kernel(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     use crate::kernels::cubecl::interop::{candle_to_cubecl_handle, cubecl_to_candle_tensor};
 
@@ -537,6 +530,7 @@ fn launch_swiglu_backward_kernel(
 // CPU Fallback Implementations
 // ============================================================================
 
+#[allow(dead_code)] // CubeCL/CPU reference; default swiglu() is CustomOp
 fn swiglu_cpu(gate: &Tensor, up: &Tensor) -> UnslothResult<Tensor> {
     // SiLU(gate) = gate * sigmoid(gate)
     let silu_gate = candle_nn::ops::silu(gate)?;

@@ -2,8 +2,8 @@
 
 ## Current version
 
-**`1.0.4`** in `Cargo.toml` / `.cz.toml`. Newest git tag as of this file:
-`v1.0.3`. Tag `v1.0.4` via the release workflow (`bump=none`), not by hand.
+**`1.1.0`** in `Cargo.toml` / `.cz.toml`. Newest git tag as of this file:
+`v1.0.4`. Tag `v1.1.0` via the release workflow (`bump=none`), not by hand.
 
 `unsloth-rs` is **published on crates.io**, so 1.x is real. That drives every
 rule below.
@@ -40,10 +40,12 @@ Do not hand-edit those — use the tool:
 ```bash
 cz version --project          # what cz thinks we are
 cz bump --yes --dry-run       # show the next bump, change nothing
-cz bump --yes --increment patch --files-only --changelog
+cz bump --yes --increment patch --files-only
 ```
 
-`--files-only` updates files and changelog without creating a local tag.
+`--files-only` updates version files without creating a local tag.
+Do **not** pass `--changelog`: commitizen rewrites Keep a Changelog into
+its own format. Move `## [Unreleased]` into `## [x.y.z]` by hand.
 Tags are created by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 after the bump PR merges (`bump=none`). `main` requires PRs (`protec-main`);
 a `cz bump` that pushes a tag+commit straight to `main` is rejected.
@@ -73,8 +75,8 @@ a registry publication.
 
 | Surface | Version |
 | --- | --- |
-| `Cargo.toml` / `.cz.toml` | `1.0.4` |
-| Newest git tag (before this release workflow) | `v1.0.3` |
+| `Cargo.toml` / `.cz.toml` | `1.1.0` |
+| Newest git tag | `v1.0.4` (tag `v1.1.0` after this PR merges, `bump=none`) |
 | crates.io `unsloth-rs` | historically `1.0.2` (1.0.2 tarball had a case collision; 1.0.3 was tagged and never published) |
 
 When you claim a version is released, say *where*.

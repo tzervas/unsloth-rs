@@ -75,7 +75,9 @@ still incomplete.
 **Docs:** [CHANGELOG.md](CHANGELOG.md) · [ROADMAP.md](ROADMAP.md) · [DEBT.md](DEBT.md) ·
 [GPU_SETUP.md](GPU_SETUP.md) · [PUBLISHING.md](PUBLISHING.md) ·
 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles) ·
-[docs/TRITON.md](docs/TRITON.md) (Triton lives in triton-bridge-rs, not here).
+[docs/TRITON.md](docs/TRITON.md) (Triton lives in triton-bridge-rs, not here) ·
+[docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) ·
+[docs/VERSIONING.md](docs/VERSIONING.md).
 
 Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are in
 [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md).
@@ -83,14 +85,14 @@ Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.4"
+unsloth-rs = "1.0"
 ```
 
 CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.4", features = ["cuda"] }
+unsloth-rs = { version = "1.0", features = ["cuda"] }
 ```
 
 On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0

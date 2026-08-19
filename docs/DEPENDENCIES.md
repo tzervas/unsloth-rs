@@ -20,6 +20,9 @@ candle-core, candle-nn, cubecl (optional), …
 **unsloth-rs must never depend on peft-rs, qlora-rs, or axolotl-rs.**
 Compose PEFT training via those crates, not this one.
 
+Live gap map + close-order: [ECOSYSTEM_GAPS.md](ECOSYSTEM_GAPS.md).
+`cubecl` is optional; default/CPU builds do not pull that graph.
+
 ## Features
 
 | Feature | Effect |

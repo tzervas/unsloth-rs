@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use candle_core::{DType, Device, Tensor};
-use unsloth_rs::ops::{attention, cross_entropy, rmsnorm, rope, swiglu};
+use unsloth_rs::ops::{
+    attention, attention_softcap, attention_window, cross_entropy, geglu, layernorm, rmsnorm, rope,
+    rope_with_ids, swiglu,
+};
 
 fn load_f32(path: &Path) -> Vec<f32> {
     let raw = fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
@@ -33,6 +36,8 @@ fn write_f32(path: &Path, data: &[f32]) {
 
 const WARMUP: usize = 5;
 const N_SAMPLES: usize = 100;
+const WINDOW: usize = 64;
+const SOFTCAP: f32 = 50.0;
 
 fn timed_stats<T, F: FnMut() -> Result<T, Box<dyn std::error::Error>>>(
     device: &Device,
@@ -61,17 +66,30 @@ fn ms_pair(p50: f64, p99: f64) -> String {
     format!("{{\"p50\":{p50:.4},\"p99\":{p99:.4},\"n\":{N_SAMPLES}}}")
 }
 
+fn discover_tags(work: &Path) -> Vec<String> {
+    let mut tags = Vec::new();
+    let Ok(rd) = fs::read_dir(work) else {
+        return tags;
+    };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if p.join("shape.json").is_file() && p.join("x.f32").is_file() {
+            tags.push(ent.file_name().to_string_lossy().into_owned());
+        }
+    }
+    tags.sort_by_key(|t| t.trim_start_matches('s').parse::<usize>().unwrap_or(0));
+    tags
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let work = env::args()
         .nth(1)
         .map_or_else(|| PathBuf::from("/work/out"), PathBuf::from);
     let device = Device::new_cuda(0).map_err(|e| format!("FAIL_ENV cuda: {e}"))?;
     let mut ms_json = String::new();
-    for tag in ["s128", "s512"] {
-        let root = work.join(tag);
-        if !root.join("x.f32").is_file() {
-            continue;
-        }
+    let mut fail_env = Vec::new();
+    for tag in discover_tags(&work) {
+        let root = work.join(&tag);
         let x = load_f32(&root.join("x.f32"));
         let w = load_f32(&root.join("w.f32"));
         let hidden = w.len();
@@ -121,27 +139,103 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (ce, ce_p50, ce_p99) = timed_stats(&device, || Ok(cross_entropy(&lt, &tt)?))?;
         write_f32(&root.join("rust_ce.f32"), &[ce.to_vec0::<f32>()?]);
 
-        // Owned tiled SRAM FA on CudaStorage (no [B,H,S,S]). Not Unsloth PTX.
-        let scale = (d as f64).sqrt().recip();
-        let (at, attn_p50, attn_p99) =
-            timed_stats(&device, || Ok(attention(&qt, &kt, &vt, scale, None, true)?))?;
+        let bias = load_f32(&root.join("bias.f32"));
+        let bt = Tensor::from_vec(bias, hidden, &device)?;
+        let (ln, ln_p50, ln_p99) = timed_stats(&device, || Ok(layernorm(&xt, &wt, &bt, 1e-5)?))?;
         write_f32(
-            &root.join("rust_attn.f32"),
-            &at.flatten_all()?.to_vec1::<f32>()?,
+            &root.join("rust_layernorm.f32"),
+            &ln.flatten_all()?.to_vec1::<f32>()?,
         );
 
+        let (gg, geg_p50, geg_p99) = timed_stats(&device, || Ok(geglu(&gt, &ut)?))?;
+        write_f32(
+            &root.join("rust_geglu.f32"),
+            &gg.flatten_all()?.to_vec1::<f32>()?,
+        );
+
+        let cache = load_f32(&root.join("cos_cache.f32"));
+        let cache_s = cache.len() / (d / 2);
+        let costc = Tensor::from_vec(cache, (cache_s, d / 2), &device)?;
+        let sintc = Tensor::from_vec(
+            load_f32(&root.join("sin_cache.f32")),
+            (cache_s, d / 2),
+            &device,
+        )?;
+        let pos = load_i64(&root.join("pos_ids.i64"));
+        let pt = Tensor::from_vec(pos, s, &device)?;
+        let (rid, rid_p50, rid_p99) =
+            timed_stats(&device, || Ok(rope_with_ids(&qt, &costc, &sintc, &pt)?))?;
+        write_f32(
+            &root.join("rust_rope_with_ids.f32"),
+            &rid.flatten_all()?.to_vec1::<f32>()?,
+        );
+
+        // Owned tiled SRAM FA on CudaStorage (no [B,H,S,S]). Not Unsloth PTX.
+        let scale = (d as f64).sqrt().recip();
+        let attn_json =
+            match timed_stats(&device, || Ok(attention(&qt, &kt, &vt, scale, None, true)?)) {
+                Ok((at, p50, p99)) => {
+                    write_f32(
+                        &root.join("rust_attn.f32"),
+                        &at.flatten_all()?.to_vec1::<f32>()?,
+                    );
+                    let (aw, wp50, wp99) = timed_stats(&device, || {
+                        Ok(attention_window(&qt, &kt, &vt, scale, true, WINDOW)?)
+                    })?;
+                    write_f32(
+                        &root.join("rust_attn_window.f32"),
+                        &aw.flatten_all()?.to_vec1::<f32>()?,
+                    );
+                    let (ac, cp50, cp99) = timed_stats(&device, || {
+                        Ok(attention_softcap(
+                            &qt, &kt, &vt, scale, None, true, SOFTCAP,
+                        )?)
+                    })?;
+                    write_f32(
+                        &root.join("rust_attn_softcap.f32"),
+                        &ac.flatten_all()?.to_vec1::<f32>()?,
+                    );
+                    format!(
+                        "\"attn\":{},\"attn_window\":{},\"attn_softcap\":{}",
+                        ms_pair(p50, p99),
+                        ms_pair(wp50, wp99),
+                        ms_pair(cp50, cp99),
+                    )
+                }
+                Err(e) => {
+                    let msg = format!("FAIL_ENV {tag} attn: {e}");
+                    eprintln!("{msg}");
+                    fail_env.push(msg);
+                    "\"attn\":null,\"attn_window\":null,\"attn_softcap\":null".to_string()
+                }
+            };
+
         let chunk = format!(
-            "\"{tag}\":{{\"rmsnorm\":{},\"rope\":{},\"swiglu\":{},\"ce\":{},\"attn\":{}}},",
+            "\"{tag}\":{{\"rmsnorm\":{},\"layernorm\":{},\"rope\":{},\"rope_with_ids\":{},\"swiglu\":{},\"geglu\":{},\"ce\":{},{attn_json}}},",
             ms_pair(rms_p50, rms_p99),
+            ms_pair(ln_p50, ln_p99),
             ms_pair(rope_p50, rope_p99),
+            ms_pair(rid_p50, rid_p99),
             ms_pair(swi_p50, swi_p99),
+            ms_pair(geg_p50, geg_p99),
             ms_pair(ce_p50, ce_p99),
-            ms_pair(attn_p50, attn_p99),
         );
         ms_json.push_str(&chunk);
     }
+    let fail_json = if fail_env.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"fail_env\":[{}]",
+            fail_env
+                .iter()
+                .map(|s| format!("\"{}\"", s.replace('"', "'")))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     let json = format!(
-        "{{\"device\":\"cuda\",\"warmup\":{WARMUP},\"n_samples\":{N_SAMPLES},\"cuda_compute_cap\":{},\"attn\":\"unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC, not Unsloth PTX)\",\"ms\":{{{}}}}}\n",
+        "{{\"device\":\"cuda\",\"warmup\":{WARMUP},\"n_samples\":{N_SAMPLES},\"window\":{WINDOW},\"softcap\":{SOFTCAP},\"cuda_compute_cap\":{},\"attn\":\"unsloth_rs::ops::attention tiled SRAM FA (owned NVRTC, not Unsloth PTX)\"{fail_json},\"ms\":{{{}}}}}\n",
         env::var("CUDA_COMPUTE_CAP").unwrap_or_else(|_| "unset".into()),
         ms_json.trim_end_matches(',')
     );
@@ -153,7 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn load_shape_meta(root: &Path) -> (usize, usize, usize, usize) {
     let p = root.join("shape.json");
     let t = fs::read_to_string(p).expect("shape.json");
-    // {"B":2,"H":8,"S":128,"D":64}
+    // {"B":2,"H":8,"S":128,"D":64,...}
     let num = |k: &str| -> usize {
         let key = format!("\"{k}\":");
         let i = t.find(&key).unwrap_or_else(|| panic!("missing {k}")) + key.len();

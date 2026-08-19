@@ -15,10 +15,14 @@
 use candle_core::DType;
 use candle_core::{CpuStorage, CustomOp3, Layout, Result as CandleResult, Shape, Tensor};
 
-/// Q rows per CUDA SRAM tile.
+/// Conservative Q rows per CUDA SRAM tile (always fits dim ≤ 128).
 pub const ATTN_TILE_BR: usize = 16;
-/// K/V rows per CUDA SRAM tile.
+/// Conservative K/V rows per CUDA SRAM tile.
 pub const ATTN_TILE_BC: usize = 16;
+/// Occupancy tile used when [`tiled_smem_bytes_cfg`] fits in 48 KiB (dim 64).
+pub const ATTN_TILE_BR_OCC: usize = 32;
+/// Occupancy K/V tile paired with [`ATTN_TILE_BR_OCC`].
+pub const ATTN_TILE_BC_OCC: usize = 32;
 /// Tiled path is only used at or below this head dim (48 KiB smem cap).
 pub const ATTN_TILE_DIM_MAX: usize = 128;
 
@@ -385,11 +389,26 @@ impl CustomOp3 for AttentionOp {
 
 #[cfg(any(feature = "cuda", test))]
 #[must_use]
-fn tiled_smem_bytes(dim: usize) -> usize {
-    let tiles = (2 * ATTN_TILE_BC + 2 * ATTN_TILE_BR) * dim
-        + ATTN_TILE_BR * ATTN_TILE_BC
-        + 3 * ATTN_TILE_BR;
+fn tiled_smem_bytes_cfg(br: usize, bc: usize, dim: usize) -> usize {
+    let tiles = (2 * bc + 2 * br) * dim + br * bc + 3 * br;
     tiles * std::mem::size_of::<f32>()
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[must_use]
+fn choose_tiles(dim: usize) -> (usize, usize) {
+    // 32×32 fits 48 KiB at dim 64 but drops concurrent blocks on the 5080
+    // (s512 event p50 0.68 → 0.93 ms). Keep 16×16; occupancy work is the
+    // parallel row-softmax / flattened O update, not a bigger tile.
+    let _ = dim;
+    (ATTN_TILE_BR, ATTN_TILE_BC)
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[must_use]
+fn tiled_smem_bytes(dim: usize) -> usize {
+    let (br, bc) = choose_tiles(dim);
+    tiled_smem_bytes_cfg(br, bc, dim)
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -615,18 +634,16 @@ fn cuda_tiled_attn(
     let v = sv.as_cuda_slice::<f32>()?.slice(v_span.0..v_span.1);
     let y = alloc_f32(&dev, n_elem)?;
 
-    let func = load_func(
-        &dev,
-        "attn_tiled_f32",
-        "unsloth_attn_tiled_f32_w",
-        ATTN_TILED_SRC,
-    )?;
-    let n_qtiles = seq.div_ceil(ATTN_TILE_BR);
+    let (br, bc) = choose_tiles(dim);
+    let src = attn_tiled_src(br, bc);
+    let module = format!("unsloth_attn_tiled_f32_br{br}_bc{bc}_w");
+    let func = load_func(&dev, "attn_tiled_f32", &module, &src)?;
+    let n_qtiles = seq.div_ceil(br);
     let grid = batch
         .checked_mul(heads)
         .and_then(|bh| bh.checked_mul(n_qtiles))
         .ok_or_else(|| candle_core::Error::Msg("attn CUDA tiled grid overflow".into()).bt())?;
-    let cfg = launch_config(grid, 128, tiled_smem_bytes(dim))?;
+    let cfg = launch_config(grid, 128, tiled_smem_bytes_cfg(br, bc, dim))?;
     let seq_i = i32::try_from(seq)
         .map_err(|_| candle_core::Error::Msg(format!("attn CUDA seq {seq} exceeds i32")).bt())?;
     let dim_i = i32::try_from(dim)
@@ -646,6 +663,13 @@ fn cuda_tiled_attn(
     builder.arg(&window);
     launch(&mut builder, cfg)?;
     Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
+fn attn_tiled_src(br: usize, bc: usize) -> String {
+    ATTN_TILED_SRC
+        .replace("const int BR = 16;", &format!("const int BR = {br};"))
+        .replace("const int BC = 16;", &format!("const int BC = {bc};"))
 }
 
 #[cfg(feature = "cuda")]
@@ -763,36 +787,37 @@ extern "C" __global__ void attn_tiled_f32(
         }
         __syncthreads();
 
-        for (int qi = 0; qi < BR; qi++) {
-            if (tid == 0) {
-                float row_max = -1.0e30f;
-                for (int kj = 0; kj < BC; kj++) {
-                    row_max = fmaxf(row_max, S[qi * BC + kj]);
-                }
-                float m_old = mstat[qi];
-                float m_new = fmaxf(m_old, row_max);
-                float alpha = (m_old > -1.0e30f) ? expf(m_old - m_new) : 0.f;
-                float row_sum = 0.f;
-                for (int kj = 0; kj < BC; kj++) {
-                    float p = expf(S[qi * BC + kj] - m_new);
-                    S[qi * BC + kj] = p;
-                    row_sum += p;
-                }
-                alph[qi] = alpha;
-                mstat[qi] = m_new;
-                lstat[qi] = lstat[qi] * alpha + row_sum;
+        // One thread per query row in the tile (BR ≤ 32, block is 128).
+        if (tid < BR) {
+            int qi = tid;
+            float row_max = -1.0e30f;
+            for (int kj = 0; kj < BC; kj++) {
+                row_max = fmaxf(row_max, S[qi * BC + kj]);
             }
-            __syncthreads();
-            float alpha = alph[qi];
-            for (int d = tid; d < dim; d += bdx) {
-                float acc = 0.f;
-                for (int kj = 0; kj < BC; kj++) {
-                    acc += S[qi * BC + kj] * Vi[kj * dim + d];
-                }
-                Oi[qi * dim + d] = Oi[qi * dim + d] * alpha + acc;
+            float m_old = mstat[qi];
+            float m_new = fmaxf(m_old, row_max);
+            float alpha = (m_old > -1.0e30f) ? expf(m_old - m_new) : 0.f;
+            float row_sum = 0.f;
+            for (int kj = 0; kj < BC; kj++) {
+                float p = expf(S[qi * BC + kj] - m_new);
+                S[qi * BC + kj] = p;
+                row_sum += p;
             }
-            __syncthreads();
+            alph[qi] = alpha;
+            mstat[qi] = m_new;
+            lstat[qi] = lstat[qi] * alpha + row_sum;
         }
+        __syncthreads();
+        for (int i = tid; i < BR * dim; i += bdx) {
+            int qi = i / dim;
+            int d = i - qi * dim;
+            float acc = 0.f;
+            for (int kj = 0; kj < BC; kj++) {
+                acc += S[qi * BC + kj] * Vi[kj * dim + d];
+            }
+            Oi[i] = Oi[i] * alph[qi] + acc;
+        }
+        __syncthreads();
     }
 
     for (int i = tid; i < BR * dim; i += bdx) {
@@ -1107,6 +1132,10 @@ mod tests {
         assert!(tiled_smem_ok(128));
         assert!(!tiled_smem_ok(0));
         assert!(!tiled_smem_ok(256));
+        assert_eq!(choose_tiles(64), (ATTN_TILE_BR, ATTN_TILE_BC));
+        assert_eq!(choose_tiles(128), (ATTN_TILE_BR, ATTN_TILE_BC));
+        assert!(tiled_smem_bytes_cfg(ATTN_TILE_BR_OCC, ATTN_TILE_BC_OCC, 64) <= 48 * 1024);
+        assert!(tiled_smem_bytes_cfg(ATTN_TILE_BR_OCC, ATTN_TILE_BC_OCC, 128) > 48 * 1024);
     }
 
     #[test]

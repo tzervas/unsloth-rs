@@ -20,7 +20,12 @@ SEED = 0
 EPS = 1e-5
 WARMUP = 5
 N_SAMPLES = 100
-SHAPES = ((2, 8, 128, 64), (2, 8, 512, 64))  # B,H,S,D
+# C-COMPARE-NEWOPS + C-UNS-SHAPES. B=2 H=8 D=64. s2048 is FAIL_ENV on OOM, not green skip.
+SHAPES = ((2, 8, 128, 64), (2, 8, 512, 64), (2, 8, 2048, 64))
+WINDOW = 64
+SOFTCAP = 50.0
+POS_OFFSET = 8
+CACHE_PAD = 16
 
 
 def save(path: Path, arr: np.ndarray) -> None:
@@ -35,6 +40,10 @@ def torch_rmsnorm(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     return x / rms * w
 
 
+def torch_layernorm(x: torch.Tensor, w: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return F.layer_norm(x, (x.shape[-1],), w, b, EPS)
+
+
 def torch_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     # x [B,H,S,D]; cos/sin [S, D/2]. NeoX half-split (matches unsloth-rs CustomOp).
     half = x.shape[-1] // 2
@@ -42,8 +51,22 @@ def torch_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
 
 
+def torch_rope_with_ids(
+    x: torch.Tensor, cos_cache: torch.Tensor, sin_cache: torch.Tensor, ids: torch.Tensor
+) -> torch.Tensor:
+    cos = cos_cache.index_select(0, ids)
+    sin = sin_cache.index_select(0, ids)
+    return torch_rope(x, cos, sin)
+
+
 def torch_swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate) * up
+
+
+def torch_geglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    # Exact GELU: 0.5 * e * (1 + erf(e/√2)). Not tanh-approx.
+    gelu = 0.5 * gate * (1.0 + torch.erf(gate / math.sqrt(2.0)))
+    return gelu * up
 
 
 def torch_ce(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -53,6 +76,39 @@ def torch_ce(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
 def torch_attn(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     scale = q.shape[-1] ** -0.5
     return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale)
+
+
+def _causal_window_mask(seq: int, window: int, device: torch.device) -> torch.Tensor:
+    """Keys in [q - window + 1, q], matching unsloth-rs window_lo / window_hi_excl."""
+    q_idx = torch.arange(seq, device=device)
+    k_idx = torch.arange(seq, device=device)
+    lo = q_idx.unsqueeze(-1) - (window - 1)
+    return (k_idx <= q_idx.unsqueeze(-1)) & (k_idx >= lo)
+
+
+def torch_attn_window(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, window: int
+) -> torch.Tensor:
+    scale = q.shape[-1] ** -0.5
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    allowed = _causal_window_mask(q.shape[-2], window, q.device)
+    scores = scores.masked_fill(~allowed, float("-inf"))
+    weights = torch.softmax(scores, dim=-1)
+    return torch.matmul(weights, v)
+
+
+def torch_attn_softcap(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, cap: float
+) -> torch.Tensor:
+    scale = q.shape[-1] ** -0.5
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    scores = cap * torch.tanh(scores / cap)
+    q_idx = torch.arange(q.shape[-2], device=q.device)
+    k_idx = torch.arange(q.shape[-2], device=q.device)
+    causal = k_idx <= q_idx.unsqueeze(-1)
+    scores = scores.masked_fill(~causal, float("-inf"))
+    weights = torch.softmax(scores, dim=-1)
+    return torch.matmul(weights, v)
 
 
 def probe_unsloth() -> dict:
@@ -67,8 +123,10 @@ def probe_unsloth() -> dict:
         return info
     for name in (
         "unsloth.kernels.rms_layernorm",
+        "unsloth.kernels.layernorm",
         "unsloth.kernels.rope_embedding",
         "unsloth.kernels.swiglu",
+        "unsloth.kernels.geglu",
         "unsloth.kernels.cross_entropy_loss",
     ):
         try:
@@ -78,6 +136,12 @@ def probe_unsloth() -> dict:
             info["ops"][name] = f"{type(e).__name__}: {e}"
     info["ops"]["attn"] = (
         "no standalone Unsloth attn kernel; patched SDPA/flex is not compared"
+    )
+    info["ops"]["attn_window"] = (
+        "no standalone Unsloth attn kernel; window not compared (not invented)"
+    )
+    info["ops"]["attn_softcap"] = (
+        "no standalone Unsloth attn kernel; softcap not compared (not invented)"
     )
     return info
 
@@ -100,6 +164,21 @@ def try_unsloth_rmsnorm(x: torch.Tensor, w: torch.Tensor):
     return _call("rmsnorm", go)
 
 
+def try_unsloth_layernorm(x: torch.Tensor, w: torch.Tensor, b: torch.Tensor):
+    def go():
+        from unsloth.kernels.layernorm import fast_layernorm
+
+        ln = torch.nn.LayerNorm(
+            x.shape[-1], eps=EPS, elementwise_affine=True, device=x.device, dtype=x.dtype
+        )
+        with torch.no_grad():
+            ln.weight.copy_(w)
+            ln.bias.copy_(b)
+        return fast_layernorm(ln, x)
+
+    return _call("layernorm", go)
+
+
 def try_unsloth_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     # fast_rope_embedding(Q, K, cos, sin): Q/K [B,H,S,D]; returns (Q_out, K_out).
     def go():
@@ -111,6 +190,28 @@ def try_unsloth_rope(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: t
     return _call("rope", go)
 
 
+def try_unsloth_rope_ids(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos_cache: torch.Tensor,
+    sin_cache: torch.Tensor,
+    ids: torch.Tensor,
+):
+    def go():
+        from unsloth.kernels.rope_embedding import fast_rope_embedding
+
+        # 2026.8.18 `rope_embedding_indices` uses Fast_RoPE_Embedding_QK, which
+        # is inplace on contiguous Q/K and illegal-memory-accessed on this
+        # NeoX [max, D/2] cache. Probe Unsloth's sequential rope on gathered
+        # tables instead. Do not invent an attn kernel.
+        cos_g = cos_cache.index_select(0, ids)
+        sin_g = sin_cache.index_select(0, ids)
+        q_out, _k_out = fast_rope_embedding(q, k, cos_g, sin_g)
+        return q_out
+
+    return _call("rope_with_ids", go)
+
+
 def try_unsloth_swiglu(gate: torch.Tensor, up: torch.Tensor):
     # swiglu_fg_kernel(e, g): [B,S,D] -> silu(e)*g
     def go():
@@ -119,6 +220,15 @@ def try_unsloth_swiglu(gate: torch.Tensor, up: torch.Tensor):
         return swiglu_fg_kernel(gate, up)
 
     return _call("swiglu", go)
+
+
+def try_unsloth_geglu(gate: torch.Tensor, up: torch.Tensor):
+    def go():
+        from unsloth.kernels.geglu import geglu_exact_forward_kernel
+
+        return geglu_exact_forward_kernel(gate, up)
+
+    return _call("geglu", go)
 
 
 def try_unsloth_ce(logits_b_s_v: torch.Tensor, labels_b_s: torch.Tensor):
@@ -196,9 +306,18 @@ def main() -> None:
         freqs = torch.outer(pos, inv)
         cos = freqs.cos()
         sin = freqs.sin()
+        # Extra fixtures after the original randn stream so s128/s512 tensors stay bit-stable.
+        bias = torch.randn(d, device=device, dtype=torch.float32)
+        cache_s = s + CACHE_PAD
+        pos_c = torch.arange(cache_s, device=device, dtype=torch.float32)
+        freqs_c = torch.outer(pos_c, inv)
+        cos_cache = freqs_c.cos()
+        sin_cache = freqs_c.sin()
+        ids = torch.arange(s, device=device, dtype=torch.int64) + POS_OFFSET
 
         save(root / "x.npy", x.detach().cpu().numpy())
         save(root / "w.npy", w.detach().cpu().numpy())
+        save(root / "bias.npy", bias.detach().cpu().numpy())
         save(root / "q.npy", q.detach().cpu().numpy())
         save(root / "k.npy", k.detach().cpu().numpy())
         save(root / "v.npy", v.detach().cpu().numpy())
@@ -207,23 +326,53 @@ def main() -> None:
         save(root / "logits.npy", logits.detach().cpu().numpy())
         save(root / "cos.npy", cos.detach().cpu().numpy())
         save(root / "sin.npy", sin.detach().cpu().numpy())
+        save(root / "cos_cache.npy", cos_cache.detach().cpu().numpy())
+        save(root / "sin_cache.npy", sin_cache.detach().cpu().numpy())
         tgt = targets.detach().cpu().numpy().astype(np.int64)
         np.save(root / "targets.npy", tgt)
         tgt.tofile(root / "targets.i64")
+        ids_np = ids.detach().cpu().numpy().astype(np.int64)
+        np.save(root / "pos_ids.npy", ids_np)
+        ids_np.tofile(root / "pos_ids.i64")
         (root / "shape.json").write_text(
-            json.dumps({"B": b, "H": h, "S": s, "D": d}, separators=(",", ":")) + "\n"
+            json.dumps(
+                {
+                    "B": b,
+                    "H": h,
+                    "S": s,
+                    "D": d,
+                    "CACHE_S": cache_s,
+                    "WINDOW": WINDOW,
+                    "SOFTCAP": SOFTCAP,
+                    "POS_OFFSET": POS_OFFSET,
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
         )
 
         rms, rms_ms = timed(lambda: torch_rmsnorm(x, w), device)
+        ln, ln_ms = timed(lambda: torch_layernorm(x, w, bias), device)
         rope, rope_ms = timed(lambda: torch_rope(q, cos, sin), device)
+        rope_ids, rope_ids_ms = timed(
+            lambda: torch_rope_with_ids(q, cos_cache, sin_cache, ids), device
+        )
         swi, swi_ms = timed(lambda: torch_swiglu(gate, up), device)
+        geg, geg_ms = timed(lambda: torch_geglu(gate, up), device)
         ce, ce_ms = timed(lambda: torch_ce(logits, targets), device)
         attn, attn_ms = timed(lambda: torch_attn(q, k, v), device)
+        attn_w, attn_w_ms = timed(lambda: torch_attn_window(q, k, v, WINDOW), device)
+        attn_c, attn_c_ms = timed(lambda: torch_attn_softcap(q, k, v, SOFTCAP), device)
         save(root / "torch_rmsnorm.npy", rms.detach().cpu().numpy())
+        save(root / "torch_layernorm.npy", ln.detach().cpu().numpy())
         save(root / "torch_rope.npy", rope.detach().cpu().numpy())
+        save(root / "torch_rope_with_ids.npy", rope_ids.detach().cpu().numpy())
         save(root / "torch_swiglu.npy", swi.detach().cpu().numpy())
+        save(root / "torch_geglu.npy", geg.detach().cpu().numpy())
         save(root / "torch_ce.npy", np.array([float(ce.detach().cpu())], dtype=np.float32))
         save(root / "torch_attn.npy", attn.detach().cpu().numpy())
+        save(root / "torch_attn_window.npy", attn_w.detach().cpu().numpy())
+        save(root / "torch_attn_softcap.npy", attn_c.detach().cpu().numpy())
 
         uns_err: dict[str, str] = {}
         uns_ms: dict[str, dict] = {}
@@ -243,47 +392,89 @@ def main() -> None:
             save(root / f"unsloth_{name}.npy", arr)
 
         if uns.get("importable"):
-            out, err = try_unsloth_rmsnorm(x, w)
-            if out is not None:
-                out, ms = timed(lambda: try_unsloth_rmsnorm(x, w)[0], device)
-                record("rmsnorm", out, None, ms)
-            else:
-                record("rmsnorm", None, err)
+            try:
+                # Clone Q/K: some Unsloth rope paths are inplace.
+                q_u, k_u = q.detach().clone(), k.detach().clone()
 
-            out, err = try_unsloth_rope(q, k, cos, sin)
-            if out is not None:
-                out, ms = timed(lambda: try_unsloth_rope(q, k, cos, sin)[0], device)
-                record("rope", out, None, ms)
-            else:
-                record("rope", None, err)
+                def probe_timed(name, first, again):
+                    out, err = first()
+                    if out is None:
+                        record(name, None, err)
+                        return
+                    try:
+                        out, ms = timed(again, device)
+                        record(name, out, None, ms)
+                    except Exception as e:
+                        record(name, None, f"{name} timed: {type(e).__name__}: {e}")
 
-            out, err = try_unsloth_swiglu(gate, up)
-            if out is not None:
-                out, ms = timed(lambda: try_unsloth_swiglu(gate, up)[0], device)
-                record("swiglu", out, None, ms)
-            else:
-                record("swiglu", None, err)
-
-            logits_b = logits.view(b, s, 128)
-            labels_b = targets.view(b, s)
-            out, err = try_unsloth_ce(logits_b, labels_b)
-            if out is not None:
-                out, ms = timed(lambda: try_unsloth_ce(logits_b, labels_b)[0], device)
-                record("ce", out, None, ms)
-            else:
-                record("ce", None, err)
+                probe_timed(
+                    "rmsnorm",
+                    lambda: try_unsloth_rmsnorm(x, w),
+                    lambda: try_unsloth_rmsnorm(x, w)[0],
+                )
+                probe_timed(
+                    "layernorm",
+                    lambda: try_unsloth_layernorm(x, w, bias),
+                    lambda: try_unsloth_layernorm(x, w, bias)[0],
+                )
+                probe_timed(
+                    "rope",
+                    lambda: try_unsloth_rope(q_u, k_u, cos, sin),
+                    lambda: try_unsloth_rope(q_u, k_u, cos, sin)[0],
+                )
+                probe_timed(
+                    "rope_with_ids",
+                    lambda: try_unsloth_rope_ids(q_u, k_u, cos_cache, sin_cache, ids),
+                    lambda: try_unsloth_rope_ids(q_u, k_u, cos_cache, sin_cache, ids)[0],
+                )
+                probe_timed(
+                    "swiglu",
+                    lambda: try_unsloth_swiglu(gate, up),
+                    lambda: try_unsloth_swiglu(gate, up)[0],
+                )
+                probe_timed(
+                    "geglu",
+                    lambda: try_unsloth_geglu(gate, up),
+                    lambda: try_unsloth_geglu(gate, up)[0],
+                )
+                logits_b = logits.view(b, s, 128)
+                labels_b = targets.view(b, s)
+                probe_timed(
+                    "ce",
+                    lambda: try_unsloth_ce(logits_b, labels_b),
+                    lambda: try_unsloth_ce(logits_b, labels_b)[0],
+                )
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+            except Exception as e:
+                uns_err["block"] = f"{type(e).__name__}: {e}"
+                # Illegal address poisons the context; skip Unsloth on later shapes.
+                uns["importable"] = False
 
         cases.append(
             {
                 "tag": tag,
-                "shape": {"B": b, "H": h, "S": s, "D": d},
+                "shape": {
+                    "B": b,
+                    "H": h,
+                    "S": s,
+                    "D": d,
+                    "CACHE_S": cache_s,
+                    "WINDOW": WINDOW,
+                    "SOFTCAP": SOFTCAP,
+                },
                 "device": str(device),
                 "torch_ms": {
                     "rmsnorm": rms_ms,
+                    "layernorm": ln_ms,
                     "rope": rope_ms,
+                    "rope_with_ids": rope_ids_ms,
                     "swiglu": swi_ms,
+                    "geglu": geg_ms,
                     "ce": ce_ms,
                     "attn": attn_ms,
+                    "attn_window": attn_w_ms,
+                    "attn_softcap": attn_c_ms,
                 },
                 "unsloth_ok": uns_ok,
                 "unsloth_ms": uns_ms,
@@ -302,6 +493,12 @@ def main() -> None:
                 "torch": torch.__version__,
                 "unsloth": uns,
                 "timing": {"warmup": WARMUP, "n_samples": N_SAMPLES, "unit": "ms"},
+                "compare_constants": {
+                    "window": WINDOW,
+                    "softcap": SOFTCAP,
+                    "pos_offset": POS_OFFSET,
+                    "cache_pad": CACHE_PAD,
+                },
                 "cases": cases,
             },
             indent=2,

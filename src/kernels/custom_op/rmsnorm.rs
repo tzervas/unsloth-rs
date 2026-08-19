@@ -33,12 +33,12 @@ impl RmsNormOp {
 ///
 /// # Errors
 ///
-/// Returns a candle error if dtypes are not f32/f16, ranks/shapes mismatch, or
+/// Returns a candle error if dtypes are not f32/f16/bf16, ranks/shapes mismatch, or
 /// the device backend rejects the op.
 pub fn rmsnorm_custom_op(x: &Tensor, weight: &Tensor, eps: f32) -> CandleResult<Tensor> {
     if x.dtype() != weight.dtype() || !super::is_f32_or_f16(x.dtype()) {
         candle_core::bail!(
-            "CustomOp RMSNorm is f32/f16 (got x={:?} w={:?})",
+            "CustomOp RMSNorm is f32/f16/bf16 (got x={:?} w={:?})",
             x.dtype(),
             weight.dtype()
         );
@@ -116,6 +116,18 @@ impl CustomOp2 for RmsNormOp {
                 let out16: Vec<half::f16> = out.into_iter().map(half::f16::from_f32).collect();
                 Ok((CpuStorage::F16(out16), l1.shape().clone()))
             }
+            (CpuStorage::BF16(_), CpuStorage::BF16(_)) => {
+                let x = &s1.as_slice::<half::bf16>()?[o1..o2];
+                let w = &s2.as_slice::<half::bf16>()?[w1..w2];
+                if w.len() != hidden {
+                    candle_core::bail!("RMSNorm weight len {} != hidden {hidden}", w.len());
+                }
+                let xf: Vec<f32> = x.iter().map(|v| v.to_f32()).collect();
+                let wf: Vec<f32> = w.iter().map(|v| v.to_f32()).collect();
+                let out = cpu_rmsnorm_f32(&xf, &wf, hidden, self.eps);
+                let outb: Vec<half::bf16> = out.into_iter().map(half::bf16::from_f32).collect();
+                Ok((CpuStorage::BF16(outb), l1.shape().clone()))
+            }
             _ => candle_core::bail!("RMSNorm CPU dtype mismatch"),
         }
     }
@@ -132,6 +144,7 @@ impl CustomOp2 for RmsNormOp {
         match s1.dtype() {
             DType::F32 => cuda_rmsnorm(self.eps, s1, l1, s2, l2),
             DType::F16 => cuda_rmsnorm_f16(self.eps, s1, l1, s2, l2),
+            DType::BF16 => cuda_rmsnorm_bf16(self.eps, s1, l1, s2, l2),
             other => candle_core::bail!("RMSNorm CUDA dtype {other:?}"),
         }
     }
@@ -311,6 +324,54 @@ fn cuda_rmsnorm_f16(
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_rmsnorm_bf16(
+    eps: f32,
+    sx: &candle_core::CudaStorage,
+    lx: &Layout,
+    sw: &candle_core::CudaStorage,
+    lw: &Layout,
+) -> CandleResult<(candle_core::CudaStorage, Shape)> {
+    use super::nvrtc::{alloc_bf16, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
+
+    let (o1, o2) = lx.contiguous_offsets().ok_or_else(|| {
+        candle_core::Error::Msg("RMSNorm CustomOp CUDA: x must be contiguous".into()).bt()
+    })?;
+    let (w1, w2) = lw.contiguous_offsets().ok_or_else(|| {
+        candle_core::Error::Msg("RMSNorm CustomOp CUDA: weight must be contiguous".into()).bt()
+    })?;
+    let hidden = last_dim(lx.dims())?;
+    if lw.dims() != [hidden] {
+        candle_core::bail!("RMSNorm weight shape {:?} must be [{hidden}]", lw.dims());
+    }
+    let rows = lx.shape().elem_count() / hidden;
+    let dev = sx.device.clone();
+    let x = sx.as_cuda_slice::<half::bf16>()?.slice(o1..o2);
+    let w = sw.as_cuda_slice::<half::bf16>()?.slice(w1..w2);
+    let y = alloc_bf16(&dev, rows * hidden)?;
+    if rows == 0 || hidden == 0 {
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()));
+    }
+    let src = format!("{}{}", super::nvrtc::BF16_CONV_SRC, RMSNORM_F16_SRC);
+    let func = load_func(&dev, "rmsnorm_f16", "unsloth_rmsnorm_bf16_bits", &src)?;
+    let block = next_pow2(hidden.min(1024)).max(1);
+    let cfg = launch_config(rows, block, block * std::mem::size_of::<f32>())?;
+    let hidden_i = i32::try_from(hidden).map_err(|_| {
+        candle_core::Error::Msg(format!("RMSNorm hidden {hidden} exceeds i32")).bt()
+    })?;
+    let stream = dev.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&x);
+    builder.arg(&w);
+    builder.arg(&y);
+    builder.arg(&hidden_i);
+    builder.arg(&eps);
+    launch(&mut builder, cfg)?;
+    Ok((CudaStorage::wrap_cuda_slice(y, dev), lx.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
 const RMSNORM_F16_SRC: &str = r#"
 extern "C" __global__ void rmsnorm_f16(
     const unsigned short* __restrict__ x,
@@ -402,6 +463,31 @@ mod tests {
         assert!(mae < 2e-3, "f16 cpu mae={mae}");
     }
 
+    #[test]
+    fn bf16_cpu_mae_vs_f32_ref() {
+        let device = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 1.0, (2, 8, 32), &device).unwrap();
+        let w = Tensor::ones((32,), DType::F32, &device).unwrap();
+        let y = rmsnorm_custom_op(
+            &x.to_dtype(DType::BF16).unwrap(),
+            &w.to_dtype(DType::BF16).unwrap(),
+            1e-5,
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = reference(&x, &w, 1e-5);
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cpu mae={mae}");
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn f16_cuda_mae_vs_f32_ref() {
@@ -429,6 +515,35 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 2e-3, "f16 cuda mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn bf16_cuda_mae_vs_f32_ref() {
+        let device = Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        });
+        let x = Tensor::randn(0.0f32, 1.0, (2, 8, 32), &device).unwrap();
+        let w = Tensor::ones((32,), DType::F32, &device).unwrap();
+        let y = rmsnorm_custom_op(
+            &x.to_dtype(DType::BF16).unwrap(),
+            &w.to_dtype(DType::BF16).unwrap(),
+            1e-5,
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = reference(&x, &w, 1e-5);
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cuda mae={mae}");
     }
 
     #[test]

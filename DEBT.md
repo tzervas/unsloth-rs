@@ -18,7 +18,8 @@
 | CustomOp CUDA `unsafe` | **Narrowed** | `alloc` → `alloc_zeros`; one `nvrtc::launch` FFI |
 | Tiled FA SRAM (true Flash) | **Landed (owned NVRTC)** | `ops::attention` dim≤128. Speed vs torch SDPA still open (G-UNS-03). Job C foreign Unsloth PTX still FAIL_ENV. |
 | CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
-| f16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | f16 I/O, float acc. bf16 still open. `custom_op_f32_only() == false` |
+| f16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | f16 I/O, float acc. `custom_op_f32_only() == false` |
+| bf16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | Same I/O+float-acc pattern. CUDA attn stays online (not SRAM tile). |
 | Fused linear+CE | **CPU + device tiles** | CPU CustomOp; CUDA tile smoke PASS on 5080 (fwd vs CPU `< 1e-4`) |
 | Host CPU ISA | **AVX2+FMA** | 14700K: no AVX-512/AMX. P=`0-15` E=`16-27`. No MKL dep. |
 

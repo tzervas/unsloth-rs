@@ -327,6 +327,32 @@ impl CustomOp3 for AttentionOp {
                 let out16: Vec<half::f16> = out.into_iter().map(half::f16::from_f32).collect();
                 Ok((CpuStorage::F16(out16), l1.shape().clone()))
             }
+            (CpuStorage::BF16(_), CpuStorage::BF16(_), CpuStorage::BF16(_)) => {
+                let q: Vec<f32> = s1.as_slice::<half::bf16>()?[q_span.0..q_span.1]
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect();
+                let k: Vec<f32> = s2.as_slice::<half::bf16>()?[k_span.0..k_span.1]
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect();
+                let v: Vec<f32> = s3.as_slice::<half::bf16>()?[v_span.0..v_span.1]
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect();
+                let out = cpu_online_attn(
+                    &q,
+                    &k,
+                    &v,
+                    geom,
+                    self.scale,
+                    self.causal,
+                    self.softcap,
+                    self.window,
+                );
+                let outb: Vec<half::bf16> = out.into_iter().map(half::bf16::from_f32).collect();
+                Ok((CpuStorage::BF16(outb), l1.shape().clone()))
+            }
             _ => candle_core::bail!("attn CPU dtype mismatch"),
         }
     }
@@ -344,6 +370,20 @@ impl CustomOp3 for AttentionOp {
         use candle_core::backend::BackendStorage;
         if s1.dtype() == DType::F16 {
             return cuda_online_attn_f16(
+                self.scale,
+                self.causal,
+                self.softcap,
+                self.window,
+                s1,
+                l1,
+                s2,
+                l2,
+                s3,
+                l3,
+            );
+        }
+        if s1.dtype() == DType::BF16 {
+            return cuda_online_attn_bf16(
                 self.scale,
                 self.causal,
                 self.softcap,
@@ -556,6 +596,89 @@ fn cuda_online_attn_f16(
         &dev,
         "attn_online_f16",
         "unsloth_attn_online_f16_bits",
+        &src,
+    )?;
+    let block = next_pow2(dim.min(1024)).max(1);
+    let smem = (block + dim) * std::mem::size_of::<f32>();
+    let cfg = launch_config(rows, block, smem)?;
+    let seq_i = i32::try_from(seq)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA seq {seq} exceeds i32")).bt())?;
+    let dim_i = i32::try_from(dim)
+        .map_err(|_| candle_core::Error::Msg(format!("attn CUDA dim {dim} exceeds i32")).bt())?;
+    let causal_i = i32::from(causal);
+    let stream = dev.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&q);
+    builder.arg(&k);
+    builder.arg(&v);
+    builder.arg(&y);
+    builder.arg(&seq_i);
+    builder.arg(&dim_i);
+    builder.arg(&scale);
+    builder.arg(&causal_i);
+    builder.arg(&softcap);
+    builder.arg(&window);
+    launch(&mut builder, cfg)?;
+    Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn cuda_online_attn_bf16(
+    scale: f32,
+    causal: bool,
+    softcap: f32,
+    window: i32,
+    sq: &candle_core::CudaStorage,
+    lq: &Layout,
+    sk: &candle_core::CudaStorage,
+    lk: &Layout,
+    sv: &candle_core::CudaStorage,
+    lv: &Layout,
+) -> CandleResult<(candle_core::CudaStorage, Shape)> {
+    use super::nvrtc::{alloc_bf16, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
+
+    let q_span = lq
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: q must be contiguous".into()).bt())?;
+    let k_span = lk
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: k must be contiguous".into()).bt())?;
+    let v_span = lv
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("attn CUDA: v must be contiguous".into()).bt())?;
+    let dims = lq.dims();
+    if dims.len() != 4 {
+        candle_core::bail!("attn CUDA rank {}", dims.len());
+    }
+    if lk.dims() != dims || lv.dims() != dims {
+        candle_core::bail!(
+            "attn CUDA Q/K/V shape mismatch {:?} / {:?} / {:?}",
+            dims,
+            lk.dims(),
+            lv.dims()
+        );
+    }
+    let (batch, heads, seq, dim) = (dims[0], dims[1], dims[2], dims[3]);
+    let rows = batch * heads * seq;
+    let dev = sq.device.clone();
+    if rows == 0 || dim == 0 {
+        let y = alloc_bf16(&dev, 0)?;
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lq.shape().clone()));
+    }
+
+    let q = sq.as_cuda_slice::<half::bf16>()?.slice(q_span.0..q_span.1);
+    let k = sk.as_cuda_slice::<half::bf16>()?.slice(k_span.0..k_span.1);
+    let v = sv.as_cuda_slice::<half::bf16>()?.slice(v_span.0..v_span.1);
+    let y = alloc_bf16(&dev, rows * dim)?;
+
+    let src = format!("{}{}", super::nvrtc::BF16_CONV_SRC, ATTN_F16_SRC);
+    let func = load_func(
+        &dev,
+        "attn_online_f16",
+        "unsloth_attn_online_bf16_bits",
         &src,
     )?;
     let block = next_pow2(dim.min(1024)).max(1);
@@ -1381,6 +1504,35 @@ mod tests {
         assert!(mae < 2e-3, "f16 cpu attn mae={mae}");
     }
 
+    #[test]
+    fn bf16_cpu_mae_vs_f32_ref() {
+        let device = Device::Cpu;
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 2, 8, 16), &device).unwrap();
+        let scale = 1.0f64 / 16.0f64.sqrt();
+        let y = attention_custom_op(
+            &q.to_dtype(DType::BF16).unwrap(),
+            &k.to_dtype(DType::BF16).unwrap(),
+            &v.to_dtype(DType::BF16).unwrap(),
+            scale as f32,
+            false,
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = reference(&q, &k, &v, scale);
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cpu attn mae={mae}");
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn f16_cuda_mae_vs_f32_ref() {
@@ -1412,5 +1564,38 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 2e-3, "f16 cuda attn mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn bf16_cuda_mae_vs_f32_ref() {
+        let device = Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        });
+        let q = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 32), &device).unwrap();
+        let k = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 32), &device).unwrap();
+        let v = Tensor::randn(0.0f32, 1.0, (1, 2, 16, 32), &device).unwrap();
+        let scale = 1.0f64 / 32.0f64.sqrt();
+        let y = attention_custom_op(
+            &q.to_dtype(DType::BF16).unwrap(),
+            &k.to_dtype(DType::BF16).unwrap(),
+            &v.to_dtype(DType::BF16).unwrap(),
+            scale as f32,
+            false,
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = reference(&q, &k, &v, scale);
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cuda attn mae={mae}");
     }
 }

@@ -27,7 +27,7 @@ use crate::kernels::custom_op::{
     rope_custom_op, rope_with_position_ids, swiglu_custom_op, DEFAULT_CE_CHUNK,
 };
 
-/// `y = x / rms(x) * weight` over the last dim. [`candle_core::DType::F32`] or [`candle_core::DType::F16`].
+/// `y = x / rms(x) * weight` over the last dim. F32, F16, or BF16.
 ///
 /// # Errors
 ///
@@ -188,6 +188,9 @@ mod tests {
         let xf = x.to_dtype(DType::F16).unwrap();
         let wf = w.to_dtype(DType::F16).unwrap();
         assert_eq!(rmsnorm(&xf, &wf, 1e-5).unwrap().dtype(), DType::F16);
+        let xb = x.to_dtype(DType::BF16).unwrap();
+        let wb = w.to_dtype(DType::BF16).unwrap();
+        assert_eq!(rmsnorm(&xb, &wb, 1e-5).unwrap().dtype(), DType::BF16);
         let g = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         let u = Tensor::randn(0.0f32, 1.0, (2, 8), &d).unwrap();
         assert_eq!(geglu(&g, &u).unwrap().dims(), g.dims());

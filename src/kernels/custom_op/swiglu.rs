@@ -18,11 +18,11 @@ pub struct SwiGluOp;
 ///
 /// # Errors
 ///
-/// Non-f32/f16, shape mismatch, or backend error.
+/// Non-f32/f16/bf16, shape mismatch, or backend error.
 pub fn swiglu_custom_op(gate: &Tensor, up: &Tensor) -> CandleResult<Tensor> {
     if gate.dtype() != up.dtype() || !super::is_f32_or_f16(gate.dtype()) {
         candle_core::bail!(
-            "CustomOp SwiGLU is f32/f16 (got gate={:?} up={:?})",
+            "CustomOp SwiGLU is f32/f16/bf16 (got gate={:?} up={:?})",
             gate.dtype(),
             up.dtype()
         );
@@ -95,6 +95,19 @@ impl CustomOp2 for SwiGluOp {
                     .collect();
                 Ok((CpuStorage::F16(out), l1.shape().clone()))
             }
+            (CpuStorage::BF16(_), CpuStorage::BF16(_)) => {
+                let gate = &s1.as_slice::<half::bf16>()?[a..b];
+                let up = &s2.as_slice::<half::bf16>()?[c..d];
+                if gate.len() != up.len() {
+                    candle_core::bail!("SwiGLU numel mismatch {} vs {}", gate.len(), up.len());
+                }
+                let out: Vec<half::bf16> = gate
+                    .iter()
+                    .zip(up.iter())
+                    .map(|(&g, &u)| half::bf16::from_f32(silu(g.to_f32()) * u.to_f32()))
+                    .collect();
+                Ok((CpuStorage::BF16(out), l1.shape().clone()))
+            }
             _ => candle_core::bail!("SwiGLU CPU dtype mismatch"),
         }
     }
@@ -111,6 +124,7 @@ impl CustomOp2 for SwiGluOp {
         match s1.dtype() {
             DType::F32 => cuda_swiglu(s1, l1, s2, l2),
             DType::F16 => cuda_swiglu_f16(s1, l1, s2, l2),
+            DType::BF16 => cuda_swiglu_bf16(s1, l1, s2, l2),
             other => candle_core::bail!("SwiGLU CUDA dtype {other:?}"),
         }
     }
@@ -239,6 +253,51 @@ fn cuda_swiglu_f16(
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_swiglu_bf16(
+    sg: &candle_core::CudaStorage,
+    lg: &Layout,
+    su: &candle_core::CudaStorage,
+    lu: &Layout,
+) -> CandleResult<(candle_core::CudaStorage, Shape)> {
+    use super::nvrtc::{alloc_bf16, launch, launch_config, load_func, next_pow2};
+    use candle_core::cuda::cudarc::driver::PushKernelArg;
+    use candle_core::cuda::CudaStorage;
+
+    let (a, b) = lg.contiguous_offsets().ok_or_else(|| {
+        candle_core::Error::Msg("SwiGLU CUDA: gate must be contiguous".into()).bt()
+    })?;
+    let (c, d) = lu
+        .contiguous_offsets()
+        .ok_or_else(|| candle_core::Error::Msg("SwiGLU CUDA: up must be contiguous".into()).bt())?;
+    let n = b - a;
+    if d - c != n {
+        candle_core::bail!("SwiGLU CUDA numel mismatch");
+    }
+    let dev = sg.device.clone();
+    let g = sg.as_cuda_slice::<half::bf16>()?.slice(a..b);
+    let u = su.as_cuda_slice::<half::bf16>()?.slice(c..d);
+    let y = alloc_bf16(&dev, n)?;
+    if n == 0 {
+        return Ok((CudaStorage::wrap_cuda_slice(y, dev), lg.shape().clone()));
+    }
+    let src = format!("{}{}", super::nvrtc::BF16_CONV_SRC, SWIGLU_F16_SRC);
+    let func = load_func(&dev, "swiglu_f16", "unsloth_swiglu_bf16_bits", &src)?;
+    let block = next_pow2(n.min(256)).max(32);
+    let grid = n.div_ceil(block);
+    let cfg = launch_config(grid, block, 0)?;
+    let n_i = i32::try_from(n)
+        .map_err(|_| candle_core::Error::Msg(format!("SwiGLU n {n} exceeds i32")).bt())?;
+    let stream = dev.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&g);
+    builder.arg(&u);
+    builder.arg(&y);
+    builder.arg(&n_i);
+    launch(&mut builder, cfg)?;
+    Ok((CudaStorage::wrap_cuda_slice(y, dev), lg.shape().clone()))
+}
+
+#[cfg(feature = "cuda")]
 const SWIGLU_F16_SRC: &str = r#"
 extern "C" __global__ void swiglu_f16(
     const unsigned short* __restrict__ gate,
@@ -301,6 +360,30 @@ mod tests {
         assert!(mae < 2e-3, "f16 cpu mae={mae}");
     }
 
+    #[test]
+    fn bf16_cpu_mae_vs_f32_ref() {
+        let d = Device::Cpu;
+        let gate = Tensor::randn(0.0f32, 1.0, (2, 17), &d).unwrap();
+        let up = Tensor::randn(0.0f32, 1.0, (2, 17), &d).unwrap();
+        let y = swiglu_custom_op(
+            &gate.to_dtype(DType::BF16).unwrap(),
+            &up.to_dtype(DType::BF16).unwrap(),
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = candle_nn::ops::silu(&gate).unwrap().mul(&up).unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cpu mae={mae}");
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn f16_cuda_mae_vs_f32_ref() {
@@ -327,6 +410,34 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(mae < 2e-3, "f16 cuda mae={mae}");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn bf16_cuda_mae_vs_f32_ref() {
+        let d = Device::new_cuda(0).unwrap_or_else(|e| {
+            eprintln!("FAIL_ENV: no CUDA device ({e})");
+            std::process::exit(2);
+        });
+        let gate = Tensor::randn(0.0f32, 1.0, (2, 17), &d).unwrap();
+        let up = Tensor::randn(0.0f32, 1.0, (2, 17), &d).unwrap();
+        let y = swiglu_custom_op(
+            &gate.to_dtype(DType::BF16).unwrap(),
+            &up.to_dtype(DType::BF16).unwrap(),
+        )
+        .unwrap()
+        .to_dtype(DType::F32)
+        .unwrap();
+        let r = candle_nn::ops::silu(&gate).unwrap().mul(&up).unwrap();
+        let mae = (y - r)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(mae < 2e-3, "bf16 cuda mae={mae}");
     }
 
     #[test]

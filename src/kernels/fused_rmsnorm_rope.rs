@@ -337,7 +337,7 @@ fn rope_kernel<F: Float + CubeElement>(
 ///
 /// # Arguments
 /// * `input` - Input tensor [..., hidden_dim]
-/// * `weight` - Normalization weights [hidden_dim]
+/// * `weight` - Normalization weights `[hidden_dim]`
 /// * `eps` - Epsilon for numerical stability
 ///
 /// # Returns
@@ -382,7 +382,7 @@ pub fn rmsnorm(input: &Tensor, weight: &Tensor, eps: f64) -> UnslothResult<Tenso
 ///
 /// # Arguments
 /// * `input` - Input tensor [batch, seq_len, hidden_dim]
-/// * `weight` - RMSNorm weights [hidden_dim]
+/// * `weight` - RMSNorm weights `[hidden_dim]`
 /// * `cos_cache` - Precomputed cosine values [max_seq, head_dim/2]
 /// * `sin_cache` - Precomputed sine values [max_seq, head_dim/2]
 /// * `head_dim` - Dimension per attention head

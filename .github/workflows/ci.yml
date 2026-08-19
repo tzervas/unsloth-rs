@@ -2,15 +2,16 @@
 # Copyright 2026 Tyler Zervas
 #
 # RETIRED — do not expand.
-# All required gates are now in fleet-ci.yml + fleet-security.yml
-# (self-hosted, HONEST_CI, DYNAMIC_POOL tiers).
-# This file remains only for manual re-runs / historical context.
-# See: gha-runner-ctl docs/FLEET_STANDARDS.md + HONEST_CI.md
+# Product gates live in fleet-ci.yml + fleet-security.yml.
+# This file is workflow_dispatch-only so it cannot refill the self-hosted queue.
 
 name: CI (legacy — retired)
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,9 +20,10 @@ env:
 jobs:
   notice:
     name: legacy CI retired
-    runs-on: [self-hosted, linux, x64, podman]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - run: |
           echo "Legacy multi-job CI is retired."
-          echo "Use fleet-ci.yml (cargo check/test on large) and fleet-security.yml."
+          echo "Use fleet-ci.yml (fmt/clippy/doc/test, no --all-features) and fleet-security.yml."
           echo "HONEST_CI class=SKIP_STUB detail=legacy_ci_retired"

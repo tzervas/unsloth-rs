@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Run gitleaks
         run: |
           set -euo pipefail
@@ -42,21 +43,22 @@ jobs:
             exit 1
           fi
 
-  trivy-fs-advisory:
-    name: trivy filesystem (advisory)
+  trivy-fs:
+    # Name must match protec-main required check.
+    name: trivy filesystem (vuln+secret+license)
     runs-on: [self-hosted, linux, x64, podman]
-    # continue-on-error only permitted when job name contains advisory/experimental
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Trivy fs
         run: |
           set -euo pipefail
           if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing — advisory skip"
-            echo "HONEST_CI class=SKIP_STUB detail=trivy_missing"
-            exit 0
+            echo "::error title=FAIL_ENV::trivy not available on runner"
+            echo "HONEST_CI class=FAIL_ENV detail=trivy_missing"
+            exit 1
           fi
           trivy fs --scanners vuln,secret,license \
             --severity HIGH,CRITICAL \

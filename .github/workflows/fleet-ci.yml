@@ -1,8 +1,8 @@
 # Fleet standard CI — self-hosted via gha-runner-ctl (Podman work containers).
-# Labels MUST match the fleet agent registration + size tier.
-# See: https://github.com/tzervas/gha-runner-ctl/blob/main/docs/FLEET_STANDARDS.md
-#      https://github.com/tzervas/gha-runner-ctl/blob/main/docs/HONEST_CI.md
-#      https://github.com/tzervas/gha-runner-ctl/blob/main/docs/DYNAMIC_POOL.md
+# Labels match the retain runner: self-hosted, linux, x64, podman.
+# Do not add `large` until a runner actually registers that label.
+# Gates (names match protec-main): detect stack, Rustfmt, Clippy,
+# Documentation, Test Suite (stable). No --all-features (that pulls cuda).
 name: fleet-ci
 
 on:
@@ -32,6 +32,8 @@ jobs:
       python: ${{ steps.d.outputs.python }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - id: d
         name: Detect stacks
         run: |
@@ -43,24 +45,79 @@ jobs:
           echo "python=$python" >> "$GITHUB_OUTPUT"
           echo "Detected rust=$rust python=$python"
 
-  rust:
-    name: cargo check/test
+  fmt:
+    name: Rustfmt
     needs: detect
     if: needs.detect.outputs.rust == 'true'
-    # large: 12c/16g — required for workspace + kernel crates (DYNAMIC_POOL)
-    runs-on: [self-hosted, linux, x64, podman, large]
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain preflight
+        run: |
+          set -euo pipefail
+          echo "HONEST_CI step=toolchain_preflight"
+          if ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+            echo "::error title=FAIL_ENV::rustc/cargo not on PATH in work image"
+            echo "HONEST_CI class=FAIL_ENV detail=toolchain_missing"
+            exit 1
+          fi
+          rustup component add rustfmt
+          cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain preflight
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            echo "::error title=FAIL_ENV::cargo not on PATH"
+            echo "HONEST_CI class=FAIL_ENV detail=toolchain_missing"
+            exit 1
+          fi
+          rustup component add clippy
+      - name: cargo clippy
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets -- -D warnings
+
+  docs:
+    name: Documentation
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          cargo doc --workspace --no-deps
+
+  rust:
+    name: Test Suite (stable)
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, x64, podman]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
-      - name: Runner preflight
-        run: |
-          set -euo pipefail
-          echo "HONEST_CI step=runner_preflight"
-          uname -a || true
-          id
-          df -h . || true
-
+        with:
+          persist-credentials: false
       - name: Toolchain preflight
         run: |
           set -euo pipefail
@@ -72,14 +129,11 @@ jobs:
           fi
           rustc --version
           cargo --version
-
       - name: cargo check
         run: |
           set -euo pipefail
           cargo check --workspace --all-targets
-
-      # CPU default. Do not add a silent GPU job that passes without a device.
-      # GPU builds: CUDA_COMPUTE_CAP pin + FAIL_ENV when no /dev/nvidia* (GPU_SETUP.md).
+      # CPU default. Do not add --all-features (pulls cuda → nvcc on CPU runners).
       - name: cargo test
         run: |
           set -euo pipefail
@@ -93,6 +147,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:

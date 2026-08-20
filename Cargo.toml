@@ -72,6 +72,9 @@ field_reassign_with_default = "allow"
 name = "kernels"
 harness = false
 
+[profile.dev]
+debug = 1
+
 [workspace]
 members = ["."]
 resolver = "2"

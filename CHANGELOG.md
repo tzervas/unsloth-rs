@@ -7,10 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-20
+
+Candle types appear in the public API, so a candle minor bump is a **breaking
+change for downstream**. Version jumps 1.1.0 → 1.2.0. Tag `v1.1.0` remains
+GitHub-only (Candle 0.9, never crates.io).
+
+### Changed
+- **candle-core / candle-nn `0.9` → `0.11`**. cubecl stays **0.9** (optional;
+  default tests do not build it).
+- **MSRV 1.92 → 1.96** (`rust-toolchain.toml` 1.96.1). Self-hosted fleet-ci
+  and release install that toolchain instead of the work image rustc 1.88.
+- Package version **1.2.0**.
+
 ### Added
 - CustomOp `rmsnorm` / `swiglu` / `attention` accept [`DType::BF16`]
   (bf16 I/O, float accumulate). CUDA uses the online path for attention,
   same as f16. MAE vs f32 ref `< 2e-3`. Not a 2× claim.
+
+### Documentation
+- GitHub description aligned with Cargo.toml (no 2–5× / 70–80% VRAM claim).
+- Archived PHASE/SUMMARY/TASKS/NEXT_PHASE files to `docs/archive/` (not SoT).
 
 ## [1.1.0] - 2026-08-19
 

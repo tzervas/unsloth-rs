@@ -47,6 +47,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: dtolnay/rust-toolchain@1.96.1
+        with:
+          components: rustfmt, clippy
+
       - name: Refuse unattended major
         if: ${{ inputs.bump == 'major' && !inputs.allow_major }}
         run: |

@@ -58,8 +58,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.1
         with:
           components: rustfmt
-      - name: rustc (MSRV 1.96)
-        run: rustc --version && cargo --version
+      - name: Prefer rustup 1.96.1 over image rustc 1.88
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup default 1.96.1
+          rustc --version
+          cargo --version
+          rustc --version | grep -E 'rustc 1\.96'
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
@@ -76,8 +83,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.1
         with:
           components: clippy
-      - name: rustc (MSRV 1.96)
-        run: rustc --version && cargo --version
+      - name: Prefer rustup 1.96.1 over image rustc 1.88
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup default 1.96.1
+          rustc --version
+          cargo --version
+          rustc --version | grep -E 'rustc 1\.96'
       - name: cargo clippy
         run: |
           set -euo pipefail
@@ -94,8 +108,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.96.1
-      - name: rustc (MSRV 1.96)
-        run: rustc --version && cargo --version
+      - name: Prefer rustup 1.96.1 over image rustc 1.88
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup default 1.96.1
+          rustc --version
+          cargo --version
+          rustc --version | grep -E 'rustc 1\.96'
       - name: cargo doc
         env:
           RUSTDOCFLAGS: -D warnings
@@ -114,8 +135,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.96.1
-      - name: rustc (MSRV 1.96)
-        run: rustc --version && cargo --version
+      - name: Prefer rustup 1.96.1 over image rustc 1.88
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup default 1.96.1
+          rustc --version
+          cargo --version
+          rustc --version | grep -E 'rustc 1\.96'
       - name: cargo check
         run: |
           set -euo pipefail

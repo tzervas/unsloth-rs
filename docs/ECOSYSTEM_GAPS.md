@@ -1,8 +1,8 @@
 # unsloth-rs ecosystem gap map
 
-**SoT for sister-crate tracking.**
-**Date:** 2026-08-19
-**unsloth-rs:** `1.0.4` (this repo, after #94 / #96)
+**SoT for sister-crate tracking.** Live crate version is `Cargo.toml`.
+**Date:** 2026-08-21
+**unsloth-rs:** see `Cargo.toml` (Candle 0.11, MSRV 1.96)
 **Scope:** only `tzervas/*` repos. Read-only elsewhere.
 
 Live tracker. Historical docs (`ISSUE_STATUS.md`, January tickets) overclaim
@@ -16,7 +16,7 @@ axolotl / rust-ai-core. Sister crates consume it. It is **not** a product port
 of Python Unsloth. Triton kernels are an algorithm source. Do not copy AGPL
 MoE kernels.
 
-## What 1.0.4 actually has
+## What this tree actually has
 
 | Surface | Status | Notes |
 |---------|--------|-------|
@@ -28,7 +28,7 @@ MoE kernels.
 | Fused linear+CE | **CPU + CUDA tiles** | Avoids `[N,V]` logits. 5080 tile smoke vs CPU |
 | CubeCL FA | **opt-in** | `UNSLOTH_CUBECL_FA=1`. Still host D2H/H2D |
 | Job C (Unsloth FA PTX) | **FAIL_ENV** | No Apache-2.0 FA Triton JIT in Unsloth 2026.8.18 |
-| Ternary CPU | **experimental** | `prune_below_threshold` still a stub on trunk |
+| Ternary CPU | **experimental** | `prune_below_threshold` zeros rows with `|scale| < threshold` (trit count). No speed claim. |
 | Ternary CubeCL | **archived non-goal** | |
 | LoRA / QLoRA / trainer | **non-goal** | peft / qlora / axolotl |
 | `cubecl` crate | **optional** | Default CPU builds do not pull the cubecl graph (#96) |

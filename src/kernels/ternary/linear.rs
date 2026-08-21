@@ -28,8 +28,8 @@ use candle_core::{Module, Tensor};
 
 /// A linear layer with ternary quantized weights.
 ///
-/// Provides significant memory reduction (10-30x) and speedup (5-20x)
-/// on sparse pruned models compared to FP16/FP32 linear layers.
+/// Ternary-weight Linear. Packing vs FP32 is `TernaryTensor::compression_ratio`.
+/// No measured wall-time or VRAM claim.
 ///
 /// # Memory Layout
 ///

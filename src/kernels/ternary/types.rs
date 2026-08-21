@@ -918,4 +918,44 @@ mod tests {
         let expected_sparsity = 1.0 - (10.0 / 256.0);
         assert!((tensor.sparsity() - expected_sparsity).abs() < 0.001);
     }
+
+    #[test]
+    fn test_prune_equal_scale_keeps_row() {
+        let shape = (2, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let mut tensor = TernaryTensor::new(plus, minus, vec![0.1f32, 0.2f32], shape);
+        tensor.modify_dim(0, 0, 1);
+        tensor.recalculate_sparsity();
+        let before = tensor.sparsity();
+        let pruned = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned, 0, "|scale| == threshold must keep the row");
+        assert!((tensor.scales[0] - 0.1).abs() < f32::EPSILON);
+        assert_eq!(tensor.get_dim(0, 0), 1);
+        assert!((tensor.sparsity() - before).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_prune_all_rows_zeros_scales_and_planes() {
+        let shape = (2, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let mut tensor = TernaryTensor::new(plus, minus, vec![0.01f32, 0.02f32], shape);
+        for col in 0..4 {
+            tensor.modify_dim(0, col, 1);
+            tensor.modify_dim(1, col, -1);
+        }
+        tensor.recalculate_sparsity();
+        let pruned = tensor.prune_below_threshold(1.0);
+        assert_eq!(pruned, 8);
+        assert!(tensor.scales.iter().all(|s| s.abs() < f32::EPSILON));
+        for row in 0..2 {
+            for col in 0..64 {
+                assert_eq!(tensor.get_dim(row, col), 0);
+            }
+        }
+        assert!((tensor.sparsity() - 1.0).abs() < 0.001);
+    }
 }

@@ -3,8 +3,8 @@
 
 //! Bitsliced ternary matrix multiplication.
 //!
-//! This module implements popcount-based matrix multiplication for
-//! ternary weights, providing 5-20x speedup on sparse pruned models.
+//! Popcount-based matrix multiplication for ternary weights.
+//! Correctness + packing, not a published speedup.
 //!
 //! ## Algorithm
 //!

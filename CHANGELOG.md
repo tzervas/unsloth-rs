@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TernaryTensor::prune_below_threshold` zeros **rows** whose `|scale|` is
   below the cutoff (per-element magnitude is the row scale).
 
+### Fixed
+- `.cz.toml` `version` lockstep with `Cargo.toml` (`1.2.0`; was still `1.1.0`).
+- `docs/VERSIONING.md` no longer freezes a release number; `PUBLISHING.md`
+  status table matches Cargo.toml.
+
+### Changed
+- README consumer pin is `unsloth-rs = "1"` (major), not a minor/patch.
+- README status version defers to `Cargo.toml` (no frozen crates.io 1.0.2 claim).
+- CPU-device stderr no longer calls CUDA the intended default.
+- Ternary module docs drop unmeasured 5–20× / 16–32× speed claims.
+  `docs/ECOSYSTEM_GAPS.md` records row-scale prune (no longer a stub).
+
 ## [1.2.0] - 2026-08-20
 
 Candle types appear in the public API, so a candle minor bump is a **breaking

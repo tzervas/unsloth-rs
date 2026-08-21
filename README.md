@@ -37,10 +37,9 @@ kernels:
 
 ## Status (honest)
 
-**Version:** `1.2.0` (Candle **0.11**, MSRV **1.96**). Semver 1.x means the
+**Version:** see `Cargo.toml` (Candle **0.11**, MSRV **1.96**). Semver 1.x means the
 **public CPU kernel APIs** are intended to be usable; GPU paths and training
-utilities are still incomplete. Crates.io last published **1.0.2** (Candle 0.9).
-Tag `v1.1.0` is GitHub-only.
+utilities are still incomplete. Tag `v1.1.0` is GitHub-only (Candle 0.9).
 
 ### Solid today
 

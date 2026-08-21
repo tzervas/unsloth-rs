@@ -8,9 +8,9 @@
 //!
 //! ## Key Features
 //!
-//! - **Memory Efficiency**: 16-32x weight reduction via bitsliced representation
-//! - **Popcount-Based Matmul**: Exact dot products via hardware popcount intrinsics
-//! - **Sparsity Acceleration**: 95%+ zero weights enable plane/dim skipping
+//! - Bitsliced `{+plane, −plane}` packing vs dense FP32 (see `compression_ratio`)
+//! - Popcount-based matmul for exact ternary dots
+//! - Experimental: no measured wall-time or VRAM claim
 //!
 //! ## Mathematical Foundation
 //!

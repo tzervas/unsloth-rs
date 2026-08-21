@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below the cutoff (per-element magnitude is the row scale).
 
 ### Fixed
+- `fleet-security` gitleaks requires `.gitleaks.toml` (`--config`).
+- `.gitignore` covers env/key files and `.cargo/config.toml`.
 - `.cz.toml` `version` lockstep with `Cargo.toml` (`1.2.0`; was still `1.1.0`).
 - `docs/VERSIONING.md` no longer freezes a release number; `PUBLISHING.md`
   status table matches Cargo.toml.

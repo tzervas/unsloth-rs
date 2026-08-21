@@ -1,0 +1,252 @@
+# One release path. Dispatch only. Idempotent.
+# Adapted from tzervas/gha-runner-ctl release-dispatch for a *library* crate.
+#
+# main requires PRs (protec-main). A version bump is a PR, never a push to main.
+# Tagging the version already in Cargo.toml is bump=none after that PR merges.
+#
+# Default dry_run=true. crates.io publish defaults off.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump. `none` tags the version already in Cargo.toml."
+        type: choice
+        options: [none, patch, minor, major]
+        default: none
+      dry_run:
+        description: "Resolve and report without tagging, releasing, or publishing."
+        type: boolean
+        default: true
+      publish_crate:
+        description: "Publish to crates.io if not already there. Default off."
+        type: boolean
+        default: false
+      allow_major:
+        description: "Required together with bump=major. 2.0.0 is a human decision."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.96.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Refuse unattended major
+        if: ${{ inputs.bump == 'major' && !inputs.allow_major }}
+        run: |
+          echo "::error::bump=major also needs allow_major=true. No agent may cut 2.0.0."
+          exit 1
+
+      - name: Ensure gh CLI
+        env:
+          GH_VERSION: "2.97.0"
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/gh.tar.gz \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          install -m 755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/gh" --version
+
+      - name: Ensure commitizen
+        run: |
+          set -euo pipefail
+          if command -v cz >/dev/null 2>&1; then
+            cz version
+            exit 0
+          fi
+          if command -v uv >/dev/null 2>&1; then
+            uv tool install commitizen
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          else
+            python3 -m pip install --user 'commitizen>=4'
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          cz version
+
+      - name: Resolve version
+        id: ver
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          CUR=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          PKG=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^name[[:space:]]*=/{print;exit}' Cargo.toml \
+            | sed -E 's/^name[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/')
+          [ -n "$CUR" ] || { echo "::error::no version in Cargo.toml"; exit 1; }
+          [ -n "$PKG" ] || { echo "::error::no [package].name in Cargo.toml"; exit 1; }
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
+          if [ "$BUMP" = "none" ]; then
+            NEW="$CUR"
+          else
+            # Explicit increment — do not infer from history (1.0.4 already
+            # includes feat: commits that cz would call 1.1.0).
+            IFS=. read -r MA MI PA <<< "$CUR"
+            case "$BUMP" in
+              patch) NEW="$MA.$MI.$((PA+1))" ;;
+              minor) NEW="$MA.$((MI+1)).0" ;;
+              major) NEW="$((MA+1)).0.0" ;;
+            esac
+          fi
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release plan"
+            echo
+            echo "- package: \`$PKG\`"
+            echo "- current Cargo.toml: \`$CUR\`"
+            echo "- releasing: \`$NEW\`"
+            echo "- tag: \`v$NEW\`"
+            echo "- dry run: \`${{ inputs.dry_run }}\`"
+            echo "- publish crate: \`${{ inputs.publish_crate }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preflight
+        id: pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.new }}
+          PKG: ${{ steps.ver.outputs.pkg }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1 && T=yes || T=no
+          gh release view "$TAG" >/dev/null 2>&1 && R=yes || R=no
+          CODE=$(curl -sS -o /tmp/cr.json -w '%{http_code}' \
+            -H 'User-Agent: unsloth-rs-release' \
+            "https://crates.io/api/v1/crates/$PKG/$VER" || echo 000)
+          case "$CODE" in
+            200) C=yes ;;
+            404) C=no ;;
+            *)   C=unknown ;;
+          esac
+          {
+            echo "tag_exists=$T"
+            echo "release_exists=$R"
+            echo "crate_published=$C"
+          } >> "$GITHUB_OUTPUT"
+          printf -- '- tag exists: `%s`\n- release exists: `%s`\n- crate published: `%s` (http %s)\n' \
+            "$T" "$R" "$C" "$CODE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refuse unknown crates.io when publishing
+        if: steps.pre.outputs.crate_published == 'unknown' && inputs.publish_crate
+        run: |
+          echo "::error::Could not determine crates.io state. Unknown is not not-published."
+          exit 1
+
+      - name: CPU gates
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+          cargo package --allow-dirty --list | tee /tmp/pkg.list
+          n_roadmap=$(grep -ciE 'roadmap' /tmp/pkg.list || true)
+          if [ "$n_roadmap" -gt 1 ]; then
+            echo "::error::case-colliding ROADMAP paths in cargo package"
+            grep -i roadmap /tmp/pkg.list || true
+            exit 1
+          fi
+
+      - name: DRY RUN — stop here
+        if: inputs.dry_run
+        run: |
+          echo "::notice::Dry run. Gates passed; nothing tagged, released, or published."
+          echo '**Dry run — no mutations.**' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open bump PR (protec-main forbids push to main)
+        if: ${{ !inputs.dry_run && inputs.bump != 'none' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUR: ${{ steps.ver.outputs.current }}
+          NEW: ${{ steps.ver.outputs.new }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          [ "$NEW" = "$CUR" ] && { echo "already at $NEW"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="release/v${NEW}"
+          git checkout -B "$BRANCH"
+          # No --changelog: cz rewrites Keep a Changelog. Move Unreleased by hand.
+          cz bump --yes --increment "$BUMP" --files-only
+          git add -A
+          git commit -m "release: v${NEW}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:$BRANCH"
+          gh pr list --head "$BRANCH" --json number --jq '.[0].number' | grep -q . \
+            || gh pr create --base main --head "$BRANCH" \
+              --title "release: v${NEW}" \
+              --body "Commitizen \`$BUMP\` bump \`$CUR\` → \`$NEW\`. Merge, then re-dispatch **release** with \`bump=none\` to tag."
+          echo "::notice::Opened/updated $BRANCH. Merge it, then dispatch bump=none."
+
+      - name: Tag
+        if: ${{ !inputs.dry_run && inputs.bump == 'none' && steps.pre.outputs.tag_exists == 'no' }}
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          PKG: ${{ steps.ver.outputs.pkg }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$PKG $TAG"
+          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "$TAG"
+
+      - name: GitHub Release
+        if: ${{ !inputs.dry_run && inputs.bump == 'none' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          PKG: ${{ steps.ver.outputs.pkg }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$PKG $TAG" --generate-notes
+
+      - name: Publish to crates.io
+        if: ${{ !inputs.dry_run && inputs.bump == 'none' && inputs.publish_crate && steps.pre.outputs.crate_published == 'no' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN not set — tag/release shipped, crates.io skipped."
+            echo '- crates.io: **skipped** (no token)' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cargo publish --dry-run
+          cargo publish
+
+      - name: Summary
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          printf -- '\n### Done `%s`\n\nhttps://github.com/%s/releases/tag/%s\n' \
+            "$TAG" "${{ github.repository }}" "$TAG" >> "$GITHUB_STEP_SUMMARY"

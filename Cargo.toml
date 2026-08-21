@@ -1,8 +1,8 @@
 [package]
 name = "unsloth-rs"
-version = "1.0.3"
+version = "1.2.0"
 edition = "2021"
-rust-version = "1.92"
+rust-version = "1.88"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
 description = "Candle/CubeCL transformer kernel building blocks (not an Unsloth product port)"
@@ -22,9 +22,11 @@ candle-nn = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytemuck = { version = "1.21", features = ["derive"] }
+half = "2"
 
-# GPU compute - CubeCL for cross-platform GPU kernels
-cubecl = { workspace = true }
+# GPU compute - CubeCL for cross-platform GPU kernels (optional: CPU/default
+# builds must not pull the cubecl graph).
+cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 # Tensor-core accelerated matmul for Q@K^T and Attn@V operations
 # Note: Fallback to manual implementation initially; integrate once validated
@@ -37,11 +39,14 @@ anyhow = { workspace = true }
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "cubecl/cuda", "cubecl-cuda"]
+cuda = ["candle-core/cuda", "dep:cubecl", "cubecl/cuda", "dep:cubecl-cuda"]
 # Empty placeholder only — does NOT compile archive/ternary_cubecl (UNS-P2-01 non-goal)
 _ternary_cubecl_todo = []
 # Experimental tiled FA-2; gated off until CubeCL comptime issues resolved
 _phase2_tiled_kernel = []
+# Reserved: compile-time cfg only. Does NOT depend on triton-bridge 0.1.0
+# (contract stub, bridge_ready() == false). Link after Phase 1 + crates.io.
+triton-bridge = []
 
 [lints.rust]
 missing_docs = "warn"
@@ -67,9 +72,15 @@ unnecessary_wraps = "allow"
 needless_pass_by_value = "allow"
 needless_range_loop = "allow"
 field_reassign_with_default = "allow"
+many_single_char_names = "allow"
+excessive_precision = "allow"
 
 [[bench]]
 name = "kernels"
+harness = false
+
+[[bench]]
+name = "custom_op_cuda"
 harness = false
 
 [workspace]
@@ -77,8 +88,8 @@ members = ["."]
 resolver = "2"
 
 [workspace.dependencies]
-candle-core = "0.9"
-candle-nn = "0.9"
+candle-core = "0.11"
+candle-nn = "0.11"
 thiserror = "2.0"
 tracing = "0.1"
 cubecl = "0.9"

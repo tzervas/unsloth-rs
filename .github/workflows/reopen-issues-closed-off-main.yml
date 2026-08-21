@@ -35,21 +35,23 @@ jobs:
           set -euo pipefail
           body=$(gh api "repos/$REPO/pulls/$PR" --jq .body)
           title=$(gh api "repos/$REPO/pulls/$PR" --jq .title)
-          # Extract Closes/Fixes/Resolves #N
-          nums=$(TITLE="$title" BODY="$body" python3 <<'PY'
-import os, re
-text = (os.environ.get("TITLE") or "") + "\n" + (os.environ.get("BODY") or "")
-kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
-found = set()
-for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&/and\s]+#?\d+)*))", text):
-    prefix = text[max(0, m.start() - 24) : m.start()].lower()
-    if re.search(r"(?:no|not|without|dont)\W*$", prefix):
-        continue
-    for n in re.findall(r"\d+", m.group(1)):
-        found.add(n)
-print("\n".join(sorted(found, key=int)))
-PY
-)
+          # python3 -c (not a << heredoc): GitHub's YAML parser treated
+          # `python3 <<'PY'` + a column-0 `import` as ending the block scalar
+          # ("You have an error in your yaml syntax on line 40") and failed
+          # every push even though this workflow does not listen to push.
+          nums=$(TITLE="$title" BODY="$body" python3 -c '
+          import os, re
+          text = (os.environ.get("TITLE") or "") + "\n" + (os.environ.get("BODY") or "")
+          kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
+          found = set()
+          for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&/and\s]+#?\d+)*))", text):
+              prefix = text[max(0, m.start() - 24) : m.start()].lower()
+              if re.search(r"(?:no|not|without|dont)\W*$", prefix):
+                  continue
+              for n in re.findall(r"\d+", m.group(1)):
+                  found.add(n)
+          print("\n".join(sorted(found, key=int)))
+          ')
           if [ -z "${nums}" ]; then
             echo "No closing keywords — nothing to reopen"
             exit 0

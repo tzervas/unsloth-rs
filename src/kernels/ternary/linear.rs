@@ -28,13 +28,13 @@ use candle_core::{Module, Tensor};
 
 /// A linear layer with ternary quantized weights.
 ///
-/// Provides significant memory reduction (10-30x) and speedup (5-20x)
-/// on sparse pruned models compared to FP16/FP32 linear layers.
+/// Ternary-weight Linear. Packing vs FP32 is `TernaryTensor::compression_ratio`.
+/// No measured wall-time or VRAM claim.
 ///
 /// # Memory Layout
 ///
 /// - Weights: `TernaryTensor` with +plane/-plane u32 arrays + f32 scales
-/// - Bias: Optional f32 tensor [`out_features`]
+/// - Bias: Optional f32 tensor `[out_features]`
 ///
 /// # Forward Pass
 ///
@@ -47,7 +47,7 @@ pub struct TernaryLinear {
     /// Ternary quantized weight matrix [`out_features`, `in_features`].
     weights: TernaryTensor,
 
-    /// Optional bias vector [`out_features`].
+    /// Optional bias vector `[out_features]`.
     bias: Option<Tensor>,
 
     /// Configuration for ternary operations.
@@ -60,7 +60,7 @@ impl TernaryLinear {
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `bias` - Optional bias tensor `[out_features]`
     ///
     /// # Errors
     ///
@@ -74,7 +74,7 @@ impl TernaryLinear {
     /// # Arguments
     ///
     /// * `weights` - Pre-quantized ternary weights
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `bias` - Optional bias tensor `[out_features]`
     /// * `config` - Ternary configuration
     ///
     /// # Errors
@@ -234,7 +234,7 @@ impl TernaryLinearBuilder {
     /// # Arguments
     ///
     /// * `weights` - FP32 weight tensor [`out_features`, `in_features`]
-    /// * `bias` - Optional bias tensor [`out_features`]
+    /// * `bias` - Optional bias tensor `[out_features]`
     ///
     /// # Errors
     ///

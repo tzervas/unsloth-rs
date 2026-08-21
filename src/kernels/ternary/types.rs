@@ -311,7 +311,7 @@ impl TernaryTensor {
     ///
     /// * `plus_plane` - Flattened [rows × `k_words`] positive plane
     /// * `minus_plane` - Flattened [rows × `k_words`] negative plane
-    /// * `scales` - Per-row scale factors [rows]
+    /// * `scales` - Per-row scale factors `[rows]`
     /// * `shape` - Original (`out_features`, `in_features`)
     ///
     /// # Panics
@@ -617,30 +617,38 @@ impl TernaryTensor {
         }
     }
 
-    /// Prune weights below a threshold by setting them to zero.
+    /// Prune **rows** whose `|scale|` is below `threshold`.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
-    ///
-    /// # Arguments
-    ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// Per-element magnitude is `|scale|` for every non-zero ternary value
+    /// in the row, so a per-weight cutoff cannot distinguish elements.
+    /// This zeros the whole row (both planes + scale) and returns how many
+    /// non-zeros were cleared.
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Count of ternary non-zeros removed (not the number of rows).
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_count = 0usize;
+
+        for row in 0..self.shape.0 {
+            if self.scales[row].abs() < threshold {
+                let row_offset = row * self.k_words;
+                for k in 0..self.k_words {
+                    let plane_idx = row_offset + k;
+                    pruned_count += self.plus_plane[plane_idx].count_ones() as usize;
+                    pruned_count += self.minus_plane[plane_idx].count_ones() as usize;
+                    self.plus_plane[plane_idx] = 0;
+                    self.minus_plane[plane_idx] = 0;
+                }
+                self.scales[row] = 0.0;
+            }
+        }
+
+        if pruned_count > 0 {
+            self.recalculate_sparsity();
+        }
+
+        pruned_count
     }
 }
 
@@ -879,5 +887,75 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold_row_scale() {
+        let shape = (4, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![0.05f32, 0.5f32, 0.01f32, 1.0f32];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        for col in 0..10 {
+            tensor.modify_dim(0, col, 1);
+            tensor.modify_dim(1, col, -1);
+        }
+
+        tensor.recalculate_sparsity();
+        let pruned = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned, 10);
+        assert!(tensor.scales[0].abs() < f32::EPSILON);
+        for col in 0..64 {
+            assert_eq!(tensor.get_dim(0, col), 0);
+        }
+        assert!((tensor.scales[1] - 0.5).abs() < f32::EPSILON);
+        for col in 0..10 {
+            assert_eq!(tensor.get_dim(1, col), -1);
+        }
+        let expected_sparsity = 1.0 - (10.0 / 256.0);
+        assert!((tensor.sparsity() - expected_sparsity).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_prune_equal_scale_keeps_row() {
+        let shape = (2, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let mut tensor = TernaryTensor::new(plus, minus, vec![0.1f32, 0.2f32], shape);
+        tensor.modify_dim(0, 0, 1);
+        tensor.recalculate_sparsity();
+        let before = tensor.sparsity();
+        let pruned = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned, 0, "|scale| == threshold must keep the row");
+        assert!((tensor.scales[0] - 0.1).abs() < f32::EPSILON);
+        assert_eq!(tensor.get_dim(0, 0), 1);
+        assert!((tensor.sparsity() - before).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_prune_all_rows_zeros_scales_and_planes() {
+        let shape = (2, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 2 * k_words];
+        let minus = vec![0u32; 2 * k_words];
+        let mut tensor = TernaryTensor::new(plus, minus, vec![0.01f32, 0.02f32], shape);
+        for col in 0..4 {
+            tensor.modify_dim(0, col, 1);
+            tensor.modify_dim(1, col, -1);
+        }
+        tensor.recalculate_sparsity();
+        let pruned = tensor.prune_below_threshold(1.0);
+        assert_eq!(pruned, 8);
+        assert!(tensor.scales.iter().all(|s| s.abs() < f32::EPSILON));
+        for row in 0..2 {
+            for col in 0..64 {
+                assert_eq!(tensor.get_dim(row, col), 0);
+            }
+        }
+        assert!((tensor.sparsity() - 1.0).abs() < 0.001);
     }
 }

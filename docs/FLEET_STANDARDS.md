@@ -29,6 +29,18 @@ README badges use GitHub Actions SVG for **trunk** branch — live status, not s
 
 Automatic Copilot code reviews are **disabled** for fleet-managed repos. Do not request Copilot on PRs.
 
+## Gitleaks / gitignore
+
+- **Local pre-commit is the real gate.** `bash scripts/install-hooks.sh` sets
+  `core.hooksPath=.githooks`. That hook runs `gitleaks protect --staged`
+  (`scripts/gitleaks-staged.sh`). Missing gitleaks **fails the commit** (not a
+  skip). A finding in staged files: unstage it. A finding that already hit a
+  remote: **rotate the credential** — rewriting history does not un-leak it.
+  `git commit --no-verify` is how secrets land in git.
+- `fleet-security.yml` is defense-in-depth after push. It **must** pass
+  `--config .gitleaks.toml`.
+- `.gitignore` must cover `/target/`, `.env*`, keys/PEMs, `.cargo/config.toml`, and `*.crate`.
+
 ## Permissions
 
 Workflows use minimum `permissions:` blocks (contents read; issues write only for close/reopen jobs).

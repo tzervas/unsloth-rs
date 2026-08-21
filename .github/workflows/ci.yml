@@ -1,158 +1,29 @@
 # SPDX-License-Identifier: MIT
 # Copyright 2026 Tyler Zervas
+#
+# RETIRED — do not expand.
+# Product gates live in fleet-ci.yml + fleet-security.yml.
+# This file is workflow_dispatch-only so it cannot refill the self-hosted queue.
 
-name: CI
+name: CI (legacy — retired)
 
 on:
-  push:
-    branches: [ main, dev, experimental ]
-  pull_request:
-    branches: [ main, dev, experimental ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CUDA_HOME: /usr/local/cuda
-  LD_LIBRARY_PATH: /usr/local/cuda/lib64
-  CUDA_COMPUTE_CAP: "90"
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: [self-hosted, linux, x64, podman]
-    strategy:
-      matrix:
-        rust: [stable, nightly]
+  notice:
+    name: legacy CI retired
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Configure CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo index
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo build
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Run tests (CPU only)
-        run: cargo test --verbose --all-features
-      
-      - name: Run doc tests
-        run: cargo test --doc --verbose
-
-  clippy:
-    name: Clippy
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Configure CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-  fmt:
-    name: Rustfmt
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Configure CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-  build:
-    name: Build
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Configure CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo build
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Build (no features)
-        run: cargo build --verbose
-      
-      - name: Check build succeeds with all features
-        run: cargo check --all-features --verbose
-
-  docs:
-    name: Documentation
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Configure CUDA Environment
-        run: |
-          if [ -d "/usr/local/cuda/bin" ]; then
-            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Build documentation
-        run: cargo doc --no-deps --all-features --verbose
-        env:
-          RUSTDOCFLAGS: -D warnings
-
-  # GPU honesty (PR-027 / UNS-P0-05):
-  # - This workflow is CPU-only. Missing GPU is not a pass for GPU coverage.
-  # - Classify missing /dev/nvidia*, CUDA_ERROR_NO_DEVICE, or toolkit/arch
-  #   mismatch as FAIL_ENV — never a fabricated green GPU suite.
-  # - Local/self-hosted GPU: often needs CUDA_COMPUTE_CAP=90 when nvcc cannot
-  #   target CC 12.0 (see GPU_SETUP.md, DEBT.md).
-  # - scripts/gpu-test.sh is for local validation only.
+      - run: |
+          echo "Legacy multi-job CI is retired."
+          echo "Use fleet-ci.yml (fmt/clippy/doc/test, no --all-features) and fleet-security.yml."
+          echo "HONEST_CI class=SKIP_STUB detail=legacy_ci_retired"

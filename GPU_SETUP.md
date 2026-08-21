@@ -83,6 +83,22 @@ Default `cargo test` (no `cuda` feature) never compiles this gate — CPU stays 
 With `--features cuda` and missing `/dev/nvidia0`, the gate fails as **BLOCKED:env**
 by design (no silent pass).
 
+### CustomOp host vs CUDA-event bench (G-UNS-01)
+
+Not a sacred-bar number. First NVRTC compile is outside timed regions.
+`FAIL_ENV` exit 2 if `/dev/nvidia0` is missing, `Device::new_cuda` fails, or
+`llama-server` / `hypha-control` is listed in compute-apps. Kernel/launch
+errors: `FAIL`. Artifact write errors: `FAIL_IO`. `compile_cached` means
+NVRTC did not re-run — Mutex + Candle dispatch remain.
+
+```bash
+# Only when /dev/nvidia0 exists and the GPU is free of llama-server / hypha-control
+CUDA_COMPUTE_CAP=90 TMPDIR=/home/kang/tmp cargo bench --features cuda --bench custom_op_cuda
+# without --features cuda: prints FAIL_ENV: missing feature cuda, exit 2
+```
+
+Writes `artifacts/custom_op_cuda.json`. Do not commit `target/criterion`.
+
 
 ## WSL / libcuda path (STACK-UNS-FINISH evidence)
 

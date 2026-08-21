@@ -4,12 +4,12 @@
 
 | Field | Value |
 |-------|--------|
-| **Cargo.toml version** | `1.0.3` |
-| **Git tags (local/origin)** | `v1.0.0`, `v1.0.1`, `v1.0.2` (and older alpha); **tag `v1.0.3` after publish** |
-| **docs.rs** | Builds for 1.0.2 historically; expect 1.0.3 after publish |
+| **Cargo.toml version** | `1.1.0` |
+| **Git tags** | `v1.0.4` (and older). Tag `v1.1.0` via `.github/workflows/release.yml` (`bump=none`) |
+| **docs.rs** | Builds for 1.0.2 historically |
 | **crates.io tarball 1.0.2** | **Broken** — dual-path case collision (`ROADMAP.md` + `roadmap.md`) |
-| **Fix in this tree (1.0.3)** | Only `ROADMAP.md` remains; `cargo package` succeeds |
-| **Last docs refresh** | 2026-07-22 (gap-close Wave-3/4 honesty + packaging) |
+| **Fix in this tree** | Only `ROADMAP.md` remains; `cargo package` succeeds |
+| **Last docs refresh** | 2026-08-19 (CustomOp 1.0.4 + commitizen / release workflow) |
 
 **Do not `cargo publish` from this workstream unless the release train explicitly opens a publish gate.** Prefer dry-run / `--list` only.
 
@@ -26,7 +26,7 @@
 - [x] `Cargo.toml`: name, version, authors, description, license, repository, keywords, categories
 - [x] `README.md` with honest scope + non-goals
 - [x] `LICENSE` (MIT)
-- [x] `CHANGELOG.md` section for **1.0.3**
+- [x] `CHANGELOG.md` section for **1.0.4**
 - [x] Packaging case fix verified (`cargo package --allow-dirty`)
 
 ### Packaging (case collision)

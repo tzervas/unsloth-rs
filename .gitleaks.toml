@@ -41,7 +41,8 @@ paths = [
     '''\.yml$''',
 ]
 
-# Allowlist for test files
+# Rule-scoped allowlists must be a table (`[rules.allowlist]`), not
+# `[[rules.allowlist]]` (slice) — gitleaks fails config load otherwise.
 [rules.allowlist]
 paths = [
     '''tests/''',

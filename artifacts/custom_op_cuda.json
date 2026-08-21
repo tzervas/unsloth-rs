@@ -1,0 +1,31 @@
+{
+  "sacred_bar": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "cuda_compute_cap": "90",
+  "gpu_compute_cap": "12.0",
+  "compute_apps": "pid, process_name, used_gpu_memory [MiB]\n769010, /home/kang/code/personal/unsloth-rs/target/release/deps/custom_op_cuda-b234d9bb0e47a394, 328 MiB",
+  "note": "Rust host+event p50/p99 after PTX cache. compile_cached is first-vs-second NVRTC (not a launch-tax close: Mutex + Arc + Candle dispatch remain). First NVRTC compile is outside timed regions. torch/Unsloth host+sync p50/p99 live in artifacts/py-rs-compare.json. fused_linear_ce is vocab-tile GEMM (no [N,V]). C-UNS-06-P50 harvest only; G-UNS-06 stays open. No 2x/VRAM claims. Not a G-UNS-01 close. 5080 numbers do not replace the C2 single-3090Ti sacred bar. cuda_compute_cap is the CUDA_COMPUTE_CAP pin (or unset), not proof of native SM.",
+  "samples": 100,
+  "ops": [
+    {"op":"rmsnorm","tag":"s128","elems":16384,"vocab":null,"n_tokens":null,"host_p50_ms":0.007576,"host_p99_ms":0.008758,"event_p50_ms":0.004256,"event_p99_ms":0.005728,"launch_bound":true,"compile_cached":true},
+    {"op":"rmsnorm","tag":"s512","elems":65536,"vocab":null,"n_tokens":null,"host_p50_ms":0.008008,"host_p99_ms":0.137650,"event_p50_ms":0.004016,"event_p99_ms":0.006112,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s128","elems":16384,"vocab":null,"n_tokens":null,"host_p50_ms":0.007381,"host_p99_ms":0.138498,"event_p50_ms":0.004096,"event_p99_ms":0.010080,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s512","elems":65536,"vocab":null,"n_tokens":null,"host_p50_ms":0.007617,"host_p99_ms":0.012145,"event_p50_ms":0.004368,"event_p99_ms":0.010688,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s128","elems":131072,"vocab":null,"n_tokens":null,"host_p50_ms":0.008545,"host_p99_ms":0.014385,"event_p50_ms":0.004064,"event_p99_ms":0.010752,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s512","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.012138,"host_p99_ms":0.204429,"event_p50_ms":0.008192,"event_p99_ms":0.009440,"launch_bound":true,"compile_cached":true},
+    {"op":"ce","tag":"s128","elems":32768,"vocab":128,"n_tokens":256,"host_p50_ms":0.009452,"host_p99_ms":0.171421,"event_p50_ms":0.006464,"event_p99_ms":0.008544,"launch_bound":true,"compile_cached":true},
+    {"op":"ce","tag":"s512","elems":131072,"vocab":128,"n_tokens":1024,"host_p50_ms":0.011038,"host_p99_ms":0.171764,"event_p50_ms":0.008848,"event_p99_ms":0.113216,"launch_bound":true,"compile_cached":true},
+    {"op":"attn","tag":"s128","elems":131072,"vocab":null,"n_tokens":null,"host_p50_ms":0.077791,"host_p99_ms":0.265670,"event_p50_ms":0.073952,"event_p99_ms":0.079840,"launch_bound":true,"compile_cached":true},
+    {"op":"attn","tag":"s512","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.553077,"host_p99_ms":0.856390,"event_p50_ms":0.547248,"event_p99_ms":0.553952,"launch_bound":false,"compile_cached":true},
+    {"op":"attn","tag":"s2048","elems":2097152,"vocab":null,"n_tokens":null,"host_p50_ms":7.209060,"host_p99_ms":7.760251,"event_p50_ms":7.222848,"event_p99_ms":7.956896,"launch_bound":false,"compile_cached":true},
+    {"op":"rmsnorm","tag":"s2048_launch","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.012538,"host_p99_ms":0.015911,"event_p50_ms":0.008448,"event_p99_ms":0.010016,"launch_bound":true,"compile_cached":true},
+    {"op":"swiglu","tag":"s2048_launch","elems":524288,"vocab":null,"n_tokens":null,"host_p50_ms":0.009749,"host_p99_ms":0.143970,"event_p50_ms":0.006464,"event_p99_ms":0.007008,"launch_bound":true,"compile_cached":true},
+    {"op":"rope","tag":"s2048_launch","elems":4194304,"vocab":null,"n_tokens":null,"host_p50_ms":0.029135,"host_p99_ms":0.265195,"event_p50_ms":0.025072,"event_p99_ms":0.026720,"launch_bound":true,"compile_cached":true},
+    {"op":"rmsnorm","tag":"compute","elems":16777216,"vocab":null,"n_tokens":null,"host_p50_ms":0.199867,"host_p99_ms":0.472587,"event_p50_ms":0.195632,"event_p99_ms":0.225184,"launch_bound":false,"compile_cached":true},
+    {"op":"swiglu","tag":"compute","elems":16777216,"vocab":null,"n_tokens":null,"host_p50_ms":0.279738,"host_p99_ms":0.553458,"event_p50_ms":0.274752,"event_p99_ms":0.305344,"launch_bound":false,"compile_cached":true},
+    {"op":"ce","tag":"compute","elems":16777216,"vocab":32768,"n_tokens":512,"host_p50_ms":0.058123,"host_p99_ms":0.232393,"event_p50_ms":0.050624,"event_p99_ms":0.128192,"launch_bound":false,"compile_cached":true},
+    {"op":"fused_linear_ce","tag":"s128","elems":16384,"vocab":128,"n_tokens":256,"host_p50_ms":0.111928,"host_p99_ms":0.390579,"event_p50_ms":0.109600,"event_p99_ms":0.353632,"launch_bound":true,"compile_cached":true},
+    {"op":"fused_linear_ce","tag":"s512","elems":65536,"vocab":128,"n_tokens":1024,"host_p50_ms":0.123757,"host_p99_ms":0.423782,"event_p50_ms":0.118992,"event_p99_ms":0.406176,"launch_bound":true,"compile_cached":true},
+    {"op":"fused_linear_ce","tag":"compute","elems":2097152,"vocab":32768,"n_tokens":512,"host_p50_ms":6.709637,"host_p99_ms":7.103935,"event_p50_ms":6.621600,"event_p99_ms":7.031136,"launch_bound":false,"compile_cached":true}
+  ]
+}

@@ -2,7 +2,29 @@
 
 ## Flash attention residual (P8 / W1 train track)
 
-**Last updated:** 2026-07-22  
+**Last updated:** 2026-08-17
+
+### Landed — CustomOp RMSNorm (P0d / G0 first kernel)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Candle `CustomOp2` RMSNorm | **Landed (1.0.4)** | `kernels::custom_op`; CPU + CUDA `CudaStorage` |
+| Candle `CustomOp2` SwiGLU `silu⊙up` | **Landed (1.0.4)** | P1c |
+| Candle `CustomOp3` RoPE apply | **Landed (1.0.4)** | P1b; `ops::rope_with_ids` gathers packed ids |
+| Candle `CustomOp2` chunked CE | **Landed (1.0.4)** | P1a; bwd still allocates `dlogits` |
+| Host `to_vec1` on CustomOp paths | **No** | `custom_op_device_resident() == true` |
+| CubeCL FA as default dispatch | **Removed** | Opt-in `UNSLOTH_CUBECL_FA`; default is CustomOp/Candle (no D2H) |
+| CustomOp online-attn CUDA | **Fallback** | HBM-streaming path when head dim > 128 |
+| CustomOp CUDA `unsafe` | **Narrowed** | `alloc` → `alloc_zeros`; one `nvrtc::launch` FFI |
+| Tiled FA SRAM (true Flash) | **Landed (owned NVRTC)** | `ops::attention` dim≤128. Speed vs torch SDPA still open (G-UNS-03). Job C foreign Unsloth PTX still FAIL_ENV. |
+| CubeCL FA interop (if opted in) | **Unchanged** | Still host D2H/H2D; see UNS-P1-01 below |
+| f16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | f16 I/O, float acc. `custom_op_f32_only() == false` |
+| bf16 CustomOp (rmsnorm/swiglu/attn) | **Landed** | Same I/O+float-acc pattern. CUDA attn stays online (not SRAM tile). |
+| Fused linear+CE | **CPU + device tiles** | CPU CustomOp; CUDA tile smoke PASS on 5080 (fwd vs CPU `< 1e-4`) |
+| Host CPU ISA | **AVX2+FMA** | 14700K: no AVX-512/AMX. P=`0-15` E=`16-27`. No MKL dep. |
+
+**Last updated (Flash residual):** 2026-07-22
+
 **Evidence:** `/root/work/plans/evidence/48h/L1-F-unsloth/`, `/root/work/plans/evidence/P8-residuals/`
 
 ### Resolved (test reference)
@@ -85,6 +107,20 @@ CUDA_COMPUTE_CAP=90 cargo check --features cuda
 CUDA_COMPUTE_CAP=90 cargo test --features cuda --test integration \
   test_flash_attention_gpu_numerical_equivalence -- --nocapture
 ```
+
+### C-UNS-SM120 (2026-08-18, this 5080)
+
+`CUDA_COMPUTE_CAP=120 cargo test --features cuda --lib -- cuda_tiled_matches_softmax_s512`
+**PASS** (exit 0). Host is SM 12.0; toolkit CUDA 13.1 can emit 120. **Default pin stays 90**
+(`compare/run.sh`, benches). Not a native-Blackwell kernel rewrite and not a
+throughput claim.
+
+### C-UNS-TILE-OCC (2026-08-18)
+
+s512 causal tiled FA event p50: **0.547 ms** (was 0.68 ms) after parallel
+row-softmax / flattened O. Br=Bc=32 smem occupancy **regressed** to 0.93 ms
+and is not the default. Still slower than torch SDPA (~0.097 ms host+sync).
+G-UNS-03 stays open. No 2× claim. MAE vs softmax still `< 1e-4`.
 
 ### CI policy
 

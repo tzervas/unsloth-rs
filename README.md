@@ -25,10 +25,11 @@ kernels:
 
 | Building block | CPU (Candle) | CUDA feature |
 |----------------|--------------|--------------|
-| Multi-head attention + GQA | ✅ | Candle CUDA + optional Flash path |
-| RoPE | ✅ | Elementwise CubeCL (partial) |
-| RMSNorm | ✅ | Elementwise CubeCL (partial) |
-| SwiGLU | ✅ | Elementwise CubeCL + CPU fallback |
+| Multi-head attention + GQA | ✅ CustomOp | CUDA: owned SRAM-tiled FA (dim≤128, no extra mask). Wider heads: HBM-streaming online. Extra mask → Candle GEMM. CubeCL FA opt-in `UNSLOTH_CUBECL_FA` (D2H). |
+| RoPE | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
+| RMSNorm | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
+| SwiGLU `silu⊙up` | ✅ CustomOp | CustomOp on `CudaStorage` (no CubeCL copy) |
+| Chunked cross-entropy | ✅ CustomOp | CustomOp (no `[N,V]` softmax) |
 | Memory / checkpoint **estimates** | ✅ (math only) | n/a |
 | Ternary quant / linear (CPU) | ✅ experimental | GPU CubeCL **archived non-goal** |
 | Mixed-precision helpers | ✅ config + scale utils | not a trainer |
@@ -36,28 +37,33 @@ kernels:
 
 ## Status (honest)
 
-**Version:** `1.0.3` (see `Cargo.toml`). Semver 1.x means the **public CPU
-kernel APIs** are intended to be usable; GPU paths and training utilities are
-still incomplete.
+**Version:** `1.2.0` (Candle **0.11**, MSRV **1.96**). Semver 1.x means the
+**public CPU kernel APIs** are intended to be usable; GPU paths and training
+utilities are still incomplete. Crates.io last published **1.0.2** (Candle 0.9).
+Tag `v1.1.0` is GitHub-only.
 
 ### Solid today
 
 - Multi-head attention (CPU reference; correct `1/√head_dim` scaling)
-- RoPE, RMSNorm, SwiGLU on CPU
+- **RMSNorm / RoPE / SwiGLU / chunked CE CustomOps** (CPU + CUDA `CudaStorage`).
+  RMSNorm / SwiGLU / attention accept f16 I/O (float acc). No CubeCL host copy
+  (`custom_op_device_resident()`, `custom_op_f32_only() == false`)
 - Memory estimation helpers
 - Default-feature CPU test suite (unit + integration)
 
 ### Partial / experimental
 
-- Flash Attention via CubeCL (`cuda` feature): real kernels exist; **host D2H/H2D
-  interop is a permanent limitation** with Candle 0.9 + CubeCL 0.9 public APIs
-  (`interop_requires_host_roundtrip()` → true). **No end-to-end speedup claims.**
+- Default `ops::attention` on CUDA is **owned NVRTC tiled FA** (head dim ≤ 128,
+  no extra mask). Wider heads stay HBM-streaming online. Extra mask is GEMM.
+  Foreign Unsloth FA PTX / triton-bridge Job C remains FAIL_ENV.
+  CubeCL FA is opt-in (`UNSLOTH_CUBECL_FA=1`) and still host-roundtrips.
 - GPU numerical equivalence gate: runs under `--features cuda` (not default CI);
   needs `/dev/nvidia0` (see [DEBT.md](DEBT.md)); **BLOCKED:env** without full device nodes
 - Ternary quantization experiments (CPU compression ratios only; GPU ternary archived)
 - CubeCL / Flash path **f32-only** (`interop_f32_only()`); host mixed-precision helpers only
 - Mixed-precision **utilities** (no end-to-end trainer); checkpoint **estimates**
   only (no recompute training API)
+
 
 ### Explicit non-goals (for this crate)
 
@@ -69,7 +75,10 @@ still incomplete.
 
 **Docs:** [CHANGELOG.md](CHANGELOG.md) · [ROADMAP.md](ROADMAP.md) · [DEBT.md](DEBT.md) ·
 [GPU_SETUP.md](GPU_SETUP.md) · [PUBLISHING.md](PUBLISHING.md) ·
-[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles).
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) (no peft/qlora/axolotl deps; no cycles) ·
+[docs/TRITON.md](docs/TRITON.md) (Triton lives in triton-bridge-rs, not here) ·
+[docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) ·
+[docs/VERSIONING.md](docs/VERSIONING.md).
 
 Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are in
 [DEBT.md](DEBT.md) and [GPU_SETUP.md](GPU_SETUP.md).
@@ -77,14 +86,14 @@ Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0.3"
+unsloth-rs = "1.0"
 ```
 
 CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0.3", features = ["cuda"] }
+unsloth-rs = { version = "1.0", features = ["cuda"] }
 ```
 
 On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0

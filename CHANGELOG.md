@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `.cz.toml` `version` lockstep with `Cargo.toml` (`1.2.0`; was still `1.1.0`).
+- `docs/VERSIONING.md` no longer freezes a release number; `PUBLISHING.md`
+  status table matches Cargo.toml.
+
+### Changed
+- README consumer pin is `unsloth-rs = "1"` (major), not a minor/patch.
+
 ## [1.2.0] - 2026-08-20
 
 Candle types appear in the public API, so a candle minor bump is a **breaking

@@ -86,14 +86,14 @@ Residual risk and CUDA environment contract (`CUDA_COMPUTE_CAP`, `FAIL_ENV`) are
 
 ```toml
 [dependencies]
-unsloth-rs = "1.0"
+unsloth-rs = "1"
 ```
 
 CUDA (optional; requires toolkit + device — see [GPU_SETUP.md](GPU_SETUP.md)):
 
 ```toml
 [dependencies]
-unsloth-rs = { version = "1.0", features = ["cuda"] }
+unsloth-rs = { version = "1", features = ["cuda"] }
 ```
 
 On hosts where the default compute capability pin fails `nvcc` (e.g. CC 12.0

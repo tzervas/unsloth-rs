@@ -2,7 +2,7 @@
 name = "unsloth-rs"
 version = "1.0.3"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.92"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
 description = "Candle/CubeCL transformer kernel building blocks (not an Unsloth product port)"

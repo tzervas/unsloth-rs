@@ -7,13 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- `.cz.toml` `version` lockstep with `Cargo.toml` (`1.2.0`; was still `1.1.0`).
-- `docs/VERSIONING.md` no longer freezes a release number; `PUBLISHING.md`
-  status table matches Cargo.toml.
-
-### Changed
-- README consumer pin is `unsloth-rs = "1"` (major), not a minor/patch.
+### Added
+- `TernaryTensor::prune_below_threshold` zeros **rows** whose `|scale|` is
+  below the cutoff (per-element magnitude is the row scale).
 
 ## [1.2.0] - 2026-08-20
 

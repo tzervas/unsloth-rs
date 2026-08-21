@@ -617,30 +617,54 @@ impl TernaryTensor {
         }
     }
 
-    /// Prune weights below a threshold by setting them to zero.
+    /// Prune weights below a scale threshold by zeroing out channels (rows) with absolute scale below threshold.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
+    /// For ternary weights, non-zero values have unit magnitude scaled by per-channel scale `scales[row]`.
+    /// Output channels (rows) whose absolute scale is strictly below `threshold` are zeroed out in both
+    /// `plus_plane` and `minus_plane`.
     ///
     /// # Arguments
     ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// * `threshold` - Minimum absolute scale value required to retain row weights
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Number of non-zero ternary weights pruned
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_count = 0usize;
+        let mut row_pruned = false;
+
+        let chunk_size = self
+            .sparsity_meta
+            .as_ref()
+            .and_then(|meta| meta.first().map(|m| m.chunk_size));
+
+        for row in 0..self.shape.0 {
+            if self.scales[row].abs() < threshold {
+                let row_offset = row * self.k_words;
+                for w_idx in 0..self.k_words {
+                    let idx = row_offset + w_idx;
+                    let plus_word = self.plus_plane[idx];
+                    let minus_word = self.minus_plane[idx];
+
+                    if plus_word != 0 || minus_word != 0 {
+                        pruned_count += (plus_word.count_ones() + minus_word.count_ones()) as usize;
+                        self.plus_plane[idx] = 0;
+                        self.minus_plane[idx] = 0;
+                        row_pruned = true;
+                    }
+                }
+            }
+        }
+
+        if row_pruned {
+            self.recalculate_sparsity();
+            if let Some(cs) = chunk_size {
+                self.build_sparsity_metadata(cs);
+            }
+        }
+
+        pruned_count
     }
 }
 
@@ -879,5 +903,41 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold() {
+        let shape = (3, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 3 * k_words];
+        let minus = vec![0u32; 3 * k_words];
+        let scales = vec![0.05f32, 0.5f32, 0.01f32];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+        tensor.build_sparsity_metadata(32);
+
+        // Set non-zero weights
+        tensor.modify_dim(0, 10, 1);
+        tensor.modify_dim(0, 11, -1);
+        tensor.modify_dim(1, 20, 1);
+        tensor.modify_dim(2, 30, -1);
+        tensor.recalculate_sparsity();
+
+        assert_eq!(tensor.get_dim(0, 10), 1);
+        assert_eq!(tensor.get_dim(0, 11), -1);
+        assert_eq!(tensor.get_dim(1, 20), 1);
+        assert_eq!(tensor.get_dim(2, 30), -1);
+
+        // Prune rows with scale < 0.1 (rows 0 and 2)
+        let pruned = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned, 3); // 2 from row 0 + 1 from row 2
+
+        // Row 0 and 2 should now be zero
+        assert_eq!(tensor.get_dim(0, 10), 0);
+        assert_eq!(tensor.get_dim(0, 11), 0);
+        assert_eq!(tensor.get_dim(2, 30), 0);
+
+        // Row 1 (scale 0.5) should remain intact
+        assert_eq!(tensor.get_dim(1, 20), 1);
     }
 }

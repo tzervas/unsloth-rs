@@ -29,7 +29,7 @@ fn warn_cpu_fallback(device: &Device) {
     if matches!(device, Device::Cpu) {
         WARN_ONCE.call_once(|| {
             eprintln!(
-                "unsloth-rs: CPU device in use. CUDA is the intended default; enable the 'cuda' feature and use Device::cuda_if_available(0) when possible."
+                "unsloth-rs: CPU device in use. CPU CustomOp is the default product path; optional `cuda` enables CudaStorage kernels."
             );
         });
     }

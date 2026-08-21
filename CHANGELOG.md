@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - README consumer pin is `unsloth-rs = "1"` (major), not a minor/patch.
 - README status version defers to `Cargo.toml` (no frozen crates.io 1.0.2 claim).
+- CPU-device stderr no longer calls CUDA the intended default.
 
 ## [1.2.0] - 2026-08-20
 

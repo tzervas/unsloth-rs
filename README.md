@@ -169,7 +169,7 @@ that ignore D2H/H2D are not product evidence.
 
 - **[ROADMAP.md](ROADMAP.md)** — strategic plan (single roadmap file; do not add a
   case-colliding `roadmap.md` — crates.io packaging fails on case-insensitive FS)
-- **[TASKS.md](TASKS.md)** — task list
+- **[docs/archive/TASKS.md](docs/archive/TASKS.md)** — historical task list (not SoT)
 - **[PUBLISHING.md](PUBLISHING.md)** — packaging notes for crates.io
 - **[GPU_SETUP.md](GPU_SETUP.md)** — CUDA toolkit / `CUDA_COMPUTE_CAP` contract
 - **[DEBT.md](DEBT.md)** — residual technical debt and env blocks

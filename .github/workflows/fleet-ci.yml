@@ -124,6 +124,23 @@ jobs:
           set -euo pipefail
           cargo doc --workspace --no-deps
 
+  hosted-test:
+    name: Test Suite (GitHub-hosted)
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.96.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: cargo test
+        run: cargo test --workspace
+
   rust:
     name: Test Suite (stable)
     needs: detect

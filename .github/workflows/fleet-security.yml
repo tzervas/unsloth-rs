@@ -24,10 +24,31 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Ensure gitleaks (pinned + checksum)
+        run: |
+          set -euo pipefail
+          # Pin matches gha-runner-ctl packaging / fleet-security.
+          GITLEAKS_VERSION="8.30.1"
+          GITLEAKS_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          if command -v gitleaks >/dev/null 2>&1; then
+            echo "using preinstalled $(command -v gitleaks)"
+            exit 0
+          fi
+          install_dir="${RUNNER_TEMP:-/tmp}/gitleaks-bin"
+          mkdir -p "$install_dir"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          tmp="${RUNNER_TEMP:-/tmp}/${archive}"
+          curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$tmp"
+          echo "${GITLEAKS_SHA256}  ${tmp}" | sha256sum -c -
+          tar -xzf "$tmp" -C "$install_dir" gitleaks
+          chmod 0755 "$install_dir/gitleaks"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/gitleaks" version
       - name: Run gitleaks
         run: |
           set -euo pipefail
@@ -35,17 +56,11 @@ jobs:
             echo "::error title=FAIL_ENV::missing .gitleaks.toml"
             exit 1
           fi
-          if command -v gitleaks >/dev/null 2>&1; then
-            gitleaks detect --source . --config .gitleaks.toml --verbose --redact
-          elif command -v docker >/dev/null 2>&1; then
-            docker run --rm -v "$PWD:/path" zricethezav/gitleaks:latest detect --source=/path --config=/path/.gitleaks.toml --verbose --redact
-          elif command -v podman >/dev/null 2>&1; then
-            podman run --rm -v "$PWD:/path:ro" docker.io/zricethezav/gitleaks:latest detect --source=/path --config=/path/.gitleaks.toml --verbose --redact
-          else
-            echo "::error title=FAIL_ENV::gitleaks not available on runner"
-            echo "HONEST_CI class=FAIL_ENV detail=gitleaks_missing"
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            echo "gitleaks not available after install — FAIL (honest security gate)" >&2
             exit 1
           fi
+          gitleaks detect --source . --config .gitleaks.toml --verbose --redact --exit-code 1
 
   trivy-fs-advisory:
     # Advisory: runner image has no trivy. Name contains "advisory" so
@@ -55,7 +70,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Trivy fs

@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TernaryTensor::prune_below_threshold` zeros **rows** whose `|scale|` is
   below the cutoff (per-element magnitude is the row scale).
 
+### Changed
+- CI pins match fleet `ap-workflows` `pins/actions.yml`: `actions/checkout@v7`
+  (`persist-credentials: false`). `fleet-ci.yml` calls
+  `reusable-ci-autodetect.yml@v0.1` with `all-features: false` and `rust`
+  image label. Hosted `Test Suite (GitHub-hosted)` no longer `needs: detect`.
+- Local `gitleaks protect --staged` via `.githooks/pre-commit`
+  (`scripts/install-hooks.sh`). Missing gitleaks fails the commit. CI gitleaks
+  is defense-in-depth; a secret that reached git history must be rotated.
+
 ### Fixed
 - Hosted `Test Suite (GitHub-hosted)` on `ubuntu-latest` (default features; no
   `--all-features` / cuda). Self-hosted fleet-ci Test Suite remains.

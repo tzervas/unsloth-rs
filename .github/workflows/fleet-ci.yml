@@ -1,8 +1,9 @@
-# Fleet standard CI — self-hosted via gha-runner-ctl (Podman work containers).
-# Labels match the retain runner: self-hosted, linux, x64, podman.
-# Do not add `large` until a runner actually registers that label.
-# Gates (names match protec-main): detect stack, Rustfmt, Clippy,
-# Documentation, Test Suite (stable). No --all-features (that pulls cuda).
+# Thin caller — policy lives in tzervas/ap-workflows (reusable-ci-autodetect).
+# Pin `@v0.1` is the fleet moving tag (0.x: minor is breaking).
+#
+# all-features: false — `--all-features` pulls `cuda` on this crate.
+# rust label selects the fleet work image via host GHA_IMAGE_MAP.
+# Hosted Test Suite stays local: it must not `needs: detect` on self-hosted.
 name: fleet-ci
 
 on:
@@ -11,127 +12,37 @@ on:
   pull_request:
     branches: [main, master, dev]
   workflow_dispatch:
+    inputs:
+      tier:
+        description: "Force a tier (otherwise derived from the target branch)"
+        type: choice
+        options: [auto, dev, main]
+        default: auto
 
 concurrency:
-  group: fleet-ci-${{ github.ref }}
+  group: fleet-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  detect:
-    name: detect stack
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 10
-    outputs:
-      rust: ${{ steps.d.outputs.rust }}
-      python: ${{ steps.d.outputs.python }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - id: d
-        name: Detect stacks
-        run: |
-          set -euo pipefail
-          rust=false; python=false
-          if [ -f Cargo.toml ]; then rust=true; fi
-          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f setup.py ]; then python=true; fi
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "python=$python" >> "$GITHUB_OUTPUT"
-          echo "Detected rust=$rust python=$python"
-
-  fmt:
-    name: Rustfmt
-    needs: detect
-    if: needs.detect.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.96.1
-        with:
-          components: rustfmt
-      - name: Prefer rustup 1.96.1 over image rustc 1.88
-        run: |
-          set -euo pipefail
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup default 1.96.1
-          rustc --version
-          cargo --version
-          rustc --version | grep -E 'rustc 1\.96'
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-
-  clippy:
-    name: Clippy
-    needs: detect
-    if: needs.detect.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.96.1
-        with:
-          components: clippy
-      - name: Prefer rustup 1.96.1 over image rustc 1.88
-        run: |
-          set -euo pipefail
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup default 1.96.1
-          rustc --version
-          cargo --version
-          rustc --version | grep -E 'rustc 1\.96'
-      - name: cargo clippy
-        run: |
-          set -euo pipefail
-          cargo clippy --workspace --all-targets -- -D warnings
-
-  docs:
-    name: Documentation
-    needs: detect
-    if: needs.detect.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.96.1
-      - name: Prefer rustup 1.96.1 over image rustc 1.88
-        run: |
-          set -euo pipefail
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup default 1.96.1
-          rustc --version
-          cargo --version
-          rustc --version | grep -E 'rustc 1\.96'
-      - name: cargo doc
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: |
-          set -euo pipefail
-          cargo doc --workspace --no-deps
+  fleet-ci:
+    uses: tzervas/ap-workflows/.github/workflows/reusable-ci-autodetect.yml@v0.1
+    with:
+      tier: ${{ inputs.tier || 'auto' }}
+      rust-version: "1.96.1"
+      all-features: false
+      gpu: false
+      bench: false
+      runner-labels: '["self-hosted","linux","x64","podman","rust"]'
 
   hosted-test:
     name: Test Suite (GitHub-hosted)
-    needs: detect
-    if: needs.detect.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.96.1
@@ -141,88 +52,62 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
-  rust:
-    name: Test Suite (stable)
-    needs: detect
-    if: needs.detect.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.96.1
-      - name: Prefer rustup 1.96.1 over image rustc 1.88
-        run: |
-          set -euo pipefail
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup default 1.96.1
-          rustc --version
-          cargo --version
-          rustc --version | grep -E 'rustc 1\.96'
-      - name: cargo check
-        run: |
-          set -euo pipefail
-          cargo check --workspace --all-targets
-      # CPU default. Do not add --all-features (pulls cuda → nvcc on CPU runners).
-      - name: cargo test
-        run: |
-          set -euo pipefail
-          cargo test --workspace
-
-  python:
-    name: python lint/test
-    needs: detect
-    if: needs.detect.outputs.python == 'true'
-    runs-on: [self-hosted, linux, x64, podman]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "latest"
-          enable-cache: true
-      - name: Sync deps
-        run: |
-          set -euo pipefail
-          if [ -f uv.lock ] || [ -f pyproject.toml ]; then
-            uv sync --all-groups || uv sync
-          fi
-      - name: Ruff (if configured)
-        run: |
-          set -euo pipefail
-          if [ -f pyproject.toml ] && grep -q '\[tool.ruff' pyproject.toml 2>/dev/null; then
-            uv run ruff check . || python -m ruff check .
-          else
-            echo "ruff not configured — skip (not a claimed gate)"
-            echo "HONEST_CI class=SKIP_STUB detail=ruff_not_configured"
-          fi
-      - name: Pytest (if tests exist)
-        run: |
-          set -euo pipefail
-          if [ -d tests ] || [ -d test ]; then
-            if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
-              uv run pytest -q
-            else
-              pytest -q
-            fi
-          else
-            echo "no tests/ directory — skip"
-            echo "HONEST_CI class=SKIP_STUB detail=no_tests_dir"
-          fi
-
-  noop:
-    name: no stack detected
-    needs: detect
-    if: needs.detect.outputs.rust != 'true' && needs.detect.outputs.python != 'true'
-    runs-on: [self-hosted, linux, x64, podman]
+  detect-stack:
+    name: detect stack
+    needs: fleet-ci
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - run: |
-          echo "No Cargo.toml / pyproject detected. fleet-ci reports success with no gates."
-          echo "Add stack files or a product-specific CI job for real coverage."
-          echo "HONEST_CI class=SKIP_STUB detail=no_stack"
+          set -euo pipefail
+          echo "fleet-ci result=${{ needs.fleet-ci.result }}"
+          test "${{ needs.fleet-ci.result }}" = "success"
+
+  rustfmt:
+    name: Rustfmt
+    needs: fleet-ci
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "fleet-ci result=${{ needs.fleet-ci.result }}"
+          test "${{ needs.fleet-ci.result }}" = "success"
+
+  clippy:
+    name: Clippy
+    needs: fleet-ci
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "fleet-ci result=${{ needs.fleet-ci.result }}"
+          test "${{ needs.fleet-ci.result }}" = "success"
+
+  docs:
+    name: Documentation
+    needs: fleet-ci
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "fleet-ci result=${{ needs.fleet-ci.result }}"
+          test "${{ needs.fleet-ci.result }}" = "success"
+
+  tests-stable:
+    name: Test Suite (stable)
+    needs: fleet-ci
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "fleet-ci result=${{ needs.fleet-ci.result }}"
+          test "${{ needs.fleet-ci.result }}" = "success"

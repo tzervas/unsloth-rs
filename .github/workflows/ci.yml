@@ -12,6 +12,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CUDA_HOME: /usr/local/cuda
+  LD_LIBRARY_PATH: /usr/local/cuda/lib64
+  CUDA_COMPUTE_CAP: 90
 
 jobs:
   test:
@@ -22,6 +25,12 @@ jobs:
         rust: [stable, nightly]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
@@ -58,6 +67,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -72,6 +87,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -86,6 +107,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -107,6 +134,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

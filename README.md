@@ -198,3 +198,4 @@ Contributions welcome, especially:
 ## License
 
 Licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Third-party crates and inspirations: [NOTICE](NOTICE).

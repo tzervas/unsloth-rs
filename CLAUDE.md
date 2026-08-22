@@ -63,7 +63,7 @@ pub fn estimate_training_memory(
 
 ## GPU Compute Stack
 
-Uses CubeCL (v0.8.1) for cross-platform GPU kernels:
+Uses CubeCL (v0.9) for cross-platform GPU kernels:
 ```rust
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime;  // When cuda feature enabled

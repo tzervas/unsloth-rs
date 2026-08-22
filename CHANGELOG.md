@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Implemented row-aggregate scale-based weight pruning in `TernaryTensor::prune_below_threshold` with automatic sparsity recalculation and metadata clearing.
+- Unit test `test_prune_below_threshold` covering scale-based row pruning, sparsity metric updates, and plane zeroing.
+
+### Changed
+- Removed obsolete TODO in `src/kernels/ternary/types.rs`.
+- Reconciled CubeCL version references in `TASKS.md` and `CLAUDE.md` to consistently state CubeCL 0.9.
+
 ### Documentation
 - Added `docs/DEPENDENCIES.md` (foundation kernels; no peft/qlora/axolotl deps; no cycles).
 - README docs index: CHANGELOG, ROADMAP, DEBT, GPU_SETUP, PUBLISHING, DEPENDENCIES.

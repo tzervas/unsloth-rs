@@ -2,7 +2,7 @@
 
 **Base Branch**: `experimental` (commit: ff87fec)  
 **Last Updated**: 2026-01-06  
-**CubeCL Version**: v0.8.1 (Validated)
+**CubeCL Version**: 0.9 (Cargo.toml); historical sections may still say 0.8.1
 
 This document provides a prioritized, actionable task list for implementing the features outlined in [ROADMAP.md](ROADMAP.md).
 

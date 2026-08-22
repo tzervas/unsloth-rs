@@ -68,6 +68,12 @@ needless_pass_by_value = "allow"
 needless_range_loop = "allow"
 field_reassign_with_default = "allow"
 
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
+
 [[bench]]
 name = "kernels"
 harness = false

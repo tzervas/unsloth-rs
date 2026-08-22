@@ -1,8 +1,13 @@
 # Issue Status Tracking
 
+> **Historical (not source of truth).** Snapshot of CubeCL **0.8.1** work on
+> the **`experimental`** branch. Do not treat status, versions, or kernel
+> claims here as current. Live SoT: [README.md](README.md), [DEBT.md](DEBT.md),
+> [docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md).
+
 **Last Updated**: 2026-07-22  
 **CubeCL Version**: **0.9** (see `Cargo.toml` workspace deps; older notes referring to 0.8.1 are historical)  
-**Crate version**: 1.0.3  
+**Crate version**: stale `1.0.3` — live version is [`Cargo.toml`](Cargo.toml) (`package.version`).
 
 This document is a **historical tracker** of open issues relative to early experimental-branch work.
 It is **not** a claim that GPU Flash Attention or Unsloth product parity is complete.

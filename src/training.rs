@@ -7,14 +7,14 @@
 //! - Mixed precision **dtype helpers** (FP32, FP16, BF16 convert/scale)
 //!   Note: CubeCL interop/kernels remain **f32-only** (`interop_f32_only`).
 //! - Gradient scaling for numerical stability
-//! - Optional [`CheckpointConfig`](crate::memory::CheckpointConfig) for **memory estimates**
+//! - Optional [`CheckpointConfig`] for **memory estimates**
 //!
 //! ## What this is not
 //!
 //! - Not an Unsloth-style gradient-checkpointed training loop.
 //! - Not a public “recompute activations” API. Activation checkpointing recompute
 //!   is intentionally **out of scope** until wired through Candle autograd; use
-//!   [`CheckpointConfig`](crate::memory::CheckpointConfig) only for planning math.
+//!   [`CheckpointConfig`] only for planning math.
 
 use candle_core::{DType, Tensor};
 

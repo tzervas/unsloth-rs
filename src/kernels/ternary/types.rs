@@ -311,7 +311,7 @@ impl TernaryTensor {
     ///
     /// * `plus_plane` - Flattened [rows × `k_words`] positive plane
     /// * `minus_plane` - Flattened [rows × `k_words`] negative plane
-    /// * `scales` - Per-row scale factors [rows]
+    /// * `scales` - Per-row scale factors \[rows\]
     /// * `shape` - Original (`out_features`, `in_features`)
     ///
     /// # Panics
@@ -617,30 +617,40 @@ impl TernaryTensor {
         }
     }
 
-    /// Prune weights below a threshold by setting them to zero.
+    /// Prune weights below a threshold by setting output channels (rows) with
+    /// absolute scales below `threshold` to zero.
     ///
-    /// This is intended as a batch operation that sets all weights with
-    /// absolute scale contribution below `threshold` to zero.
-    ///
-    /// Note: For ternary weights, all non-zero values have equal magnitude
-    /// (±scale), so simple threshold-based pruning would typically prune
-    /// all or none per row. As a result, this method is currently a
-    /// no-op stub and does not modify any weights.
-    ///
-    /// TODO: Implement a meaningful pruning strategy (e.g., pruning entire
-    /// rows based on aggregate contribution) or remove this method if it
-    /// remains unused.
+    /// Performs row-aggregate scale-based weight pruning. Output channels (rows)
+    /// where `scales[row].abs() < threshold` have all positive and negative
+    /// plane bits zeroed out. The cached sparsity metric is updated, cached
+    /// sparsity metadata is cleared, and the count of pruned rows is returned.
     ///
     /// # Arguments
     ///
-    /// * `threshold` - Minimum absolute contribution to keep
+    /// * `threshold` - Minimum absolute scale threshold required to keep a row.
     ///
     /// # Returns
     ///
-    /// Number of weights pruned (currently always 0; no-op)
-    pub fn prune_below_threshold(&mut self, _threshold: f32) -> usize {
-        // Intentionally a no-op: see documentation above.
-        0
+    /// Number of output channels (rows) pruned.
+    pub fn prune_below_threshold(&mut self, threshold: f32) -> usize {
+        let mut pruned_rows = 0;
+        for row in 0..self.shape.0 {
+            if self.scales[row].abs() < threshold {
+                let row_offset = row * self.k_words;
+                for k in 0..self.k_words {
+                    self.plus_plane[row_offset + k] = 0;
+                    self.minus_plane[row_offset + k] = 0;
+                }
+                pruned_rows += 1;
+            }
+        }
+        if pruned_rows > 0 {
+            self.recalculate_sparsity();
+            if let Some(ref mut meta) = self.sparsity_meta {
+                meta.clear();
+            }
+        }
+        pruned_rows
     }
 }
 
@@ -879,5 +889,45 @@ mod tests {
         let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
 
         tensor.modify_dim(0, 0, 2); // Should panic - invalid value outside {-1, 0, +1}
+    }
+
+    #[test]
+    fn test_prune_below_threshold() {
+        let shape = (4, 64);
+        let k_words = 2;
+        let plus = vec![0u32; 4 * k_words];
+        let minus = vec![0u32; 4 * k_words];
+        let scales = vec![0.05f32, 0.5, 0.01, 1.0];
+
+        let mut tensor = TernaryTensor::new(plus, minus, scales, shape);
+
+        // Set non-zero values in rows 0, 1, 2, 3
+        tensor.modify_dim(0, 0, 1);
+        tensor.modify_dim(1, 0, -1);
+        tensor.modify_dim(2, 5, 1);
+        tensor.modify_dim(3, 10, -1);
+        tensor.recalculate_sparsity();
+        tensor.build_sparsity_metadata(32);
+
+        // Initial check
+        assert_eq!(tensor.get_dim(0, 0), 1);
+        assert_eq!(tensor.get_dim(1, 0), -1);
+        assert_eq!(tensor.get_dim(2, 5), 1);
+        assert_eq!(tensor.get_dim(3, 10), -1);
+
+        // Prune rows with scales < 0.1 (rows 0 and 2 should be pruned)
+        let pruned_count = tensor.prune_below_threshold(0.1);
+        assert_eq!(pruned_count, 2);
+
+        // Verify rows 0 and 2 are zeroed out
+        assert_eq!(tensor.get_dim(0, 0), 0);
+        assert_eq!(tensor.get_dim(1, 0), -1);
+        assert_eq!(tensor.get_dim(2, 5), 0);
+        assert_eq!(tensor.get_dim(3, 10), -1);
+
+        // Verify metadata was cleared and sparsity updated
+        assert!(tensor.sparsity_meta.as_ref().unwrap().is_empty());
+        let expected_sparsity = 1.0 - (2.0 / 256.0);
+        assert!((tensor.sparsity() - expected_sparsity).abs() < 0.001);
     }
 }

@@ -42,7 +42,7 @@ paths = [
 ]
 
 # Allowlist for test files
-[[rules.allowlist]]
+[rules.allowlist]
 paths = [
     '''tests/''',
     '''benches/''',

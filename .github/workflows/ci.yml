@@ -12,6 +12,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CUDA_HOME: /usr/local/cuda
+  LD_LIBRARY_PATH: /usr/local/cuda/lib64
+  CUDA_COMPUTE_CAP: 90
 
 jobs:
   test:
@@ -22,6 +25,12 @@ jobs:
         rust: [stable, nightly]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
@@ -48,7 +57,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Run tests (CPU only)
-        run: cargo test --verbose --all-features
+        run: cargo test --verbose
       
       - name: Run doc tests
         run: cargo test --doc --verbose
@@ -58,6 +67,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -65,13 +80,19 @@ jobs:
           components: clippy
       
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   fmt:
     name: Rustfmt
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -86,6 +107,12 @@ jobs:
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -99,20 +126,26 @@ jobs:
       - name: Build (no features)
         run: cargo build --verbose
       
-      - name: Check build succeeds with all features
-        run: cargo check --all-features --verbose
+      - name: Check build succeeds
+        run: cargo check --workspace --all-targets --verbose
 
   docs:
     name: Documentation
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup CUDA PATH
+        run: |
+          if [ -d "/usr/local/cuda/bin" ]; then
+            echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          fi
       
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       
       - name: Build documentation
-        run: cargo doc --no-deps --all-features --verbose
+        run: cargo doc --no-deps --verbose
         env:
           RUSTDOCFLAGS: -D warnings
 

@@ -2,7 +2,7 @@
 name = "unsloth-rs"
 version = "1.0.3"
 edition = "2021"
-rust-version = "1.92"
+rust-version = "1.88"
 license = "MIT"
 authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
 description = "Candle/CubeCL transformer kernel building blocks (not an Unsloth product port)"
@@ -67,6 +67,12 @@ unnecessary_wraps = "allow"
 needless_pass_by_value = "allow"
 needless_range_loop = "allow"
 field_reassign_with_default = "allow"
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
 
 [[bench]]
 name = "kernels"

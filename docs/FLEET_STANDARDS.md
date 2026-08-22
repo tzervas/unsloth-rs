@@ -15,7 +15,7 @@ Action pins follow `tzervas/ap-workflows` `pins/actions.yml` (`actions/checkout@
 
 ## License
 
-MIT (`LICENSE`). Third-party crates and Apache-2.0 inspirations: `NOTICE`.
+MIT (`LICENSE`). Third-party crates and non-vendored inspirations: `NOTICE`.
 `fleet-security.yml` job `cargo deny licenses` (GitHub-hosted) is fail-closed.
 Allow-list is permissive only (no GPL / AGPL / MPL).
 

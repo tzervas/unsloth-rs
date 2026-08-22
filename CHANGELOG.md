@@ -8,7 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `NOTICE` (Candle Apache-2.0; Unsloth is inspiration, not a product port).
+- `NOTICE` (Candle MIT OR Apache-2.0, elect MIT; safetensors/tokenizers
+  Apache-2.0; Unsloth core is Apache-2.0 inspiration, studio/cli AGPLv3;
+  neither vendored).
 - `deny.toml` license allow-list (permissive only) and hosted
   `cargo deny licenses` in `fleet-security.yml`.
 - `TernaryTensor::prune_below_threshold` zeros **rows** whose `|scale|` is

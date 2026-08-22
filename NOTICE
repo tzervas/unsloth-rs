@@ -2,16 +2,40 @@ unsloth-rs
 Copyright (c) 2026 Tyler Zervas
 SPDX-License-Identifier: MIT
 
-This repository's source is MIT (see LICENSE).
+This repository's original source is MIT (see LICENSE). That license covers
+only this crate's own source. Third-party works keep their own licenses and
+copyrights. This tree does not vendor those sources; `cargo` fetches them at
+build time. Anyone who redistributes a binary that links them must preserve
+their notices. The live graph is `cargo deny list`. Dual-licensed crates are
+used under MIT where that option exists.
 
-Third-party Rust crates stay under their own licenses. The resolved graph is
-permissive (MIT and/or Apache-2.0, plus BSD/ISC/Zlib/Unicode/Unlicense/BSL as
-listed by `cargo deny list`). Notable:
+---------------------------------------------------------------------------
+Runtime crates (fetched at build; not copied into this tree)
 
-  candle-core, candle-nn — Apache-2.0
+Hugging Face Candle — candle-core, candle-nn
+  SPDX: MIT OR Apache-2.0 (this crate elects MIT)
   https://github.com/huggingface/candle
+  LICENSE-MIT and LICENSE-APACHE in that repository
 
-This crate is independent transformer kernel building blocks on Candle/CubeCL.
-It is not a product port of Unsloth and does not redistribute Unsloth
-(Apache-2.0):
+Hugging Face safetensors (transitive via candle)
+  SPDX: Apache-2.0
+  Copyright The Hugging Face Team
+  https://github.com/huggingface/safetensors
+
+Hugging Face tokenizers (transitive via candle)
+  SPDX: Apache-2.0
+  Authors: Anthony MOI, Nicolas Patry / Hugging Face
+  https://github.com/huggingface/tokenizers
+  Transitive Apache-2.0-only: esaxx-rs, spm_precompiled
+
+---------------------------------------------------------------------------
+Inspirations — not copied, not linked, not redistributed
+
+Unsloth (Python)
   https://github.com/unslothai/unsloth
+  Core (`unsloth/*`, `tests/*`, `scripts/*`): Apache-2.0
+    Copyright [2024-] Unsloth AI. Inc team, Daniel Han-Chen & Michael Han-Chen
+  Optional `studio/*` and `unsloth_cli/*`: AGPLv3
+  This crate is independent transformer kernel building blocks on Candle/CubeCL.
+  It is not a product port of Unsloth and does not redistribute any Unsloth
+  source (including the AGPLv3 studio/cli tree).

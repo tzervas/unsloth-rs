@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ternary module docs drop unmeasured 5–20× / 16–32× speed claims.
   `docs/ECOSYSTEM_GAPS.md` records row-scale prune (no longer a stub).
 
+### Documentation
+- Banner `ROADMAP.md` and `ISSUE_STATUS.md` as historical (CubeCL 0.8.1 /
+  `experimental`). Source of truth: README.md, DEBT.md,
+  docs/ECOSYSTEM_GAPS.md. Stale `ISSUE_STATUS.md` crate version 1.0.3
+  defers to `Cargo.toml`. `PUBLISHING.md`: 1.2.0 is on crates.io;
+  Unreleased NOTICE/deny/fleet-ci needs 1.2.1 later; operator
+  `cargo yank unsloth-rs --vers 1.0.2` (case-collision tarball).
+
 ## [1.2.0] - 2026-08-20
 
 Candle types appear in the public API, so a candle minor bump is a **breaking

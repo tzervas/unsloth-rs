@@ -1,5 +1,10 @@
 # unsloth-rs Development Roadmap
 
+> **Historical (not source of truth).** Snapshot of CubeCL **0.8.1** work on
+> the **`experimental`** branch. Do not treat status, versions, or kernel
+> claims here as current. Live SoT: [README.md](README.md), [DEBT.md](DEBT.md),
+> [docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md).
+>
 > **Packaging:** This is the **only** roadmap file (`ROADMAP.md`). Do not add
 > a lowercase `roadmap.md` — crates.io rejects case-colliding paths.
 > **Positioning:** Kernel building blocks for Candle; not Unsloth product parity.

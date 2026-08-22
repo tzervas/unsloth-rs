@@ -4,10 +4,12 @@
 
 | Field | Value |
 |-------|--------|
-| **Cargo.toml version** | `1.2.0` |
+| **Cargo.toml version** | `1.2.0` (published on crates.io) |
 | **Git tags** | see `git tag --list 'v*'` (must match Cargo.toml on a release) |
+| **Unreleased** | NOTICE / `deny.toml` / fleet-ci — ship as **1.2.1** later (do not bump in this docs PR) |
 | **docs.rs** | Builds for 1.0.2 historically |
 | **crates.io tarball 1.0.2** | **Broken** — dual-path case collision (`ROADMAP.md` + `roadmap.md`) |
+| **Yank 1.0.2** | Operator must `cargo yank unsloth-rs --vers 1.0.2` (token required; not an agent default) |
 | **Fix in this tree** | Only `ROADMAP.md` remains; `cargo package` succeeds |
 | **Last docs refresh** | 2026-08-19 (CustomOp 1.0.4 + commitizen / release workflow) |
 
@@ -91,7 +93,9 @@ git tag -v v1.0.3
 
 ### 1. Prepare
 
-1. Confirm `Cargo.toml` version **1.0.3** and `CHANGELOG.md` section.
+1. Confirm `Cargo.toml` version matches crates.io (**1.2.0** now). Unreleased
+   NOTICE / deny / fleet-ci needs **1.2.1** later — do not publish from this
+   docs-only tree.
 2. Confirm single roadmap filename and honest README.
 3. Run CPU tests + `cargo package --allow-dirty --list`.
 
@@ -116,7 +120,13 @@ cargo publish --dry-run
 - Confirm crates.io page unpacks without path errors.
 - Confirm docs.rs build for the new version.
 - Note any remaining GPU/env debt in DEBT.md (do not claim GPU green).
-- Optional: human-only yank of broken **1.0.2** after 1.0.3 is confirmed live.
+- Operator must yank broken **1.0.2** (case-collision tarball). Requires a
+  crates.io token (`CARGO_REGISTRY_TOKEN`). Do not run from agents unless
+  that token is clearly available:
+
+```bash
+cargo yank unsloth-rs --vers 1.0.2
+```
 
 ## Historical failure mode (1.0.2)
 

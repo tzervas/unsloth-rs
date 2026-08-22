@@ -19,6 +19,19 @@ permissions:
   contents: read
 
 jobs:
+  cargo-deny-licenses:
+    name: cargo deny licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+          rust-version: "1.96.1"
+
   gitleaks:
     name: gitleaks
     runs-on: [self-hosted, linux, x64, podman]

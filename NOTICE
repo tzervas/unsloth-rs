@@ -1,0 +1,17 @@
+unsloth-rs
+Copyright (c) 2026 Tyler Zervas
+SPDX-License-Identifier: MIT
+
+This repository's source is MIT (see LICENSE).
+
+Third-party Rust crates stay under their own licenses. The resolved graph is
+permissive (MIT and/or Apache-2.0, plus BSD/ISC/Zlib/Unicode/Unlicense/BSL as
+listed by `cargo deny list`). Notable:
+
+  candle-core, candle-nn — Apache-2.0
+  https://github.com/huggingface/candle
+
+This crate is independent transformer kernel building blocks on Candle/CubeCL.
+It is not a product port of Unsloth and does not redistribute Unsloth
+(Apache-2.0):
+  https://github.com/unslothai/unsloth

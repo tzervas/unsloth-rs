@@ -13,6 +13,12 @@ Applied from the workstation pack under `plans/fleet-standards/pack/`.
 
 Action pins follow `tzervas/ap-workflows` `pins/actions.yml` (`actions/checkout@v7`). Do **not** `--all-features` (pulls `cuda`).
 
+## License
+
+MIT (`LICENSE`). Third-party crates and Apache-2.0 inspirations: `NOTICE`.
+`fleet-security.yml` job `cargo deny licenses` (GitHub-hosted) is fail-closed.
+Allow-list is permissive only (no GPL / AGPL / MPL).
+
 The `rust` `runs-on` label is the composition point for the fleet work image. See [ap-workflows RUNNER-IMAGES](https://github.com/tzervas/ap-workflows/blob/main/docs/RUNNER-IMAGES.md).
 
 ## Issue close policy

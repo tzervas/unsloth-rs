@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `NOTICE` (Candle Apache-2.0; Unsloth is inspiration, not a product port).
+- `deny.toml` license allow-list (permissive only) and hosted
+  `cargo deny licenses` in `fleet-security.yml`.
 - `TernaryTensor::prune_below_threshold` zeros **rows** whose `|scale|` is
   below the cutoff (per-element magnitude is the row scale).
 
